@@ -1,0 +1,46 @@
+{
+  "name": "@trans-hub/uida",
+  "version": "1.0.0",
+  "description": "Public Trans-Hub UIDA protocol implementation",
+  "private": false,
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "test-vectors"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "pnpm --dir ../../.. exec biome check packages/js/uida/src"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "devDependencies": {
+    "tsup": "8.5.1",
+    "typescript": "6.0.3",
+    "vite": "7.3.5",
+    "vitest": "4.1.9"
+  },
+  "packageManager": "pnpm@10.34.4",
+  "license": "Apache-2.0"
+}

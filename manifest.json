@@ -1,0 +1,10 @@
+{
+  "id": "trans-hub-plugin-localizer",
+  "name": "Trans-Hub Localizer",
+  "version": "0.1.0",
+  "minAppVersion": "1.11.4",
+  "description": "Automatically translate and localize Obsidian community plugin names, descriptions, and interfaces into your preferred language with Trans-Hub.",
+  "author": "Trans-Hub",
+  "authorUrl": "https://trans-hub.net",
+  "isDesktopOnly": true
+}

@@ -1,0 +1,50 @@
+{
+  "name": "@trans-hub/obsidian-client",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Automatic translation and localization for Obsidian community plugin names, descriptions, and user interfaces.",
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "translation",
+    "translator",
+    "localization",
+    "localizer",
+    "i18n",
+    "community-plugins",
+    "plugin-localization",
+    "trans-hub"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SakenW/trans-hub-obsidian-localizer.git"
+  },
+  "homepage": "https://trans-hub.net/zh-CN/ecosystems/obsidian",
+  "bugs": {
+    "url": "https://github.com/SakenW/trans-hub-obsidian-localizer/issues"
+  },
+  "type": "module",
+  "packageManager": "pnpm@10.34.4",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "build:dev": "node esbuild.config.mjs development",
+    "export:public": "node scripts/export-public-repository.mjs",
+    "package": "node scripts/package.mjs",
+    "dev": "node esbuild.config.mjs development",
+    "lint": "eslint src tests",
+    "test": "vitest run",
+    "type-check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.32.0",
+    "@types/node": "^24.0.15",
+    "builtin-modules": "^5.0.0",
+    "esbuild": "^0.25.8",
+    "eslint": "^9.32.0",
+    "obsidian": "^1.8.7",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^3.2.4"
+  }
+}
