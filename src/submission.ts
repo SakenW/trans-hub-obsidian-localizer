@@ -15,8 +15,8 @@ import type { PluginUiCatalog } from "./plugin-string-scanner";
 export const OBSIDIAN_PUBLIC_PROFILE = {
   externalRegistry: "obsidian_community_plugins",
   adapterDefinitionId: "obsidian",
-  adapterVersion: "0.3.0",
-  adapterBuildDigestHex: "7e1edc0caeca61ca5fc00a4ce436ee6d44f2e8c65a1d4df3a24ac2a31a8e3dd4",
+  adapterVersion: "0.4.0",
+  adapterBuildDigestHex: "69abf4735abe6d181b98890ed899be98e7ab4c3388de5ea96fd037d609b39b97",
 } as const;
 
 export async function submitObsidianPluginDiscovery(input: {
@@ -41,7 +41,7 @@ export async function submitObsidianPluginDiscovery(input: {
     },
   };
   const observationDigest = await computeProtocolDigest("request", observationMaterial, digestPort);
-  const idempotencyKey = `obsidian-public-v3-${await sha256Hex([
+  const idempotencyKey = `obsidian-public-v4-${await sha256Hex([
     input.repository,
     input.catalog.pluginVersion,
     input.catalog.artifactDigest,

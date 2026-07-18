@@ -6,6 +6,7 @@ export type PluginTranslationProvenanceKind =
   | "th-published";
 
 export type PluginTranslationApplication = "fill" | "correction";
+export type PluginTranslationScope = "runtime-ui" | "metadata" | "readme";
 
 export interface PluginUiTranslation {
   readonly pluginId: string;
@@ -13,6 +14,7 @@ export interface PluginUiTranslation {
   readonly target: string;
   readonly provenanceKind?: PluginTranslationProvenanceKind;
   readonly application?: PluginTranslationApplication;
+  readonly scopes?: readonly PluginTranslationScope[];
   /** Exact upstream-native target that an explicitly reviewed correction may replace. */
   readonly nativeTarget?: string;
 }
@@ -22,6 +24,10 @@ const EXCLUDED_SELECTOR = ".markdown-source-view, .markdown-preview-view, .cm-ed
 const SEARCH_HIGHLIGHT_SELECTOR = ".suggestion-highlight";
 const COMMUNITY_FIELD_SELECTOR = ".community-item-name, .community-item-desc";
 const COMMUNITY_FIELD_BADGE_SELECTOR = ".flair";
+const METADATA_TEXT_SELECTOR = ".vertical-tab-nav-item-title, .installed-plugins-container .setting-item-name, .installed-plugins-container .setting-item-description";
+const README_CONTAINER_SELECTOR = ".community-modal-readme.markdown-rendered";
+const README_BLOCK_SELECTOR = "h1, h2, h3, h4, h5, h6, p, li, blockquote, th, td";
+const README_PROTECTED_SELECTOR = "a, code, kbd, samp, var";
 const DYNAMIC_TOKEN = /\{\{th:expr:(\d+)\}\}/gu;
 
 interface RuntimeTemplateRule {
@@ -116,7 +122,8 @@ export function translatePluginUiValue(
 
 export function shouldTranslatePluginUiElement(element: Pick<Element, "closest">): boolean {
   return element.closest(EXCLUDED_SELECTOR) === null
-    && element.closest(SEARCH_HIGHLIGHT_SELECTOR) === null;
+    && element.closest(SEARCH_HIGHLIGHT_SELECTOR) === null
+    && element.closest(README_CONTAINER_SELECTOR) === null;
 }
 
 export function translatePluginUiFieldParts(
@@ -128,15 +135,51 @@ export function translatePluginUiFieldParts(
   return parts.map((_part, index) => index === 0 ? translated : "");
 }
 
+export function translatePluginReadmeTemplate(
+  sourceTemplate: string,
+  protectedValueCount: number,
+  plan: RuntimeTranslationPlan,
+): string | undefined {
+  const target = plan.exact.get(sourceTemplate);
+  if (target === undefined) return undefined;
+  const expectedIndexes = Array.from({ length: protectedValueCount }, (_value, index) => index);
+  const sourceIndexes = templateTokenIndexes(sourceTemplate);
+  const targetIndexes = templateTokenIndexes(target);
+  return sourceIndexes.join("\u0000") === expectedIndexes.join("\u0000")
+    && targetIndexes.join("\u0000") === expectedIndexes.join("\u0000")
+    ? target
+    : undefined;
+}
+
+function emptyPlan(): RuntimeTranslationPlan {
+  return { exact: new Map(), templates: [], nativeTargetTemplates: [] };
+}
+
+export function filterTranslationScope(
+  translations: readonly PluginUiTranslation[],
+  scope: PluginTranslationScope,
+): readonly PluginUiTranslation[] {
+  return translations.filter((translation) =>
+    translation.scopes === undefined || translation.scopes.includes(scope));
+}
+
 export class PluginUiTranslationRuntime {
-  private plan: RuntimeTranslationPlan = { exact: new Map(), templates: [], nativeTargetTemplates: [] };
+  private runtimePlan: RuntimeTranslationPlan = emptyPlan();
+  private metadataPlan: RuntimeTranslationPlan = emptyPlan();
+  private readmePlan: RuntimeTranslationPlan = emptyPlan();
   private observer: MutationObserver | null = null;
   private readonly restoredText = new Map<Text, { original: string; translated: string }>();
   private readonly restoredAttributes = new Map<Element, Map<string, { original: string; translated: string }>>();
+  private readonly restoredReadmeBlocks = new Map<Element, {
+    readonly original: readonly Node[];
+    readonly translated: readonly Node[];
+  }>();
 
   update(translations: readonly PluginUiTranslation[]): void {
     this.restore();
-    this.plan = buildRuntimeTranslationPlan(translations);
+    this.runtimePlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "runtime-ui"));
+    this.metadataPlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "metadata"));
+    this.readmePlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "readme"));
     if (this.observer !== null && document.body !== null) this.translateTree(document.body);
   }
 
@@ -176,12 +219,18 @@ export class PluginUiTranslationRuntime {
   private translateTree(root: Node): void {
     if (root instanceof Text) { this.translateText(root); return; }
     if (!(root instanceof Element) && !(root instanceof DocumentFragment)) return;
-    if (root instanceof Element) this.translateAttributes(root);
+    if (root instanceof Element) {
+      this.translateAttributes(root);
+      this.translateReadmeBlock(root);
+    }
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
     let current = walker.nextNode();
     while (current !== null) {
       if (current instanceof Text) this.translateText(current);
-      else if (current instanceof Element) this.translateAttributes(current);
+      else if (current instanceof Element) {
+        this.translateAttributes(current);
+        this.translateReadmeBlock(current);
+      }
       current = walker.nextNode();
     }
   }
@@ -189,13 +238,22 @@ export class PluginUiTranslationRuntime {
   private translateText(node: Text): void {
     const parent = node.parentElement;
     if (parent === null || parent.closest(EXCLUDED_SELECTOR) !== null) return;
+    const readmeContainer = parent.closest(README_CONTAINER_SELECTOR);
+    if (readmeContainer !== null) {
+      const block = parent.closest(README_BLOCK_SELECTOR);
+      if (block !== null && readmeContainer.contains(block)) this.translateReadmeBlock(block);
+      return;
+    }
     const field = parent.closest(COMMUNITY_FIELD_SELECTOR);
     if (field !== null) {
       this.translateCommunityField(field);
       return;
     }
     const raw = node.data;
-    const translated = translatePluginUiValue(raw, this.plan);
+    const plan = parent.closest(METADATA_TEXT_SELECTOR) === null
+      ? this.runtimePlan
+      : this.metadataPlan;
+    const translated = translatePluginUiValue(raw, plan);
     if (translated === undefined) return;
     if (!this.restoredText.has(node)) this.restoredText.set(node, { original: raw, translated });
     node.data = translated;
@@ -204,7 +262,7 @@ export class PluginUiTranslationRuntime {
   private translateCommunityField(field: Element): void {
     if (field.closest(EXCLUDED_SELECTOR) !== null) return;
     const nodes = communityFieldTextNodes(field);
-    const translatedParts = translatePluginUiFieldParts(nodes.map((node) => node.data), this.plan);
+    const translatedParts = translatePluginUiFieldParts(nodes.map((node) => node.data), this.metadataPlan);
     if (translatedParts === undefined) return;
     nodes.forEach((node, index) => {
       const translated = translatedParts[index] ?? "";
@@ -215,12 +273,34 @@ export class PluginUiTranslationRuntime {
     });
   }
 
+  private translateReadmeBlock(block: Element): void {
+    if (
+      this.restoredReadmeBlocks.has(block)
+      || !block.matches(README_BLOCK_SELECTOR)
+      || block.closest(README_CONTAINER_SELECTOR) === null
+      || block.closest("pre") !== null
+    ) return;
+    const serialized = serializeReadmeBlock(block);
+    if (serialized === undefined) return;
+    const targetTemplate = translatePluginReadmeTemplate(
+      serialized.sourceTemplate,
+      serialized.protectedNodes.length,
+      this.readmePlan,
+    );
+    if (targetTemplate === undefined) return;
+    const translated = renderReadmeTarget(targetTemplate, serialized.protectedNodes, this.readmePlan);
+    if (translated === undefined) return;
+    const original = Array.from(block.childNodes);
+    block.replaceChildren(...translated);
+    this.restoredReadmeBlocks.set(block, { original, translated });
+  }
+
   private translateAttributes(element: Element): void {
     if (!shouldTranslatePluginUiElement(element)) return;
     for (const attribute of TRANSLATABLE_ATTRIBUTES) {
       const raw = element.getAttribute(attribute);
       if (raw === null) continue;
-      const translated = translatePluginUiValue(raw, this.plan);
+      const translated = translatePluginUiValue(raw, this.runtimePlan);
       if (translated === undefined) continue;
       const values = this.restoredAttributes.get(element) ?? new Map<string, { original: string; translated: string }>();
       if (!values.has(attribute)) values.set(attribute, { original: raw, translated });
@@ -230,6 +310,11 @@ export class PluginUiTranslationRuntime {
   }
 
   private restore(): void {
+    for (const [block, value] of this.restoredReadmeBlocks) {
+      const current = Array.from(block.childNodes);
+      if (sameNodes(current, value.translated)) block.replaceChildren(...value.original);
+    }
+    this.restoredReadmeBlocks.clear();
     for (const [node, value] of this.restoredText) {
       if (node.data === value.translated) node.data = value.original;
     }
@@ -241,6 +326,76 @@ export class PluginUiTranslationRuntime {
     this.restoredText.clear();
     this.restoredAttributes.clear();
   }
+}
+
+interface SerializedReadmeBlock {
+  readonly sourceTemplate: string;
+  readonly protectedNodes: readonly Element[];
+}
+
+function serializeReadmeBlock(block: Element): SerializedReadmeBlock | undefined {
+  const protectedNodes: Element[] = [];
+  const parts: string[] = [];
+  const visit = (node: Node): void => {
+    if (node instanceof Text) {
+      parts.push(node.data);
+      return;
+    }
+    if (!(node instanceof Element)) return;
+    if (node.matches(README_PROTECTED_SELECTOR)) {
+      if ((node.textContent ?? "").trim() !== "") {
+        parts.push(`{{th:expr:${protectedNodes.length}}}`);
+        protectedNodes.push(node);
+      }
+      return;
+    }
+    if (node.matches("img, svg, button")) return;
+    if (node.tagName === "BR") parts.push(" ");
+    for (const child of Array.from(node.childNodes)) visit(child);
+  };
+  for (const child of Array.from(block.childNodes)) visit(child);
+  const sourceTemplate = normalizeReadmeText(parts.join(""));
+  return sourceTemplate === "" ? undefined : { sourceTemplate, protectedNodes };
+}
+
+function renderReadmeTarget(
+  targetTemplate: string,
+  protectedNodes: readonly Element[],
+  plan: RuntimeTranslationPlan,
+): Node[] | undefined {
+  const output: Node[] = [];
+  let cursor = 0;
+  for (const match of targetTemplate.matchAll(DYNAMIC_TOKEN)) {
+    const position = match.index ?? 0;
+    const text = targetTemplate.slice(cursor, position);
+    if (text !== "") output.push(document.createTextNode(text));
+    const index = Number(match[1]);
+    const protectedNode = protectedNodes[index];
+    if (protectedNode === undefined) return undefined;
+    const clone = protectedNode.cloneNode(true) as Element;
+    translateProtectedReadmeLabel(clone, plan);
+    output.push(clone);
+    cursor = position + match[0].length;
+  }
+  const trailing = targetTemplate.slice(cursor);
+  if (trailing !== "") output.push(document.createTextNode(trailing));
+  return output;
+}
+
+function translateProtectedReadmeLabel(element: Element, plan: RuntimeTranslationPlan): void {
+  if (element.tagName !== "A" || element.querySelector("code, kbd, samp, var") !== null) return;
+  const source = normalizeReadmeText(element.textContent ?? "");
+  if (source === "" || /^https?:\/\//iu.test(source) || source === element.getAttribute("href")) return;
+  const target = translatePluginUiValue(source, plan);
+  if (target !== undefined && target !== source) element.textContent = target;
+}
+
+function normalizeReadmeText(value: string): string {
+  return value.normalize("NFC").replace(/\s+/gu, " ").trim();
+}
+
+function sameNodes(left: readonly Node[], right: readonly Node[]): boolean {
+  return left.length === right.length && left.every((node, index) => node === right[index]);
 }
 
 function compileTemplate(value: string): { readonly pattern: RegExp; readonly tokenIndexes: readonly number[] } | null {

@@ -45,6 +45,7 @@ from bootstrap_dataview_e2e import (  # noqa: E402
 )
 
 MAX_COMPONENT_BYTES = 64 * 1024 * 1024
+MAX_README_BYTES = 1024 * 1024
 MAX_REGISTRY_BYTES = 8 * 1024 * 1024
 DEFAULT_POLL_SECONDS = 15.0
 OFFICIAL_REGISTRY_URL = (
@@ -253,6 +254,27 @@ def _download_release_component(repository: str, version: str, name: str) -> byt
     raise RuntimeError(f"obsidian_official_release_component_unavailable:{name}") from last_error
 
 
+def _download_version_readme(repository: str, version: str) -> bytes | None:
+    for tag in (version, f"v{version}"):
+        url = f"https://raw.githubusercontent.com/{repository}/{tag}/README.md"
+        try:
+            request = Request(
+                url, headers={"User-Agent": "Trans-Hub-Obsidian-Local-Dev/1"}
+            )
+            with urlopen(request, timeout=30) as response:
+                content = bytes(response.read(MAX_README_BYTES + 1))
+        except HTTPError as exc:
+            if exc.code == 404:
+                continue
+            return None
+        except (URLError, TimeoutError):
+            return None
+        if not content or len(content) > MAX_README_BYTES or b"\x00" in content:
+            return None
+        return content
+    return None
+
+
 def _official_registry_entry(plugin_id: str) -> dict[str, str]:
     global _OFFICIAL_REGISTRY
     if _OFFICIAL_REGISTRY is None:
@@ -316,12 +338,14 @@ def _verified_snapshot(coordinate: dict[str, Any]) -> dict[str, Any]:
     version = str(coordinate["plugin_version"])
     manifest = _download_release_component(repository, version, "manifest.json")
     bundle = _download_release_component(repository, version, "main.js")
+    readme = _download_version_readme(repository, version)
     snapshot_bytes = build_snapshot(
         manifest,
         bundle,
         registry_metadata_content=json.dumps(
             registry_entry, ensure_ascii=False, sort_keys=True
         ).encode(),
+        readme_content=readme,
     )
     raw_snapshot = json.loads(snapshot_bytes)
     if not isinstance(raw_snapshot, dict):

@@ -30,7 +30,8 @@ Enable the plugin and open its settings. Log in with a Trans-Hub account and cho
 
 - The plugin reads `manifest.json` and `main.js` from enabled community plugins under the current vault configuration directory.
 - It sends plugin identity, version, target language, catalog counts, and content digests to the Trans-Hub API. Scanned UI text and note content are not uploaded. A single UI source string is sent only when you explicitly submit a missing-translation report.
-- It reads the official Obsidian community registry and official GitHub Release metadata to identify upstream plugins.
+- It reads the official Obsidian community registry, version-matched GitHub Release metadata, and the immutable README from the same upstream tag to identify and localize plugin metadata.
+- README localization is limited to the Obsidian community-plugin detail view. Links and code examples are preserved, and vault notes are never included.
 - The plugin never handles your password. Short-lived credentials and the installation private key are stored in Obsidian SecretStorage, not in plugin settings. The plugin contains no advertising or client-side telemetry.
 
 See the [Trans-Hub privacy policy](https://trans-hub.net/zh-CN/legal/privacy) for server-side data handling.

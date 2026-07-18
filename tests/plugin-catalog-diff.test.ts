@@ -20,7 +20,7 @@ const catalog = {
     { key: "name", source: "Sample", origins: ["manifest.name" as const], semanticRole: "official-name" as const, placeholderSignature: "" },
     { key: "description", source: "Sample description", origins: ["manifest.description" as const], semanticRole: "description" as const, placeholderSignature: "" },
     { key: "registry-description", source: "Find sample workflows.", origins: ["registry.description" as const], semanticRole: "description" as const, placeholderSignature: "" },
-    { key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" },
+    { key: "one", source: "Settings", origins: ["readme" as const, "ui-call" as const], placeholderSignature: "" },
     { key: "two", source: "Rows: {{th:expr:0}}", origins: ["ui-call" as const], placeholderSignature: "{{th:expr:0}}" },
   ],
 } as const;
@@ -41,7 +41,7 @@ const previous = {
 describe("plugin catalog version carry-over", () => {
   it("只复用当前版本仍存在且占位符安全的译文，并给出真实覆盖率", () => {
     expect(selectCurrentCatalogTranslations(catalog, previous)).toEqual([
-      { pluginId: "sample", source: "Settings", target: "设置" },
+      { pluginId: "sample", source: "Settings", target: "设置", scopes: ["runtime-ui", "readme"] },
     ]);
     expect(calculatePluginTranslationCoverage(catalog, previous, "zh-CN")).toEqual({
       totalCount: 5,
@@ -64,10 +64,10 @@ describe("plugin catalog version carry-over", () => {
       ],
     };
     expect(selectCurrentCatalogTranslations(catalog, translation)).toContainEqual(
-      { pluginId: "sample", source: "Sample", target: "示例插件" },
+      { pluginId: "sample", source: "Sample", target: "示例插件", scopes: ["metadata"] },
     );
     expect(selectCurrentCatalogTranslations(catalog, translation)).toContainEqual(
-      { pluginId: "sample", source: "Sample description", target: "示例说明" },
+      { pluginId: "sample", source: "Sample description", target: "示例说明", scopes: ["metadata"] },
     );
     expect(localizedPluginDisplayName("Sample", catalog, translation, "zh-CN"))
       .toBe("示例插件");
@@ -75,11 +75,11 @@ describe("plugin catalog version carry-over", () => {
       .toBe("示例说明");
     expect(localizedPluginDescription("Find sample workflows.", catalog, translation, "zh-CN"))
       .toBe("查找示例工作流。");
-    expect(selectCurrentCatalogTranslations(catalog, translation, false)).not.toContainEqual(
-      { pluginId: "sample", source: "Sample description", target: "示例说明" },
-    );
-    expect(selectCurrentCatalogTranslations(catalog, translation, false)).not.toContainEqual(
-      { pluginId: "sample", source: "Sample", target: "示例插件" },
+    const runtimeOnly = selectCurrentCatalogTranslations(catalog, translation, false);
+    expect(runtimeOnly.some((entry) => entry.source === "Sample description")).toBe(false);
+    expect(runtimeOnly.some((entry) => entry.source === "Sample")).toBe(false);
+    expect(runtimeOnly).toContainEqual(
+      { pluginId: "sample", source: "Settings", target: "设置", scopes: ["runtime-ui", "readme"] },
     );
   });
 

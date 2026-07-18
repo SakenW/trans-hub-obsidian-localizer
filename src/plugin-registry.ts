@@ -8,6 +8,7 @@ export interface CommunityPluginIdentity {
   readonly officialName: string;
   readonly officialDescription: string;
   readonly candidateLocators: readonly string[];
+  readonly readmeMarkdown?: string;
 }
 
 interface CommunityPluginRegistryEntry {
@@ -17,6 +18,7 @@ interface CommunityPluginRegistryEntry {
 }
 
 let cachedRegistry: ReadonlyMap<string, CommunityPluginRegistryEntry> | null = null;
+const cachedReadmes = new Map<string, string | null>();
 
 export async function resolveCommunityPluginIdentity(
   pluginId: string,
@@ -30,6 +32,7 @@ export async function resolveCommunityPluginIdentity(
   }
   const { repository } = entry;
   const root = `https://github.com/${repository}`;
+  const readmeMarkdown = await loadVersionReadme(repository, pluginVersion);
   return {
     repository,
     officialName: entry.officialName,
@@ -39,7 +42,35 @@ export async function resolveCommunityPluginIdentity(
       `${root}/releases/tag/${encodeURIComponent(pluginVersion)}`,
       `${root}/releases/tag/v${encodeURIComponent(pluginVersion)}`,
     ],
+    ...(readmeMarkdown === undefined ? {} : { readmeMarkdown }),
   };
+}
+
+async function loadVersionReadme(repository: string, pluginVersion: string): Promise<string | undefined> {
+  const cacheKey = `${repository}@${pluginVersion}`;
+  const cached = cachedReadmes.get(cacheKey);
+  if (cached !== undefined) return cached ?? undefined;
+  for (const tag of [pluginVersion, `v${pluginVersion}`]) {
+    let response: Awaited<ReturnType<typeof requestUrl>>;
+    try {
+      response = await requestUrl({
+        url: `https://raw.githubusercontent.com/${repository}/${encodeURIComponent(tag)}/README.md`,
+        method: "GET",
+        throw: false,
+      });
+    } catch {
+      cachedReadmes.set(cacheKey, null);
+      return undefined;
+    }
+    if (response.status === 404) continue;
+    if (response.status !== 200) break;
+    const markdown = response.text.normalize("NFC");
+    if (markdown.includes("\u0000") || new TextEncoder().encode(markdown).byteLength > 1024 * 1024) break;
+    cachedReadmes.set(cacheKey, markdown);
+    return markdown;
+  }
+  cachedReadmes.set(cacheKey, null);
+  return undefined;
 }
 
 async function loadCommunityRegistry(): Promise<ReadonlyMap<string, CommunityPluginRegistryEntry>> {

@@ -17,8 +17,8 @@ from bisect import bisect_right
 from pathlib import Path
 from typing import Final, Literal, NamedTuple, TypedDict, cast
 
-CONTRACT_REVISION: Final = 3
-PARSER_ID: Final = "obsidian-plugin-ui-structured-v3"
+CONTRACT_REVISION: Final = 4
+PARSER_ID: Final = "obsidian-plugin-ui-structured-v4"
 PLUGIN_ID_PATTERN: Final = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
 LOCALE_ROLE_PATTERN: Final = re.compile(
     r"^locale:([A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*)$"
@@ -26,6 +26,7 @@ LOCALE_ROLE_PATTERN: Final = re.compile(
 MAX_LOCALE_COMPONENT_BYTES: Final = 4 * 1024 * 1024
 MAX_LOCALE_ENTRIES: Final = 10_000
 MAX_LOCALE_DEPTH: Final = 16
+MAX_README_COMPONENT_BYTES: Final = 1024 * 1024
 QUOTED: Final = r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|`(?:\\.|[^`\\])*`)'
 UI_CALL: Final = re.compile(
     rf"(?:Notice|setText|setButtonText|setName|setDesc|setPlaceholder|"
@@ -42,6 +43,17 @@ PLACEHOLDER: Final = re.compile(
     r"</?[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][\w:.-]*"
     r"(?:=(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]+))?)*\s*/?>"
 )
+README_HEADING: Final = re.compile(r"^\s{0,3}#{1,6}(?:\s+|$)")
+README_LIST_ITEM: Final = re.compile(r"^\s{0,3}(?:[-+*]|\d+[.)])\s+")
+README_BLOCKQUOTE: Final = re.compile(r"^\s{0,3}>")
+README_FENCE_START: Final = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+README_TABLE_ROW: Final = re.compile(r"^\s*\|?.*\|.*\|?\s*$")
+README_HORIZONTAL_RULE: Final = re.compile(r"^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$")
+README_INLINE_CODE: Final = re.compile(r"(`+)([^`]*?)\1")
+README_INLINE_LINK: Final = re.compile(r"(!?)\[([^\]]*)\]\((?:\\.|[^)])*\)")
+README_REFERENCE_LINK: Final = re.compile(r"(!?)\[([^\]]*)\]\[[^\]]*\]")
+README_AUTOLINK: Final = re.compile(r"<https?://[^>]+>")
+README_HTML_TAG: Final = re.compile(r"</?[A-Za-z][^>]*>")
 DYNAMIC_PLACEHOLDER_PREFIX: Final = "th:expr:"
 UI_CALL_NAMES: Final = frozenset(
     {
@@ -86,11 +98,14 @@ StringOrigin = Literal[
     "manifest.description",
     "registry.name",
     "registry.description",
+    "readme",
     "ui-call",
     "ui-property",
 ]
-ExtractionStrategy = Literal["manifest", "registry", "structured", "regex-fallback"]
-SemanticRole = Literal["official-name", "description", "runtime-ui"]
+ExtractionStrategy = Literal[
+    "manifest", "registry", "markdown", "structured", "regex-fallback"
+]
+SemanticRole = Literal["official-name", "description", "readme", "runtime-ui"]
 
 
 class StringEvidence(TypedDict):
@@ -223,9 +238,10 @@ def _canonical_locale(value: str) -> str:
 
 def _required_components(
     request: AdapterRequest,
-) -> tuple[bytes, bytes, bytes | None, dict[str, tuple[str, bytes]]]:
+) -> tuple[bytes, bytes, bytes | None, bytes | None, dict[str, tuple[str, bytes]]]:
     selected: dict[str, bytes] = {}
     registry_metadata: bytes | None = None
+    readme_content: bytes | None = None
     locale_components: dict[str, tuple[str, bytes]] = {}
     for raw_row in request["components"]:
         if not isinstance(raw_row, dict):
@@ -254,6 +270,16 @@ def _required_components(
                 raise AdapterContractError("adapter_registry_metadata_invalid")
             registry_metadata = _read_component(row)
             continue
+        if role == "readme":
+            if name != "README.md" or readme_content is not None:
+                raise AdapterContractError("adapter_readme_component_invalid")
+            readme_content = _read_component(row)
+            if (
+                len(readme_content) > MAX_README_COMPONENT_BYTES
+                or b"\x00" in readme_content
+            ):
+                raise AdapterContractError("adapter_readme_component_invalid")
+            continue
         expected_name = {"manifest": "manifest.json", "main": "main.js"}.get(role)
         if expected_name is None:
             continue
@@ -262,7 +288,13 @@ def _required_components(
         selected[role] = _read_component(row)
     if set(selected) != {"manifest", "main"}:
         raise AdapterContractError("adapter_component_closure_incomplete")
-    return selected["manifest"], selected["main"], registry_metadata, locale_components
+    return (
+        selected["manifest"],
+        selected["main"],
+        registry_metadata,
+        readme_content,
+        locale_components,
+    )
 
 
 def _manifest_value(manifest: dict[str, object], field: str) -> str:
@@ -773,6 +805,163 @@ def _offset_location(source: str, offset: int) -> tuple[int, int]:
     return prefix.count("\n") + 1, offset - prefix.rfind("\n") - 1
 
 
+def _readme_is_comment_start(line: str) -> bool:
+    return line.lstrip().startswith("<!--")
+
+
+def _readme_is_boundary(line: str) -> bool:
+    return bool(
+        not line.strip()
+        or README_HEADING.match(line)
+        or README_LIST_ITEM.match(line)
+        or README_BLOCKQUOTE.match(line)
+        or README_FENCE_START.match(line)
+        or _readme_is_comment_start(line)
+    )
+
+
+def _render_readme_source(value: str) -> str | None:
+    sentinel = "\ue000"
+
+    def protect(label: str) -> str:
+        return sentinel if label.strip() else ""
+
+    rendered = README_INLINE_CODE.sub(lambda match: protect(match.group(2)), value)
+    rendered = README_INLINE_LINK.sub(
+        lambda match: "" if match.group(1) == "!" else protect(match.group(2)),
+        rendered,
+    )
+    rendered = README_REFERENCE_LINK.sub(
+        lambda match: "" if match.group(1) == "!" else protect(match.group(2)),
+        rendered,
+    )
+    rendered = README_AUTOLINK.sub(
+        lambda match: protect(match.group(0)[1:-1]), rendered
+    )
+    rendered = README_HTML_TAG.sub("", rendered)
+    token_index = 0
+
+    def number_token(_match: re.Match[str]) -> str:
+        nonlocal token_index
+        token = f"{{{{th:expr:{token_index}}}}}"
+        token_index += 1
+        return token
+
+    rendered = re.sub(sentinel, number_token, rendered)
+    rendered = README_LIST_ITEM.sub("", rendered)
+    rendered = re.sub(r"[*_~]+", "", rendered)
+    rendered = (
+        rendered.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&#39;", "'")
+    )
+    rendered = re.sub(r"\s+", " ", rendered).strip()
+    if not rendered or not any(character.isalpha() for character in rendered):
+        return None
+    return unicodedata.normalize("NFC", rendered)
+
+
+def _extract_readme_strings(content: bytes) -> list[str]:
+    try:
+        markdown = content.decode("utf-8")
+    except UnicodeError as exc:
+        raise AdapterContractError("adapter_readme_component_invalid") from exc
+    lines = markdown.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    values: set[str] = set()
+    index = 0
+    if lines and lines[0].strip() == "---":
+        for cursor in range(1, len(lines)):
+            if lines[cursor].strip() in {"---", "..."}:
+                index = cursor + 1
+                break
+
+    def add(value: str) -> None:
+        for pattern in (README_INLINE_LINK, README_REFERENCE_LINK):
+            for match in pattern.finditer(value):
+                if match.group(1) == "!":
+                    continue
+                label = _render_readme_source(match.group(2))
+                if label is not None:
+                    values.add(label)
+        rendered = _render_readme_source(value)
+        if rendered is not None:
+            values.add(rendered)
+
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            index += 1
+            continue
+        if _readme_is_comment_start(line):
+            while index < len(lines):
+                current = lines[index]
+                index += 1
+                if "-->" in current:
+                    break
+            continue
+        fence = README_FENCE_START.match(line)
+        if fence is not None:
+            opening = fence.group(1)
+            marker = re.escape(opening[0])
+            closing = re.compile(rf"^\s{{0,3}}{marker}{{{len(opening)},}}\s*$")
+            index += 1
+            while index < len(lines):
+                current = lines[index]
+                index += 1
+                if closing.match(current):
+                    break
+            continue
+        if README_HEADING.match(line):
+            value = README_HEADING.sub("", line)
+            value = re.sub(r"\s+#+\s*$", "", value).strip()
+            if not README_HORIZONTAL_RULE.match(line):
+                add(value)
+            index += 1
+            continue
+        if README_LIST_ITEM.match(line):
+            block: list[str] = []
+            while index < len(lines):
+                candidate = lines[index]
+                if not candidate.strip():
+                    break
+                if block and (
+                    README_HEADING.match(candidate)
+                    or README_BLOCKQUOTE.match(candidate)
+                    or README_FENCE_START.match(candidate)
+                    or _readme_is_comment_start(candidate)
+                ):
+                    break
+                block.append(candidate)
+                index += 1
+            if not any(README_TABLE_ROW.match(candidate) for candidate in block):
+                for candidate in block:
+                    add(candidate)
+            continue
+        if README_BLOCKQUOTE.match(line):
+            block = []
+            while index < len(lines) and README_BLOCKQUOTE.match(lines[index]):
+                block.append(re.sub(r"^\s{0,3}>\s?", "", lines[index]).strip())
+                index += 1
+            if not any(README_TABLE_ROW.match(candidate) for candidate in block):
+                add("\n".join(candidate for candidate in block if candidate))
+            continue
+        block = []
+        while index < len(lines) and not _readme_is_boundary(lines[index]):
+            block.append(lines[index])
+            index += 1
+        if not block:
+            index += 1
+            continue
+        if (
+            not any(README_TABLE_ROW.match(candidate) for candidate in block)
+            and not README_HORIZONTAL_RULE.match("\n".join(block))
+        ):
+            add("\n".join(block).strip())
+    return sorted(values)
+
+
 def _evidence_sort_key(row: StringEvidence) -> tuple[int, str, str, str]:
     return (
         row["offset"] if row["offset"] is not None else -1,
@@ -787,6 +976,8 @@ def _semantic_role(origins: set[StringOrigin]) -> SemanticRole:
         return "official-name"
     if "manifest.description" in origins or "registry.description" in origins:
         return "description"
+    if "readme" in origins:
+        return "readme"
     return "runtime-ui"
 
 
@@ -883,6 +1074,7 @@ def build_snapshot(
     bundle_content: bytes,
     *,
     registry_metadata_content: bytes | None = None,
+    readme_content: bytes | None = None,
     native_locale_components: dict[str, tuple[str, bytes]] | None = None,
 ) -> bytes:
     manifest = _decode_manifest(manifest_content)
@@ -957,6 +1149,26 @@ def build_snapshot(
                 "column": None,
             },
         )
+    if readme_content is not None:
+        if (
+            len(readme_content) > MAX_README_COMPONENT_BYTES
+            or b"\x00" in readme_content
+        ):
+            raise AdapterContractError("adapter_readme_component_invalid")
+        for source in _extract_readme_strings(readme_content):
+            _add_candidate(
+                collected,
+                source,
+                "readme",
+                {
+                    "origin": "readme",
+                    "strategy": "markdown",
+                    "symbol": "README.md",
+                    "offset": None,
+                    "line": None,
+                    "column": None,
+                },
+            )
     if not _collect_structured_matches(bundle, collected):
         _collect_regex_matches(bundle, UI_CALL, collected, "ui-call", "ui-call")
         _collect_regex_matches(
@@ -1008,7 +1220,13 @@ def build_snapshot(
 
 def run_adapter(request_path: Path, output_dir: Path) -> Path:
     request = _read_request(request_path)
-    manifest_content, bundle_content, registry_metadata, locale_components = _required_components(request)
+    (
+        manifest_content,
+        bundle_content,
+        registry_metadata,
+        readme_content,
+        locale_components,
+    ) = _required_components(request)
     if not output_dir.is_dir():
         raise AdapterContractError("adapter_output_directory_invalid")
     snapshot_path = output_dir / "snapshot.bin"
@@ -1017,6 +1235,7 @@ def run_adapter(request_path: Path, output_dir: Path) -> Path:
             manifest_content,
             bundle_content,
             registry_metadata_content=registry_metadata,
+            readme_content=readme_content,
             native_locale_components=locale_components,
         )
     )

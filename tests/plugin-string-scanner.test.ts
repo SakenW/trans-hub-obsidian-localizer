@@ -78,6 +78,38 @@ describe("scanPluginUiStrings", () => {
       }));
   });
 
+  it("把官方版本 README 的可见正文纳入独立语义角色", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      bundle: "",
+      sourceLocale: "en",
+      readmeMarkdown: [
+        "# Sample plugin",
+        "",
+        "Read the [documentation](https://example.com) before using `query`.",
+        "",
+        "```js",
+        "const hidden = true;",
+        "```",
+      ].join("\n"),
+    });
+
+    expect(catalog.strings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: "Sample plugin",
+        origins: ["readme"],
+        semanticRole: "readme",
+      }),
+      expect.objectContaining({
+        source: "Read the {{th:expr:0}} before using {{th:expr:1}}.",
+        origins: ["readme"],
+        semanticRole: "readme",
+        placeholderSignature: "{{th:expr:0}}\u0000{{th:expr:1}}",
+      }),
+    ]));
+    expect(catalog.strings.some((item) => item.source.includes("hidden"))).toBe(false);
+  });
+
   it("folds static concatenation and preserves dynamic setDesc expressions as stable placeholders", async () => {
     const catalog = await scanPluginUiStrings({
       plugin,

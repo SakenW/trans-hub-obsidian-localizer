@@ -88,8 +88,8 @@ def test_build_snapshot_is_deterministic_and_extracts_ui_literals() -> None:
     assert roles["Example Plugin"] == "official-name"
     assert roles["Explore your notes."] == "description"
     assert roles["Ready now"] == "runtime-ui"
-    assert payload["contract_revision"] == 3
-    assert payload["parser"] == "obsidian-plugin-ui-structured-v3"
+    assert payload["contract_revision"] == 4
+    assert payload["parser"] == "obsidian-plugin-ui-structured-v4"
     assert payload["native_localizations"] == []
 
 
@@ -118,6 +118,31 @@ def test_build_snapshot_includes_official_registry_description() -> None:
     ]
     assert rows["Browse example workflows."]["semantic_role"] == "description"
     assert rows["Browse example workflows."]["evidence"][0]["strategy"] == "registry"
+
+
+def test_build_snapshot_extracts_readme_prose_and_protects_inline_content() -> None:
+    readme = b"""# Example plugin
+
+Read the [documentation](https://example.com) before using `query`.
+
+```js
+const hidden = true;
+```
+"""
+    payload = json.loads(build_snapshot(_manifest(), b"", readme_content=readme))
+    rows = {row["source"]: row for row in payload["strings"]}
+
+    assert rows["Example plugin"]["semantic_role"] == "readme"
+    assert rows["documentation"]["semantic_role"] == "readme"
+    protected = rows[
+        "Read the {{th:expr:0}} before using {{th:expr:1}}."
+    ]
+    assert protected["origins"] == ["readme"]
+    assert protected["placeholder_signature"] == (
+        "{{th:expr:0}}\x00{{th:expr:1}}"
+    )
+    assert protected["evidence"][0]["strategy"] == "markdown"
+    assert all("hidden" not in source for source in rows)
 
 
 def test_build_snapshot_pairs_only_verified_placeholder_safe_native_locale_entries() -> None:

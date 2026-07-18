@@ -36,7 +36,7 @@ describe("selectApplicablePluginTranslations", () => {
       excludedPluginIds: ["excluded"],
       pluginMetadataTranslationEnabled: true,
       targetLocale: "zh-CN",
-    })).toEqual([entry("enabled")]);
+    })).toEqual([{ ...entry("enabled"), scopes: ["runtime-ui"] }]);
   });
 
   it("does not apply cached translations for a previously selected target language", () => {
@@ -113,8 +113,8 @@ describe("selectApplicablePluginTranslations", () => {
       pluginMetadataTranslationEnabled: true,
       targetLocale: "zh-CN",
     })).toEqual([
-      { pluginId: "sample", source: "Sample", target: "示例插件" },
-      { pluginId: "sample", source: "Sample description", target: "示例说明" },
+      { pluginId: "sample", source: "Sample", target: "示例插件", scopes: ["metadata"] },
+      { pluginId: "sample", source: "Sample description", target: "示例说明", scopes: ["metadata"] },
     ]);
     expect(selectApplicablePluginTranslations(state, {
       excludedPluginIds: [],

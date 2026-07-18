@@ -247,16 +247,18 @@ function stringValue(value: unknown): string | null {
 function isPluginStringOrigin(value: unknown): value is PluginUiCatalog["strings"][number]["origins"][number] {
   return value === "manifest.name" || value === "manifest.description"
     || value === "registry.name" || value === "registry.description"
+    || value === "readme"
     || value === "ui-call" || value === "ui-property";
 }
 
 function isPluginStringExtractionStrategy(value: unknown): value is PluginStringExtractionStrategy {
   return value === "manifest" || value === "registry"
+    || value === "markdown"
     || value === "structured" || value === "regex-fallback";
 }
 
 function isPluginStringSemanticRole(value: unknown): value is PluginStringSemanticRole {
-  return value === "official-name" || value === "description" || value === "runtime-ui";
+  return value === "official-name" || value === "description" || value === "readme" || value === "runtime-ui";
 }
 
 function isPluginTranslationProvenanceKind(

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildConflictSafeDictionary,
   buildRuntimeTranslationPlan,
+  filterTranslationScope,
   shouldTranslatePluginUiElement,
+  translatePluginReadmeTemplate,
   translatePluginUiFieldParts,
   translatePluginUiValue,
 } from "../src/plugin-ui-runtime";
@@ -112,5 +114,40 @@ describe("runtime DOM boundary", () => {
       ["For ", "Dataview", " users on ", "GitHub", " and ", "Obsidian", "."],
       plan,
     )).toEqual(["面向 GitHub 和 Obsidian 上的 Dataview 用户。", "", "", "", "", "", ""]);
+  });
+});
+
+describe("community README runtime", () => {
+  it("keeps README-only strings out of generic runtime and metadata scopes", () => {
+    const rows = [
+      { pluginId: "dataview", source: "reference", target: "参考", scopes: ["readme"] as const },
+      { pluginId: "dataview", source: "Settings", target: "设置", scopes: ["runtime-ui", "readme"] as const },
+    ];
+    expect(filterTranslationScope(rows, "runtime-ui").map((row) => row.source)).toEqual(["Settings"]);
+    expect(filterTranslationScope(rows, "metadata")).toEqual([]);
+    expect(filterTranslationScope(rows, "readme").map((row) => row.source)).toEqual(["reference", "Settings"]);
+  });
+
+  it("uses complete published block translations and preserves protected link slots", () => {
+    const source = "Treat your {{th:expr:0}} as a database. See {{th:expr:1}}.";
+    const plan = buildRuntimeTranslationPlan([{
+      pluginId: "dataview",
+      source,
+      target: "将 {{th:expr:0}} 作为数据库使用。请参阅 {{th:expr:1}}。",
+    }]);
+
+    expect(translatePluginReadmeTemplate(source, 2, plan))
+      .toBe("将 {{th:expr:0}} 作为数据库使用。请参阅 {{th:expr:1}}。");
+    expect(translatePluginReadmeTemplate(source, 1, plan)).toBeUndefined();
+  });
+
+  it("fails closed when a README translation loses a protected slot", () => {
+    const source = "Use {{th:expr:0}}.";
+    const plan = buildRuntimeTranslationPlan([{
+      pluginId: "dataview",
+      source,
+      target: "使用文档。",
+    }]);
+    expect(translatePluginReadmeTemplate(source, 1, plan)).toBeUndefined();
   });
 });

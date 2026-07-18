@@ -2,16 +2,18 @@ import { canonicalizeProtocolJson } from "@trans-hub/client-protocol";
 
 import { sha256Hex } from "./identity";
 import type { InstalledObsidianPlugin } from "./plugin-discovery";
+import { extractPluginReadmeStrings } from "./plugin-readme";
 
 export type PluginStringOrigin =
   | "manifest.name"
   | "manifest.description"
   | "registry.name"
   | "registry.description"
+  | "readme"
   | "ui-call"
   | "ui-property";
-export type PluginStringExtractionStrategy = "manifest" | "registry" | "structured" | "regex-fallback";
-export type PluginStringSemanticRole = "official-name" | "description" | "runtime-ui";
+export type PluginStringExtractionStrategy = "manifest" | "registry" | "markdown" | "structured" | "regex-fallback";
+export type PluginStringSemanticRole = "official-name" | "description" | "readme" | "runtime-ui";
 
 export interface PluginStringEvidence {
   readonly origin: PluginStringOrigin;
@@ -83,6 +85,7 @@ export async function scanPluginUiStrings(input: {
     readonly name: string;
     readonly description: string;
   };
+  readonly readmeMarkdown?: string;
   readonly bundle: string;
   readonly sourceLocale: string;
   readonly now?: () => Date;
@@ -101,6 +104,13 @@ export async function scanPluginUiStrings(input: {
     addCandidate(collected, input.registryMetadata.description, "registry.description", input.sourceLocale, {
       origin: "registry.description", strategy: "registry", symbol: "community-plugins.description", offset: null, line: null, column: null,
     });
+  }
+  if (input.readmeMarkdown !== undefined) {
+    for (const source of extractPluginReadmeStrings(input.readmeMarkdown)) {
+      addCandidate(collected, source, "readme", input.sourceLocale, {
+        origin: "readme", strategy: "markdown", symbol: "README.md", offset: null, line: null, column: null,
+      });
+    }
   }
   if (!collectStructuredMatches(input.bundle, collected, input.sourceLocale)) {
     collectRegexMatches(input.bundle, UI_CALL, "ui-call", "ui-call", collected, input.sourceLocale);
@@ -145,6 +155,7 @@ export function resolvePluginStringSemanticRole(
   const values = new Set(origins);
   if (values.has("manifest.name") || values.has("registry.name")) return "official-name";
   if (values.has("manifest.description") || values.has("registry.description")) return "description";
+  if (values.has("readme")) return "readme";
   return "runtime-ui";
 }
 

@@ -38,7 +38,7 @@ describe("submitObsidianPluginDiscovery", () => {
       },
     });
     const captured = payload as ContributionSigningPayload | null;
-    expect(captured?.idempotencyKey).toMatch(/^obsidian-public-v3-[a-f0-9]{64}$/u);
+    expect(captured?.idempotencyKey).toMatch(/^obsidian-public-v4-[a-f0-9]{64}$/u);
     expect(captured).toMatchObject({
       submittedAt: "2026-07-17T00:00:00.000Z",
       contributionType: "source_discovery",

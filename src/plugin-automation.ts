@@ -89,6 +89,7 @@ export class PluginAutomationController {
           name: identity.officialName,
           description: identity.officialDescription,
         },
+        ...(identity.readmeMarkdown === undefined ? {} : { readmeMarkdown: identity.readmeMarkdown }),
       });
       stringCount += catalog.strings.length;
       const previous = catalogs[plugin.id];

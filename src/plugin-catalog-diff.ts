@@ -1,7 +1,7 @@
 import type { PluginUiCatalog } from "./plugin-string-scanner";
 import { placeholderSignature, resolvePluginStringSemanticRole } from "./plugin-string-scanner";
 import type { PluginTranslationState } from "./plugin-state";
-import type { PluginUiTranslation } from "./plugin-ui-runtime";
+import type { PluginTranslationScope, PluginUiTranslation } from "./plugin-ui-runtime";
 
 export interface PluginTranslationCoverage {
   readonly totalCount: number;
@@ -62,13 +62,31 @@ export function selectCurrentCatalogTranslations(
   includeMetadata = true,
 ): readonly PluginUiTranslation[] {
   if (catalog === undefined) return [];
+  const catalogBySource = new Map(catalog.strings.map((item) => [item.source, item]));
   const currentSources = new Map(catalog.strings
-    .filter((item) => {
-      const role = item.semanticRole ?? resolvePluginStringSemanticRole(item.origins);
-      return includeMetadata || role === "runtime-ui";
-    })
+    .filter((item) => includeMetadata || translationScopes(item.origins).includes("runtime-ui"))
     .map((item) => [item.source, item.placeholderSignature]));
-  return translation.entries.filter((entry) => isCompatibleEntry(entry, currentSources));
+  return translation.entries
+    .filter((entry) => isCompatibleEntry(entry, currentSources))
+    .map((entry) => ({
+      ...entry,
+      scopes: translationScopes(catalogBySource.get(entry.source)?.origins ?? []),
+    }));
+}
+
+function translationScopes(
+  origins: PluginUiCatalog["strings"][number]["origins"],
+): readonly PluginTranslationScope[] {
+  const scopes = new Set<PluginTranslationScope>();
+  if (origins.some((origin) => origin === "ui-call" || origin === "ui-property")) {
+    scopes.add("runtime-ui");
+  }
+  if (origins.some((origin) => origin === "manifest.name" || origin === "manifest.description"
+    || origin === "registry.name" || origin === "registry.description")) {
+    scopes.add("metadata");
+  }
+  if (origins.includes("readme")) scopes.add("readme");
+  return [...scopes];
 }
 
 export function localizedPluginDisplayName(

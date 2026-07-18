@@ -113,6 +113,7 @@ def test_worker_accepts_official_release_when_catalog_keys_and_sources_match(
     monkeypatch.setattr(
         SCRIPT, "_official_registry_entry", lambda _plugin_id: _registry_entry()
     )
+    monkeypatch.setattr(SCRIPT, "_download_version_readme", lambda *_args: None)
 
     verified = SCRIPT._verified_snapshot(coordinate)
 
@@ -148,6 +149,7 @@ def test_worker_rejects_release_whose_catalog_differs_from_local_observation(
     monkeypatch.setattr(
         SCRIPT, "_official_registry_entry", lambda _plugin_id: _registry_entry()
     )
+    monkeypatch.setattr(SCRIPT, "_download_version_readme", lambda *_args: None)
 
     with pytest.raises(ValueError, match="catalog_mismatch"):
         SCRIPT._verified_snapshot(coordinate)
