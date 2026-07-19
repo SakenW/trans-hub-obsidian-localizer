@@ -1,18 +1,20 @@
 # Trans-Hub Localizer
 
-Automatically translate and localize Obsidian community plugin names, descriptions, settings, commands, and user interfaces into your preferred language. Trans-Hub Localizer is an Obsidian plugin translator and localization (i18n) client powered by [Trans-Hub](https://trans-hub.net).
+Make Obsidian community plugins feel native in your language. Trans-Hub Localizer applies verified translations to plugin names, descriptions, settings, commands, and interface text without changing the original plugin files.
 
-**中文简介：** 语枢 · 插件本地化是一款 Obsidian 插件翻译与汉化工具，可自动发现并本地化第三方社区插件的名称、说明、设置、命令和界面文案。
+Powered by [Trans-Hub](https://trans-hub.net), an open localization collaboration platform.
 
-## Features
+**中文简介：** 语枢 · 插件本地化让 Obsidian 社区插件以你选择的语言显示。译文在运行时安全应用，第三方插件文件和笔记内容保持不变。
 
-- Discover translatable interface strings from the enabled community plugins you select.
-- Localize plugin names and descriptions in Obsidian when complete published translations are available.
-- Apply published translations at runtime without modifying third-party plugin files.
-- Choose one target language while keeping Obsidian as the fixed public ecosystem and English as the source language.
-- Restore original text immediately when localization is disabled.
+## Highlights
 
-It does not translate note content and never modifies third-party plugin files. Runtime localization uses exact text matches and excludes Markdown editors, reading views, code, scripts, and editable content.
+- Select one or many enabled community plugins, or select them all at once.
+- Choose the language you want to see; the plugin handles source detection automatically.
+- Apply published translations to plugin metadata, settings, commands, interface text, and supported plugin detail pages.
+- Keep plugin files and vault notes untouched; localization is applied only to Obsidian's presentation layer.
+- Restore the official text immediately when localization is disabled.
+
+Runtime localization uses exact, version-aware matches and excludes Markdown editors, reading views, code, scripts, and editable content.
 
 ## Install
 
@@ -24,19 +26,21 @@ For a manual installation, download `main.js`, `manifest.json`, and `styles.css`
 <vault-config-dir>/plugins/trans-hub-plugin-localizer/
 ```
 
-Enable the plugin and open its settings. Log in with a Trans-Hub account and choose the language to translate into. The Obsidian public ecosystem and English source language are fixed product boundaries, not user settings.
+Enable the plugin, connect your Trans-Hub account in the browser, choose your display language, and select the plugins you want to localize.
 
-## What is sent
+## Privacy and security
 
-- The plugin reads `manifest.json` and `main.js` from enabled community plugins under the current vault configuration directory.
-- It sends plugin identity, version, target language, catalog counts, and content digests to the Trans-Hub API. Scanned UI text and note content are not uploaded. A single UI source string is sent only when you explicitly submit a missing-translation report.
-- It reads the official Obsidian community registry, version-matched GitHub Release metadata, and the immutable README from the same upstream tag to identify and localize plugin metadata.
-- README localization is limited to the Obsidian community-plugin detail view. Links and code examples are preserved, and vault notes are never included.
-- The plugin never handles your password. Short-lived credentials and the installation private key are stored in Obsidian SecretStorage, not in plugin settings. The plugin contains no advertising or client-side telemetry.
+- The plugin scans selected community plugins locally to identify their exact version and translation coverage.
+- Trans-Hub receives the plugin identity, version, selected language, catalog counts, and cryptographic digests. Scanned interface text and note content are not uploaded.
+- If you explicitly report a missing translation, only the source text shown in that report is submitted.
+- Trans-Hub independently verifies official Obsidian registry and GitHub release sources before translations are published.
+- Your notes are never read for this feature, and third-party plugin files are never modified.
+- Account authorization happens in your browser. Device authorization data is stored with Obsidian's secure storage.
+- The plugin contains no advertising or client-side telemetry.
 
 See the [Trans-Hub privacy policy](https://trans-hub.net/zh-CN/legal/privacy) for server-side data handling.
 
-## Development
+## Build from source
 
 Requirements: Node.js 24 and pnpm 10.34.4.
 
@@ -45,14 +49,12 @@ pnpm install --frozen-lockfile
 pnpm lint
 pnpm type-check
 pnpm test
-pnpm build:dev
+pnpm build
 ```
-
-Development builds connect to `http://127.0.0.1:8000` and open registration at `http://127.0.0.1:3000/register` by default. `TRANS_HUB_OBSIDIAN_DEV_API_BASE_URL` and `TRANS_HUB_OBSIDIAN_DEV_WEB_BASE_URL` may select other localhost or loopback ports; non-loopback development URLs are rejected. Production builds always use `https://api.trans-hub.net` and `https://trans-hub.net/register`, and ignore development overrides.
 
 ## Release integrity
 
-Release tags use plain `x.y.z` semantic versions and must match `manifest.json`, `package.json`, and `versions.json`. The release workflow rebuilds from the immutable tag, runs lint, type checks and tests, verifies that the production bundle contains no loopback URL, creates SHA-256 checksums and GitHub artifact attestations, and publishes the assets Obsidian installs.
+Release tags use plain `x.y.z` semantic versions and match `manifest.json`, `package.json`, and `versions.json`. Every release is rebuilt from its immutable tag, tested, checksummed, and accompanied by a GitHub artifact attestation.
 
 ## License
 

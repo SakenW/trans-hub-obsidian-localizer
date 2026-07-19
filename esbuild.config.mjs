@@ -1,25 +1,5 @@
-import process from "node:process";
-
 import builtins from "builtin-modules";
 import esbuild from "esbuild";
-
-const channel = process.argv[2] ?? "development";
-if (channel !== "development" && channel !== "production") {
-  throw new Error(`未知 Obsidian 构建通道：${channel}`);
-}
-const production = channel === "production";
-const apiBaseUrl = production
-  ? "https://api.trans-hub.net"
-  : normalizeDevelopmentBaseUrl(
-    process.env.TRANS_HUB_OBSIDIAN_DEV_API_BASE_URL ?? "http://127.0.0.1:8000",
-    "开发 API",
-  );
-const webBaseUrl = production
-  ? "https://trans-hub.net"
-  : normalizeDevelopmentBaseUrl(
-    process.env.TRANS_HUB_OBSIDIAN_DEV_WEB_BASE_URL ?? "http://127.0.0.1:3000",
-    "开发 Web",
-  );
 
 await esbuild.build({
   entryPoints: ["src/main.ts"],
@@ -28,15 +8,15 @@ await esbuild.build({
   format: "cjs",
   target: "es2022",
   logLevel: "info",
-  minify: production,
-  sourcemap: production ? false : "inline",
+  minify: true,
+  sourcemap: false,
   treeShaking: true,
   outfile: "main.js",
   define: {
-    __TRANS_HUB_OBSIDIAN_API_BASE_URL__: JSON.stringify(apiBaseUrl),
-    __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__: JSON.stringify(channel),
-    __TRANS_HUB_OBSIDIAN_REGISTRATION_URL__: JSON.stringify(`${webBaseUrl}/register`),
-    __TRANS_HUB_OBSIDIAN_WEB_BASE_URL__: JSON.stringify(webBaseUrl),
+    __TRANS_HUB_OBSIDIAN_API_BASE_URL__: JSON.stringify("https://api.trans-hub.net"),
+    __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__: JSON.stringify("production"),
+    __TRANS_HUB_OBSIDIAN_REGISTRATION_URL__: JSON.stringify("https://trans-hub.net/register"),
+    __TRANS_HUB_OBSIDIAN_WEB_BASE_URL__: JSON.stringify("https://trans-hub.net"),
   },
   alias: {
     "@trans-hub/client-protocol": "./packages/client-protocol/src/index.ts",
@@ -45,16 +25,3 @@ await esbuild.build({
     "@trans-hub/language-tags": "./packages/language-tags/src/index.ts",
   },
 });
-
-function normalizeDevelopmentBaseUrl(value, label) {
-  const parsed = new URL(value.trim());
-  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username !== "" || parsed.password !== "") {
-    throw new Error(`${label} 必须是无内嵌凭据的 HTTP(S) 地址。`);
-  }
-  if (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost" && parsed.hostname !== "[::1]") {
-    throw new Error(`${label} 只允许本机回环地址；正式服务地址由 production 构建固定注入。`);
-  }
-  parsed.pathname = parsed.pathname.replace(/\/+$/u, "") || "/";
-  const normalized = parsed.toString().replace(/\/$/u, "");
-  return normalized;
-}

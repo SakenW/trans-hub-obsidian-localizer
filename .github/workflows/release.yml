@@ -55,6 +55,7 @@ jobs:
       - name: Verify source and build production assets
         run: |
           set -Eeuo pipefail
+          pnpm verify:public-copy
           pnpm lint
           pnpm type-check
           pnpm test

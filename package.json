@@ -20,21 +20,19 @@
     "type": "git",
     "url": "https://github.com/SakenW/trans-hub-obsidian-localizer.git"
   },
-  "homepage": "https://trans-hub.net/zh-CN/ecosystems/obsidian",
+  "homepage": "https://trans-hub.net",
   "bugs": {
     "url": "https://github.com/SakenW/trans-hub-obsidian-localizer/issues"
   },
   "type": "module",
   "packageManager": "pnpm@10.34.4",
   "scripts": {
-    "build": "node esbuild.config.mjs production",
-    "build:dev": "node esbuild.config.mjs development",
-    "export:public": "node scripts/export-public-repository.mjs",
+    "build": "node esbuild.config.mjs",
     "package": "node scripts/package.mjs",
-    "dev": "node esbuild.config.mjs development",
     "lint": "eslint src tests",
     "test": "vitest run",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "verify:public-copy": "node scripts/verify-public-facing-content.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
