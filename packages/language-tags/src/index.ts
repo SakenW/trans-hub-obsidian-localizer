@@ -309,7 +309,7 @@ export function normalizeLanguageTags(
 }
 
 export function normalizeOptionalLanguageTag(
-  value: unknown | null,
+  value: unknown,
   options: RequiredLanguageTagFieldOptions,
 ): string | null {
   if (value === null) {

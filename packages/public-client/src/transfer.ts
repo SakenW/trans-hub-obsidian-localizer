@@ -367,7 +367,7 @@ export class PublicTransferClient {
 class RendezvousByteStream implements AsyncIterable<Uint8Array> {
   private slot: { readonly chunk: Uint8Array; readonly consumed: () => void } | null = null;
   private waiting: (() => void) | null = null;
-  private terminal: { readonly error: unknown | null } | null = null;
+  private terminal: { readonly error: unknown } | null = null;
 
   async push(chunk: Uint8Array): Promise<void> {
     if (this.terminal !== null || this.slot !== null) {

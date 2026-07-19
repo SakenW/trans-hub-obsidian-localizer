@@ -439,7 +439,7 @@ export class PublicClient implements PublicClientControl {
     readonly operation: string;
     readonly path: string;
     readonly method: "GET" | "POST";
-    readonly body: unknown | null;
+    readonly body: unknown;
     readonly credential: PublicControlCredential | null;
     readonly retryableOperation: boolean;
     readonly signal: AbortSignal | undefined;

@@ -15,7 +15,7 @@ export interface ControlHttpRequest {
   readonly method: "GET" | "POST";
   readonly path: string;
   readonly headers: Readonly<Record<string, string>>;
-  readonly body: unknown | null;
+  readonly body: unknown;
   readonly credential: PublicControlCredential | null;
   readonly signal?: AbortSignal;
 }
