@@ -125,7 +125,7 @@ export function expectEnum<const Values extends readonly string[]>(
   if (typeof value !== "string" || !values.includes(value)) {
     protocolError("CP_INVALID_VALUE", path, `expected one of: ${values.join(", ")}`);
   }
-  return value as Values[number];
+  return value;
 }
 
 export function expectLiteral<const Value extends string | number>(

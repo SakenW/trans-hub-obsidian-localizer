@@ -36,11 +36,11 @@ export class ScanResultModal extends Modal {
       const item = list.createEl("li", {
         cls: "trans-hub-scan-modal__item",
       });
-      item.createEl("span", {
+      item.createSpan({
         text: `${block.submissionState} · ${block.kind} · L${block.provenance.startLine}–${block.provenance.endLine}${block.blockId === null ? "" : ` · ^${block.blockId}`}`,
         cls: "trans-hub-scan-modal__meta",
       });
-      item.createEl("span", {
+      item.createSpan({
         text: block.text,
         cls: "trans-hub-scan-modal__text",
       });

@@ -403,7 +403,9 @@ class RendezvousByteStream implements AsyncIterable<Uint8Array> {
         continue;
       }
       if (this.terminal !== null) {
-        if (this.terminal.error !== null) throw this.terminal.error;
+        if (this.terminal.error !== null) {
+          throw normalizeError(this.terminal.error, "upload-component");
+        }
         return;
       }
       await new Promise<void>((resolve) => {

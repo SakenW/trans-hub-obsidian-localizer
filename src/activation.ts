@@ -21,12 +21,12 @@ import type { App } from "obsidian";
 
 import { ObsidianHttpTransport } from "./http-transport";
 import { base64ToBytes, bytesToBase64, sha256Hex } from "./identity";
+import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 
 const INSTALLATION_SECRET_ID = "trans-hub-obsidian-public-installation-v1";
 const SIGNING_KEY_SECRET_ID = "trans-hub-obsidian-public-installation-key-v1";
 const PENDING_AUTHORIZATION_SECRET_ID = "trans-hub-obsidian-public-authorization-v1";
 const PENDING_RENEWAL_SECRET_ID = "trans-hub-obsidian-public-renewal-v1";
-const CLIENT_VERSION = "obsidian-plugin/0.1.0";
 const PREPARE_ONLY_TRANSPORT_ORIGIN = "https://bootstrap.invalid";
 
 interface StoredSigningKey {
@@ -115,7 +115,7 @@ export class ActivationStore {
       installationStorage: this.storage("pending"),
     });
     const prepared = client.prepareBootstrap({
-      client: { type: "public_plugin", version: CLIENT_VERSION, platform: "obsidian-desktop" },
+      client: { type: "public_plugin", version: OBSIDIAN_CLIENT_VERSION, platform: "obsidian-desktop" },
       requestedCapabilities: ["contribution:submit", "contribution:read_receipt", "translation:read"],
     });
     const pending: PendingAuthorization = {

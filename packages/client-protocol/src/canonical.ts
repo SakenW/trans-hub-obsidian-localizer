@@ -251,7 +251,7 @@ export async function computeProtocolDigest<Domain extends DigestDomain>(
 
 export function contributionSigningPayload(intent: ContributionIntent): ContributionSigningPayload {
   const { installationProof: _installationProof, ...payload } = intent;
-  return payload as ContributionSigningPayload;
+  return payload;
 }
 
 export function publicUploadGrantSigningPayload(

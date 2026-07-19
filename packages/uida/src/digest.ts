@@ -5,7 +5,9 @@ export function createWebCryptoDigestPort(
   ...arguments_: [] | [subtle: SubtleCrypto | undefined]
 ): DigestPort {
   const subtle =
-    arguments_.length === 0 ? globalThis.crypto?.subtle : arguments_[0];
+    arguments_.length === 0
+      ? (typeof crypto === "undefined" ? undefined : crypto.subtle)
+      : arguments_[0];
   return {
     async digest(data: Uint8Array): Promise<Uint8Array> {
       if (!subtle) {

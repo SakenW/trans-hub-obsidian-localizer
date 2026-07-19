@@ -165,7 +165,7 @@ function normalizeRecord(
   depth: number,
   path: string,
 ): NormalizedObject {
-  const prototype = Object.getPrototypeOf(value);
+  const prototype = Reflect.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
     throw new UidaError(
       "UIDA_UNSUPPORTED_TYPE",

@@ -2,6 +2,7 @@ import { assertSafeApiBaseUrl } from "./api-base-url";
 
 declare const __TRANS_HUB_OBSIDIAN_API_BASE_URL__: string;
 declare const __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__: "development" | "production";
+declare const __TRANS_HUB_OBSIDIAN_CLIENT_VERSION__: string;
 declare const __TRANS_HUB_OBSIDIAN_REGISTRATION_URL__: string;
 declare const __TRANS_HUB_OBSIDIAN_WEB_BASE_URL__: string;
 
@@ -9,6 +10,7 @@ export const OBSIDIAN_ECOSYSTEM_SLUG = "obsidian";
 export const OBSIDIAN_PLUGIN_ID = "trans-hub-plugin-localizer";
 export const OBSIDIAN_AUTH_CALLBACK_ACTION = "trans-hub-plugin-localizer-auth";
 export const OBSIDIAN_SOURCE_LOCALE = "en";
+export const OBSIDIAN_CLIENT_VERSION = __TRANS_HUB_OBSIDIAN_CLIENT_VERSION__;
 export const PRODUCTION_API_BASE_URL = "https://api.trans-hub.net";
 export const PRODUCTION_REGISTRATION_URL = "https://trans-hub.net/register";
 export const PRODUCTION_WEB_BASE_URL = "https://trans-hub.net";

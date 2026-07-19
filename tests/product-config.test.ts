@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   OBSIDIAN_AUTH_CALLBACK_ACTION,
+  OBSIDIAN_CLIENT_VERSION,
   OBSIDIAN_ECOSYSTEM_SLUG,
   OBSIDIAN_PLUGIN_ID,
   OBSIDIAN_SOURCE_LOCALE,
@@ -23,6 +24,7 @@ describe("Obsidian product configuration", () => {
       await readFile(new URL("../manifest.json", import.meta.url), "utf8"),
     ) as Record<string, unknown>;
     expect(manifest.id).toBe(OBSIDIAN_PLUGIN_ID);
+    expect(OBSIDIAN_CLIENT_VERSION).toBe(`obsidian-plugin/${String(manifest.version)}`);
     expect(manifest.name).toBe("Trans-Hub Localizer");
     const description = manifest.description;
     expect(typeof description).toBe("string");
@@ -30,13 +32,18 @@ describe("Obsidian product configuration", () => {
     expect(description).toMatch(/\.$/u);
     expect(description).toContain("translate");
     expect(description).toContain("localize");
-    expect(description).toContain("Obsidian community plugin");
+    expect(description).toContain("community plugin");
+    expect(description).not.toContain("Obsidian");
   });
 
   it("publishes searchable GitHub metadata without keyword stuffing the manifest", async () => {
     const packageJson = JSON.parse(
       await readFile(new URL("../package.json", import.meta.url), "utf8"),
     ) as Record<string, unknown>;
+    const manifest = JSON.parse(
+      await readFile(new URL("../manifest.json", import.meta.url), "utf8"),
+    ) as Record<string, unknown>;
+    expect(packageJson.version).toBe(manifest.version);
     expect(packageJson.description).toContain("Obsidian community plugin");
     expect(packageJson.keywords).toEqual(expect.arrayContaining([
       "obsidian-plugin", "translation", "translator", "localization", "i18n", "trans-hub",

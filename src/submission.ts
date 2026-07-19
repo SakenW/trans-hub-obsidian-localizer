@@ -11,6 +11,7 @@ import type { PublicClient } from "@trans-hub/public-client";
 
 import { sha256Hex } from "./identity";
 import type { PluginUiCatalog } from "./plugin-string-scanner";
+import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 
 export const OBSIDIAN_PUBLIC_PROFILE = {
   externalRegistry: "obsidian_community_plugins",
@@ -68,7 +69,7 @@ export async function submitObsidianPluginDiscovery(input: {
     },
     provenance: {
       clientType: "public_plugin",
-      clientVersion: "obsidian-plugin/0.1.0",
+      clientVersion: OBSIDIAN_CLIENT_VERSION,
       userAction: "automatic_observation",
       observationDigest,
     },
@@ -129,7 +130,7 @@ export async function submitObsidianLocalizationObservation(input: {
     },
     provenance: {
       clientType: "public_plugin",
-      clientVersion: "obsidian-plugin/0.1.0",
+      clientVersion: OBSIDIAN_CLIENT_VERSION,
       userAction: "automatic_observation",
       observationDigest: summaryDigest,
     },
@@ -195,7 +196,7 @@ export async function submitObsidianMissingTranslationIssue(input: {
     },
     provenance: {
       clientType: "public_plugin",
-      clientVersion: "obsidian-plugin/0.1.0",
+      clientVersion: OBSIDIAN_CLIENT_VERSION,
       userAction: "explicit_submit",
       observationDigest: evidenceDigest,
     },

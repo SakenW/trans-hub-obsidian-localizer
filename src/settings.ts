@@ -1,4 +1,12 @@
-import { App, type ButtonComponent, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
+import {
+  App,
+  type ButtonComponent,
+  Modal,
+  Notice,
+  PluginSettingTab,
+  Setting,
+  type SettingDefinitionItem,
+} from "obsidian";
 
 import { errorMessage } from "./error-message";
 import { localizedClientName, translate } from "./client-localization";
@@ -41,12 +49,30 @@ export class TransHubSettingTab extends PluginSettingTab {
   reportCommandStatus(message: string, failed: boolean): void {
     this.selectionStatus = message;
     this.selectionStatusFailed = failed;
-    this.display();
+    this.refreshSettings();
   }
 
+  override getSettingDefinitions(): SettingDefinitionItem[] {
+    return [{
+      name: localizedClientName(),
+      desc: translate("连接语枢、选择目标语言和需要本地化的插件。"),
+      aliases: [
+        translate("自动翻译"),
+        translate("翻译插件名称和说明"),
+        translate("翻译为"),
+        translate("选择插件"),
+      ],
+      render: (setting) => this.renderSettings(setting.settingEl),
+    }];
+  }
+
+  // Obsidian 1.12 and earlier require display(); 1.13+ uses getSettingDefinitions().
   override display(): void {
+    this.renderSettings(this.containerEl);
+  }
+
+  private renderSettings(containerEl: HTMLElement): void {
     const renderVersion = ++this.renderVersion;
-    const { containerEl } = this;
     containerEl.empty();
     containerEl.addClass("trans-hub-settings");
     const intro = containerEl.createEl("p", {
@@ -77,7 +103,7 @@ export class TransHubSettingTab extends PluginSettingTab {
         this.plugin.settings.pluginTranslationEnabled = value;
         await this.plugin.savePluginData();
         this.plugin.refreshPluginTranslationRuntime();
-        this.display();
+        this.refreshSettings();
       },
     );
 
@@ -90,7 +116,7 @@ export class TransHubSettingTab extends PluginSettingTab {
         this.plugin.settings.pluginMetadataTranslationEnabled = value;
         await this.plugin.savePluginData();
         this.plugin.refreshPluginTranslationRuntime();
-        this.display();
+        this.refreshSettings();
       },
     );
 
@@ -106,7 +132,7 @@ export class TransHubSettingTab extends PluginSettingTab {
           this.selectionStatusFailed = false;
           await this.plugin.savePluginData();
           this.plugin.refreshPluginTranslationRuntime();
-          this.display();
+          this.refreshSettings();
         });
       });
     localeSetting.settingEl.addClass("trans-hub-settings__card");
@@ -140,7 +166,7 @@ export class TransHubSettingTab extends PluginSettingTab {
         .addButton((button) => button.setButtonText(translate("清除本机连接")).onClick(() => {
           this.plugin.disconnect();
           new Notice(translate("已清除本机连接信息；服务器上的短期凭据会自动过期。"));
-          this.display();
+          this.refreshSettings();
         }));
       return;
     }
@@ -150,7 +176,7 @@ export class TransHubSettingTab extends PluginSettingTab {
           await this.plugin.connect();
           this.selectionStatus = translate("请在浏览器中完成登录和设备授权。");
           this.selectionStatusFailed = false;
-          this.display();
+          this.refreshSettings();
         } catch (error) {
           new Notice(errorMessage(error), 10_000);
         }
@@ -407,7 +433,7 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.selectionStatus = translate("处理失败：{message}", { message: errorMessage(error) });
       this.selectionStatusFailed = true;
       new Notice(this.selectionStatus, 10_000);
-    } finally { this.display(); }
+    } finally { this.refreshSettings(); }
   }
 
   private queueSelectionProcessing(status: HTMLElement): void {
@@ -445,6 +471,15 @@ export class TransHubSettingTab extends PluginSettingTab {
     status.toggleClass("mod-warning", failed);
   }
 
+  private refreshSettings(): void {
+    const update = (this as { update?: () => void }).update;
+    if (typeof update === "function") {
+      update.call(this);
+      return;
+    }
+    this.renderSettings(this.containerEl);
+  }
+
   private renderRecovery(container: HTMLElement): void {
     const details = container.createEl("details", { cls: "trans-hub-settings__recovery" });
     details.createEl("summary", { text: translate("遇到问题") });
@@ -456,7 +491,7 @@ export class TransHubSettingTab extends PluginSettingTab {
       .addButton((button) => button.setButtonText(translate("重新处理")).onClick(async () => {
         this.selectionStatus = translate("正在重新处理所选插件…");
         this.selectionStatusFailed = false;
-        this.display();
+        this.refreshSettings();
         try {
           const result = await this.plugin.processSelectedPlugins();
           this.selectionStatus = describePluginSelectionProcessing(result);
@@ -467,7 +502,7 @@ export class TransHubSettingTab extends PluginSettingTab {
           this.selectionStatusFailed = true;
           new Notice(this.selectionStatus, 10_000);
         }
-        this.display();
+        this.refreshSettings();
       }));
   }
 }

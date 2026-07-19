@@ -188,14 +188,14 @@ export class PluginUiTranslationRuntime {
     this.translateTree(root);
     this.observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
-        if (mutation.type === "characterData" && mutation.target instanceof Text) {
+        if (mutation.type === "characterData" && mutation.target.instanceOf(Text)) {
           this.translateText(mutation.target);
         }
-        if (mutation.type === "childList" && mutation.target instanceof Element) {
+        if (mutation.type === "childList" && mutation.target.instanceOf(Element)) {
           const field = mutation.target.closest(COMMUNITY_FIELD_SELECTOR);
           if (field !== null) this.translateCommunityField(field);
         }
-        if (mutation.type === "attributes" && mutation.target instanceof Element) {
+        if (mutation.type === "attributes" && mutation.target.instanceOf(Element)) {
           this.translateAttributes(mutation.target);
         }
         for (const node of Array.from(mutation.addedNodes)) this.translateTree(node);
@@ -217,17 +217,17 @@ export class PluginUiTranslationRuntime {
   }
 
   private translateTree(root: Node): void {
-    if (root instanceof Text) { this.translateText(root); return; }
-    if (!(root instanceof Element) && !(root instanceof DocumentFragment)) return;
-    if (root instanceof Element) {
+    if (root.instanceOf(Text)) { this.translateText(root); return; }
+    if (!root.instanceOf(Element) && !root.instanceOf(DocumentFragment)) return;
+    if (root.instanceOf(Element)) {
       this.translateAttributes(root);
       this.translateReadmeBlock(root);
     }
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
     let current = walker.nextNode();
     while (current !== null) {
-      if (current instanceof Text) this.translateText(current);
-      else if (current instanceof Element) {
+      if (current.instanceOf(Text)) this.translateText(current);
+      else if (current.instanceOf(Element)) {
         this.translateAttributes(current);
         this.translateReadmeBlock(current);
       }
@@ -337,11 +337,11 @@ function serializeReadmeBlock(block: Element): SerializedReadmeBlock | undefined
   const protectedNodes: Element[] = [];
   const parts: string[] = [];
   const visit = (node: Node): void => {
-    if (node instanceof Text) {
+    if (node.instanceOf(Text)) {
       parts.push(node.data);
       return;
     }
-    if (!(node instanceof Element)) return;
+    if (!node.instanceOf(Element)) return;
     if (node.matches(README_PROTECTED_SELECTOR)) {
       if ((node.textContent ?? "").trim() !== "") {
         parts.push(`{{th:expr:${protectedNodes.length}}}`);
@@ -429,7 +429,7 @@ function communityFieldTextNodes(field: Element): Text[] {
   let current = walker.nextNode();
   while (current !== null) {
     if (
-      current instanceof Text
+      current.instanceOf(Text)
       && current.parentElement?.closest(COMMUNITY_FIELD_BADGE_SELECTOR) === null
     ) {
       nodes.push(current);

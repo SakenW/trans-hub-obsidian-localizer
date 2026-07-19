@@ -66,13 +66,6 @@ jobs:
           grep -F 'https://api.trans-hub.net' main.js >/dev/null
           ! grep -E 'https?://(127\.0\.0\.1|localhost)' main.js >/dev/null
 
-      - name: Create release inventory
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          shasum -a 256 main.js manifest.json styles.css "release/trans-hub-plugin-localizer-${GITHUB_REF_NAME}.zip" \
-            > SHA256SUMS
-
       - name: Attest release assets
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
         with:
@@ -80,7 +73,6 @@ jobs:
             main.js
             manifest.json
             styles.css
-            release/trans-hub-plugin-localizer-${{ github.ref_name }}.zip
 
       - name: Publish GitHub release
         env:
@@ -94,6 +86,4 @@ jobs:
             --generate-notes \
             main.js \
             manifest.json \
-            styles.css \
-            SHA256SUMS \
-            "release/trans-hub-plugin-localizer-${GITHUB_REF_NAME}.zip"
+            styles.css

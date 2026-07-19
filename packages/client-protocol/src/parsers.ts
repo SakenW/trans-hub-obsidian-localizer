@@ -48,7 +48,7 @@ export {
   parsePublicUploadGrantRequest,
 } from "./transfer-parser.js";
 
-export function parseProtocolDocument(input: unknown | string | Uint8Array): ProtocolDocument {
+export function parseProtocolDocument(input: unknown): ProtocolDocument {
   const value =
     typeof input === "string" || input instanceof Uint8Array ? parseStrictJson(input) : input;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {

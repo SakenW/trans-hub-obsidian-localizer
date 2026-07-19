@@ -54,7 +54,7 @@ pnpm build
 
 ## Release integrity
 
-Release tags use plain `x.y.z` semantic versions and match `manifest.json`, `package.json`, and `versions.json`. Every release is rebuilt from its immutable tag, tested, checksummed, and accompanied by a GitHub artifact attestation.
+Release tags use plain `x.y.z` semantic versions and match `manifest.json`, `package.json`, and `versions.json`. Every release is rebuilt from its immutable tag, tested, and accompanied by GitHub artifact attestations for the three files Obsidian downloads.
 
 ## License
 
