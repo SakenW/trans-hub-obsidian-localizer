@@ -19,6 +19,13 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      TRANS_HUB_TRANSFER_ROOT_KEY_ID: ${{ vars.TRANS_HUB_TRANSFER_ROOT_KEY_ID }}
+      TRANS_HUB_TRANSFER_ROOT_KEY_VERSION: ${{ vars.TRANS_HUB_TRANSFER_ROOT_KEY_VERSION }}
+      TRANS_HUB_TRANSFER_ROOT_PUBLIC_KEY_B64: ${{ vars.TRANS_HUB_TRANSFER_ROOT_PUBLIC_KEY_B64 }}
+      TRANS_HUB_TRANSFER_NEXT_ROOT_KEY_ID: ${{ vars.TRANS_HUB_TRANSFER_NEXT_ROOT_KEY_ID }}
+      TRANS_HUB_TRANSFER_NEXT_ROOT_KEY_VERSION: ${{ vars.TRANS_HUB_TRANSFER_NEXT_ROOT_KEY_VERSION }}
+      TRANS_HUB_TRANSFER_NEXT_ROOT_PUBLIC_KEY_B64: ${{ vars.TRANS_HUB_TRANSFER_NEXT_ROOT_PUBLIC_KEY_B64 }}
     steps:
       - name: Checkout immutable tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -48,6 +55,19 @@ jobs:
           test "$(node -p "require('./package.json').version")" = "$tag"
           node -e "const v=require('./versions.json'); if (!v[process.argv[1]]) process.exit(1)" "$tag"
           test "$(node -p "require('./manifest.json').id")" = "trans-hub-plugin-localizer"
+          [[ "$TRANS_HUB_TRANSFER_ROOT_KEY_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$ ]]
+          [[ "$TRANS_HUB_TRANSFER_ROOT_KEY_VERSION" =~ ^[1-9][0-9]*$ ]]
+          [[ "$TRANS_HUB_TRANSFER_ROOT_PUBLIC_KEY_B64" =~ ^[A-Za-z0-9_-]{43}$ ]]
+          next_count=0
+          test -n "$TRANS_HUB_TRANSFER_NEXT_ROOT_KEY_ID" && next_count=$((next_count + 1))
+          test -n "$TRANS_HUB_TRANSFER_NEXT_ROOT_KEY_VERSION" && next_count=$((next_count + 1))
+          test -n "$TRANS_HUB_TRANSFER_NEXT_ROOT_PUBLIC_KEY_B64" && next_count=$((next_count + 1))
+          test "$next_count" -eq 0 || test "$next_count" -eq 3
+          if test "$next_count" -eq 3; then
+            [[ "$TRANS_HUB_TRANSFER_NEXT_ROOT_KEY_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$ ]]
+            [[ "$TRANS_HUB_TRANSFER_NEXT_ROOT_KEY_VERSION" =~ ^[1-9][0-9]*$ ]]
+            [[ "$TRANS_HUB_TRANSFER_NEXT_ROOT_PUBLIC_KEY_B64" =~ ^[A-Za-z0-9_-]{43}$ ]]
+          fi
 
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile

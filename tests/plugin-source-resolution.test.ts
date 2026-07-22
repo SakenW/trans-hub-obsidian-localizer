@@ -5,6 +5,19 @@ import { resolvePublishedPluginSource } from "../src/plugin-source-resolution";
 
 const SOURCE_VERSION_ID = "019f0000-0000-7000-8000-000000000001";
 const OBJECT_VERSION_ID = "019f0000-0000-7000-8000-000000000002";
+const ARTIFACT_DIGEST = "ab".repeat(32);
+const SNAPSHOT_DIGEST = "cd".repeat(32);
+const CATALOG_IDENTITY = {
+  protocol: "trans-hub.source-catalog-identity",
+  revision: 1,
+  resourceKey: "dataview",
+  resourceVersion: "0.5.68",
+  sourceLocale: "en",
+  artifactDigest: ARTIFACT_DIGEST,
+  unitCount: 77,
+  digest: "ef".repeat(32),
+  scopes: [{ scope: "runtime-ui", unitCount: 77, digest: "12".repeat(32) }],
+} as const;
 
 describe("resolvePublishedPluginSource", () => {
   it("resolves an exact published Obsidian plugin version and locale", async () => {
@@ -13,10 +26,14 @@ describe("resolvePublishedPluginSource", () => {
       pluginId: "dataview",
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
     });
     expect(result).toEqual({
       sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
+      artifactDigest: ARTIFACT_DIGEST,
+      sourceSnapshotDigest: SNAPSHOT_DIGEST,
+      catalogIdentity: CATALOG_IDENTITY,
       upstreamNativeCount: 0,
     });
   });
@@ -29,6 +46,7 @@ describe("resolvePublishedPluginSource", () => {
       pluginId: "dataview",
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
     })).resolves.toBeUndefined();
   });
 
@@ -41,9 +59,13 @@ describe("resolvePublishedPluginSource", () => {
       pluginId: "dataview",
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
     })).resolves.toEqual({
       sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
+      artifactDigest: ARTIFACT_DIGEST,
+      sourceSnapshotDigest: SNAPSHOT_DIGEST,
+      catalogIdentity: CATALOG_IDENTITY,
       upstreamNativeCount: 65,
     });
   });
@@ -53,33 +75,90 @@ describe("resolvePublishedPluginSource", () => {
     body.objects[0].coverage.push({
       ...body.objects[0].coverage[0],
       source_version_id: "019f0000-0000-7000-8000-000000000003",
+      published_unit_count: 999,
     });
     await expect(resolvePublishedPluginSource({
       transport: transport(200, body),
       pluginId: "dataview",
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
     })).rejects.toThrow("不唯一");
   });
 
-  it("selects the source version with the most published units", async () => {
+  it("fails closed when the authority repeats the same exact coverage coordinate", async () => {
+    const body = catalog();
+    body.objects[0].coverage.push({ ...body.objects[0].coverage[0] });
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).rejects.toThrow("覆盖行不唯一");
+  });
+
+  it("ignores higher-coverage candidates whose catalog identity does not match", async () => {
     const body = catalog();
     body.objects[0].coverage[0].published_unit_count = 70;
     body.objects[0].coverage.push({
       ...body.objects[0].coverage[0],
       source_version_id: "019f0000-0000-7000-8000-000000000003",
       published_unit_count: 77,
+      catalog_identity: { ...CATALOG_IDENTITY, digest: "99".repeat(32) },
     });
     await expect(resolvePublishedPluginSource({
       transport: transport(200, body),
       pluginId: "dataview",
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
     })).resolves.toEqual({
-      sourceVersionId: "019f0000-0000-7000-8000-000000000003",
+      sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
+      artifactDigest: ARTIFACT_DIGEST,
+      sourceSnapshotDigest: SNAPSHOT_DIGEST,
+      catalogIdentity: CATALOG_IDENTITY,
       upstreamNativeCount: 0,
     });
+  });
+
+  it("does not select legacy or mismatched authority catalogs", async () => {
+    const legacy = catalog();
+    delete (legacy.objects[0].coverage[0] as Record<string, unknown>).catalog_identity;
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, legacy),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).resolves.toBeUndefined();
+
+    const mismatch = catalog();
+    mismatch.objects[0].coverage[0].catalog_identity = {
+      ...CATALOG_IDENTITY,
+      digest: "99".repeat(32),
+    };
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, mismatch),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).resolves.toBeUndefined();
+
+    const scopeMismatch = catalog();
+    scopeMismatch.objects[0].coverage[0].catalog_identity = {
+      ...CATALOG_IDENTITY,
+      scopes: [{ ...CATALOG_IDENTITY.scopes[0], digest: "98".repeat(32) }],
+    };
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, scopeMismatch),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).resolves.toBeUndefined();
   });
 });
 
@@ -97,6 +176,7 @@ function catalog() {
       versions: [{
         object_version_id: OBJECT_VERSION_ID,
         version_key: "0.5.68",
+        content_digest: ARTIFACT_DIGEST,
       }],
       coverage: [{
         object_version_id: OBJECT_VERSION_ID,
@@ -105,6 +185,8 @@ function catalog() {
         target_variant: "default",
         published_unit_count: 77,
         upstream_unit_count: 0,
+        source_snapshot_digest: SNAPSHOT_DIGEST,
+        catalog_identity: CATALOG_IDENTITY,
       }],
     }],
   };

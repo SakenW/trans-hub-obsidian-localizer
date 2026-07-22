@@ -270,7 +270,8 @@ interface InstallationLifecycleReceiptBase {
   readonly serverProof: ServerSignatureEnvelope<"public_installation_lifecycle_receipt">;
 }
 
-export interface InstallationLifecycleReplacementReceipt extends InstallationLifecycleReceiptBase {
+export interface InstallationLifecycleReplacementReceipt
+  extends InstallationLifecycleReceiptBase {
   readonly action: "rotate" | "reinstall";
   readonly state: "active";
   readonly serverChallenge: string;
@@ -278,7 +279,8 @@ export interface InstallationLifecycleReplacementReceipt extends InstallationLif
   readonly intakeCredential: PublicIntakeSessionCredential;
 }
 
-export interface InstallationLifecycleTerminalReceipt extends InstallationLifecycleReceiptBase {
+export interface InstallationLifecycleTerminalReceipt
+  extends InstallationLifecycleReceiptBase {
   readonly action: "logout" | "lost_device" | "unlink" | "revoke";
   readonly state: "logged_out" | "lost" | "unlinked" | "revoked";
   readonly serverChallenge: null;
@@ -306,7 +308,10 @@ export interface AdapterHint {
 export interface ClientProvenance {
   readonly clientType: ClientType;
   readonly clientVersion: string;
-  readonly userAction: "automatic_observation" | "explicit_submit" | "explicit_edit";
+  readonly userAction:
+    | "automatic_observation"
+    | "explicit_submit"
+    | "explicit_edit";
   readonly observationDigest: RequestDigest;
 }
 
@@ -330,7 +335,8 @@ export type ContributionType =
   | "explicit_translation_candidate"
   | "issue";
 
-export interface EcosystemClaimIntent extends ContributionIntentBase<"ecosystem_claim"> {
+export interface EcosystemClaimIntent
+  extends ContributionIntentBase<"ecosystem_claim"> {
   readonly claim: {
     readonly publisherHint: string;
     readonly namespaceHint: string;
@@ -338,7 +344,8 @@ export interface EcosystemClaimIntent extends ContributionIntentBase<"ecosystem_
   };
 }
 
-export interface SourceDiscoveryIntent extends ContributionIntentBase<"source_discovery"> {
+export interface SourceDiscoveryIntent
+  extends ContributionIntentBase<"source_discovery"> {
   readonly discovery: {
     readonly candidateLocators: readonly string[];
     readonly localArtifactDigest: TransportDigest | null;
@@ -467,7 +474,8 @@ interface SourceAcquisitionManifestBase<Kind extends AcquisitionKind> {
   readonly components: readonly AcquisitionComponent[];
 }
 
-export interface SingleBlobManifest extends SourceAcquisitionManifestBase<"single_blob"> {
+export interface SingleBlobManifest
+  extends SourceAcquisitionManifestBase<"single_blob"> {
   readonly blob: {
     readonly componentName: string;
   };
@@ -483,7 +491,8 @@ export interface SignedComponentsManifest
   };
 }
 
-export interface FixedGitTreeManifest extends SourceAcquisitionManifestBase<"fixed_git_tree"> {
+export interface FixedGitTreeManifest
+  extends SourceAcquisitionManifestBase<"fixed_git_tree"> {
   readonly repository: {
     readonly canonicalUrl: string;
     readonly commit: string;
@@ -517,7 +526,8 @@ export const TERMINAL_CONTRIBUTION_STATES = [
   "tombstoned",
 ] as const;
 
-export type TerminalContributionState = (typeof TERMINAL_CONTRIBUTION_STATES)[number];
+export type TerminalContributionState =
+  (typeof TERMINAL_CONTRIBUTION_STATES)[number];
 
 export type SourceContributionState =
   | "received"
@@ -559,15 +569,18 @@ export type ContributionState =
   | ObservationContributionState
   | ClaimContributionState;
 
-export type ContributionStateFor<Type extends ContributionType> = Type extends "source_discovery"
-  ? SourceContributionState
-  : Type extends "explicit_translation_candidate"
-    ? TranslationContributionState
-    : Type extends "ecosystem_claim"
-      ? ClaimContributionState
-      : ObservationContributionState;
+export type ContributionStateFor<Type extends ContributionType> =
+  Type extends "source_discovery"
+    ? SourceContributionState
+    : Type extends "explicit_translation_candidate"
+      ? TranslationContributionState
+      : Type extends "ecosystem_claim"
+        ? ClaimContributionState
+        : ObservationContributionState;
 
-export interface ContributionStateReceipt<Type extends ContributionType = ContributionType> {
+export interface ContributionStateReceipt<
+  Type extends ContributionType = ContributionType,
+> {
   readonly kind: "contribution_state_receipt";
   readonly protocol: ProtocolVersion;
   readonly receiptId: string;
@@ -582,6 +595,50 @@ export interface ContributionStateReceipt<Type extends ContributionType = Contri
   readonly credentialEpoch: number;
   readonly authorityHeadDigest: LogicalObjectDigest | null;
   readonly recordedAt: string;
+}
+
+export type LocalizationDemandState =
+  | "awaiting_source"
+  | "rejected"
+  | "reconciled"
+  | "mt_queued"
+  | "mt_running"
+  | "mt_failed"
+  | "export_pending"
+  | "export_ready"
+  | "native_complete";
+
+export interface LocalizationDemandCoordinateStatus {
+  readonly state: LocalizationDemandState;
+  readonly sourceVersionId: string | null;
+  readonly targetLocale: string | null;
+  readonly targetVariant: string | null;
+  readonly totalUnitCount: number;
+  readonly workItemCount: number;
+  readonly nativeUnitCount: number;
+  readonly queuedCount: number;
+  readonly runningCount: number;
+  readonly succeededCount: number;
+  readonly failedCount: number;
+  readonly reviewedUnitCount: number;
+  readonly publishedUnitCount: number;
+  readonly manifestId: string | null;
+  readonly generationNumber: number | null;
+  readonly updatedAt: string;
+  readonly retryAfterSeconds: number;
+  readonly failureCode: string | null;
+  readonly failureRetryable: boolean;
+  readonly failureAttemptNumber: number | null;
+}
+
+export interface LocalizationDemandStatus {
+  readonly kind: "localization_demand_status";
+  readonly protocol: ProtocolVersion;
+  readonly contributionId: string;
+  readonly state: LocalizationDemandState;
+  readonly coordinates: readonly LocalizationDemandCoordinateStatus[];
+  readonly retryAfterSeconds: number;
+  readonly updatedAt: string;
 }
 
 export interface SourceAttestation {
@@ -666,7 +723,10 @@ export interface PublicUploadGrantRequest {
   readonly installationProof: InstallationProof;
 }
 
-export type PublicUploadGrantSigningPayload = Omit<PublicUploadGrantRequest, "installationProof">;
+export type PublicUploadGrantSigningPayload = Omit<
+  PublicUploadGrantRequest,
+  "installationProof"
+>;
 
 export interface PublicUploadHttpsPut {
   readonly kind: "https_put";
@@ -723,7 +783,9 @@ export interface PublicUploadProviderGrant {
   readonly nativeCapability: NativeTransferCapabilityWire;
 }
 
-export type PublicUploadTransport = PublicUploadHttpsPut | PublicUploadProviderGrant;
+export type PublicUploadTransport =
+  | PublicUploadHttpsPut
+  | PublicUploadProviderGrant;
 
 export interface PublicArtifactManifest {
   readonly kind: "public_artifact_manifest";
@@ -777,6 +839,7 @@ export type ProtocolDocument =
   | RegistryResolution
   | SourceAcquisitionManifest
   | ContributionStateReceipt
+  | LocalizationDemandStatus
   | SourceAttestation
   | PublicUploadGrantRequest
   | PublicUploadGrant

@@ -1,6 +1,9 @@
 import { parseSourceAcquisitionManifest } from "./acquisition-parser.js";
 import { parseSourceAttestation } from "./attestation-parser.js";
-import { parseBootstrapRequest, parseBootstrapResponse } from "./bootstrap-parser.js";
+import {
+  parseBootstrapRequest,
+  parseBootstrapResponse,
+} from "./bootstrap-parser.js";
 import type { ProtocolDocument } from "./contracts.js";
 import { parseContributionIntent } from "./contribution-parser.js";
 import { protocolError } from "./errors.js";
@@ -8,6 +11,7 @@ import {
   parsePublicInstallationLifecycleCommand,
   parsePublicInstallationRecoveryCommand,
 } from "./lifecycle-parser.js";
+import { parseLocalizationDemandStatus } from "./localization-demand-parser.js";
 import { parseRegistryResolution } from "./registry-parser.js";
 import { parseContributionStateReceipt } from "./state-parser.js";
 import { parseStrictJson } from "./strict-json.js";
@@ -37,6 +41,7 @@ export {
   parsePublicLifecycleTrustCapability,
 } from "./lifecycle-parser.js";
 export { parseRegistryResolution } from "./registry-parser.js";
+export { parseLocalizationDemandStatus } from "./localization-demand-parser.js";
 export {
   assertContributionTransition,
   parseContributionStateReceipt,
@@ -50,9 +55,15 @@ export {
 
 export function parseProtocolDocument(input: unknown): ProtocolDocument {
   const value =
-    typeof input === "string" || input instanceof Uint8Array ? parseStrictJson(input) : input;
+    typeof input === "string" || input instanceof Uint8Array
+      ? parseStrictJson(input)
+      : input;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    protocolError("CP_INVALID_TYPE", "$", "protocol document must be an object");
+    protocolError(
+      "CP_INVALID_TYPE",
+      "$",
+      "protocol document must be an object",
+    );
   }
   const kind = (value as Record<string, unknown>).kind;
   switch (kind) {
@@ -68,6 +79,8 @@ export function parseProtocolDocument(input: unknown): ProtocolDocument {
       return parseSourceAcquisitionManifest(value);
     case "contribution_state_receipt":
       return parseContributionStateReceipt(value);
+    case "localization_demand_status":
+      return parseLocalizationDemandStatus(value);
     case "source_attestation":
       return parseSourceAttestation(value);
     case "public_upload_grant":
@@ -83,6 +96,10 @@ export function parseProtocolDocument(input: unknown): ProtocolDocument {
     case "public_installation_recovery_command":
       return parsePublicInstallationRecoveryCommand(value);
     default:
-      protocolError("CP_INVALID_VALUE", "$.kind", "unknown protocol document kind");
+      protocolError(
+        "CP_INVALID_VALUE",
+        "$.kind",
+        "unknown protocol document kind",
+      );
   }
 }

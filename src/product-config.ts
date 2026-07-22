@@ -4,6 +4,11 @@ declare const __TRANS_HUB_OBSIDIAN_API_BASE_URL__: string;
 declare const __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__: "development" | "production";
 declare const __TRANS_HUB_OBSIDIAN_CLIENT_VERSION__: string;
 declare const __TRANS_HUB_OBSIDIAN_REGISTRATION_URL__: string;
+declare const __TRANS_HUB_OBSIDIAN_TRANSFER_TRUST_ROOTS__: readonly Readonly<{
+  keyId: string;
+  keyVersion: number;
+  publicKeyBase64Url: string;
+}>[];
 declare const __TRANS_HUB_OBSIDIAN_WEB_BASE_URL__: string;
 
 export const OBSIDIAN_ECOSYSTEM_SLUG = "obsidian";
@@ -37,6 +42,8 @@ export const TRANS_HUB_REGISTRATION_URL = assertSafeApiBaseUrl(__TRANS_HUB_OBSID
 export const TRANS_HUB_WEB_BASE_URL = assertSafeApiBaseUrl(__TRANS_HUB_OBSIDIAN_WEB_BASE_URL__);
 export const TRANS_HUB_OBSIDIAN_ECOSYSTEM_URL =
   `${TRANS_HUB_WEB_BASE_URL}/ecosystems/${OBSIDIAN_ECOSYSTEM_SLUG}`;
+export const TRANS_HUB_TRANSLATION_EXPORT_TRUST_ROOTS =
+  __TRANS_HUB_OBSIDIAN_TRANSFER_TRUST_ROOTS__;
 
 if (
   TRANS_HUB_BUILD_CHANNEL === "production" &&

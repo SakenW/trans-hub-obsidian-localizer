@@ -4,6 +4,7 @@ import {
   describePluginSelectionProcessing,
   pendingTranslationPluginIds,
   pendingTranslationRetryDelay,
+  PluginProcessingQueue,
   processPluginSelection,
 } from "../src/plugin-selection-processing";
 
@@ -36,7 +37,7 @@ describe("processPluginSelection", () => {
 
     expect(calls).toEqual(["scan", "synchronize"]);
     expect(result.kind).toBe("synchronized");
-    expect(describePluginSelectionProcessing(result)).toContain("1 个正在由服务器处理或等待审查");
+    expect(describePluginSelectionProcessing(result)).toContain("1 个仍在处理中");
     expect(pendingTranslationPluginIds(result)).toEqual(["dataview"]);
   });
 
@@ -75,5 +76,32 @@ describe("processPluginSelection", () => {
     expect(pendingTranslationRetryDelay(1)).toBe(10_000);
     expect(pendingTranslationRetryDelay(4)).toBe(60_000);
     expect(pendingTranslationRetryDelay(20)).toBe(60_000);
+    expect(pendingTranslationRetryDelay(0, 45_000)).toBe(45_000);
+    expect(pendingTranslationRetryDelay(0, 30 * 60_000)).toBe(15 * 60_000);
+  });
+
+  it("serializes overlapping plugin scans so older snapshots cannot save last", async () => {
+    const queue = new PluginProcessingQueue();
+    const events: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const first = queue.run(async () => {
+      events.push("first:start");
+      await firstGate;
+      events.push("first:save");
+    });
+    const second = queue.run(() => {
+      events.push("second:start");
+      events.push("second:save");
+      return Promise.resolve();
+    });
+
+    await Promise.resolve();
+    expect(events).toEqual(["first:start"]);
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    expect(events).toEqual([
+      "first:start", "first:save", "second:start", "second:save",
+    ]);
   });
 });

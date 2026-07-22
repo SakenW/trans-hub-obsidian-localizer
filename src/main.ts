@@ -11,8 +11,10 @@ import {
 import { synchronizeConfiguredPluginTranslations, type PluginSyncSummary } from "./plugin-sync";
 import {
   describePluginSelectionProcessing,
+  MAX_PENDING_TRANSLATION_QUICK_RETRIES,
   pendingTranslationPluginIds,
   pendingTranslationRetryDelay,
+  PluginProcessingQueue,
   processPluginSelection,
   type PluginSelectionProcessingResult,
 } from "./plugin-selection-processing";
@@ -28,6 +30,7 @@ import {
 } from "./product-config";
 import { TransHubSettingTab } from "./settings";
 import { DEFAULT_SETTINGS, loadSettings, type TransHubPluginSettings } from "./settings-data";
+import { ObsidianTranslationPackStore } from "./translation-pack-store";
 import {
   submitObsidianLocalizationIssue,
   type ObsidianLocalizationIssueKind,
@@ -46,14 +49,20 @@ export default class TransHubObsidianPlugin extends Plugin {
   private activation!: ActivationStore;
   private pluginAutomation!: PluginAutomationController;
   private settingTab!: TransHubSettingTab;
+  private translationPackStore!: ObsidianTranslationPackStore;
   private pendingRetryTimer: number | null = null;
   private pendingRetryAttempt = 0;
   private readonly pendingRetryPluginIds = new Set<string>();
+  private readonly pluginProcessingQueue = new PluginProcessingQueue();
 
   override async onload(): Promise<void> {
     this.loadPluginData(await this.loadData(), resolveObsidianTargetLocale(getLanguage()));
     this.applyClientLocale(this.settings.targetLocale);
     this.activation = new ActivationStore(this.app);
+    this.translationPackStore = new ObsidianTranslationPackStore(
+      this.app.vault,
+      this.manifest.id,
+    );
     this.registerObsidianProtocolHandler(
       OBSIDIAN_AUTH_CALLBACK_ACTION,
       async (parameters) => {
@@ -141,14 +150,16 @@ export default class TransHubObsidianPlugin extends Plugin {
   private async processPlugins(
     onlyPluginIds?: readonly string[],
   ): Promise<PluginSelectionProcessingResult> {
-    const result = await processPluginSelection({
-      scan: () => this.scanInstalledPluginStrings(onlyPluginIds),
-      hasSession: () => this.activation.isConfigured(),
-      synchronize: () => this.syncInstalledPluginTranslations(onlyPluginIds),
-      applyCached: () => { this.applyCachedPluginTranslations(); },
+    return this.pluginProcessingQueue.run(async () => {
+      const result = await processPluginSelection({
+        scan: () => this.scanInstalledPluginStrings(onlyPluginIds),
+        hasSession: () => this.activation.isConfigured(),
+        synchronize: () => this.syncInstalledPluginTranslations(onlyPluginIds),
+        applyCached: () => { this.applyCachedPluginTranslations(); },
+      });
+      this.schedulePendingTranslationRetry(result);
+      return result;
     });
-    this.schedulePendingTranslationRetry(result);
-    return result;
   }
 
   async reportPluginLocalizationIssue(input: {
@@ -192,6 +203,7 @@ export default class TransHubObsidianPlugin extends Plugin {
       excludedPluginIds: this.settings.excludedPluginIds,
       ...(onlyPluginIds === undefined ? {} : { onlyPluginIds }),
       activationStore: this.activation,
+      translationPackStore: this.translationPackStore,
       getState: () => this.state,
       replaceState: (state) => { this.state = state; },
       save: () => this.savePluginData(),
@@ -234,13 +246,26 @@ export default class TransHubObsidianPlugin extends Plugin {
       if (this.pendingRetryPluginIds.size === 0) this.clearPendingTranslationRetry();
       return;
     }
-    this.queuePendingTranslationRetry(pluginIds);
+    const retryAfterMs = result.kind === "synchronized"
+      ? result.sync.nextRetryAfterMs
+      : undefined;
+    this.queuePendingTranslationRetry(pluginIds, retryAfterMs);
   }
 
-  private queuePendingTranslationRetry(pluginIds: readonly string[]): void {
+  private queuePendingTranslationRetry(
+    pluginIds: readonly string[],
+    serverSuggestedMs?: number,
+  ): void {
     for (const pluginId of pluginIds) this.pendingRetryPluginIds.add(pluginId);
     if (this.pendingRetryTimer !== null) return;
-    const delay = pendingTranslationRetryDelay(this.pendingRetryAttempt);
+    if (this.pendingRetryAttempt >= MAX_PENDING_TRANSLATION_QUICK_RETRIES) {
+      this.pendingRetryPluginIds.clear();
+      return;
+    }
+    const delay = pendingTranslationRetryDelay(
+      this.pendingRetryAttempt,
+      serverSuggestedMs,
+    );
     this.pendingRetryTimer = window.setTimeout(() => {
       this.pendingRetryTimer = null;
       this.pendingRetryAttempt += 1;

@@ -1,6 +1,6 @@
 {
   "name": "@trans-hub/obsidian-client",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "Apache-2.0",
   "description": "Automatic translation and localization for Obsidian community plugin names, descriptions, and user interfaces.",
@@ -26,6 +26,17 @@
   },
   "type": "module",
   "packageManager": "pnpm@10.34.4",
+  "dependencies": {
+    "@trans-hub/client-protocol": "link:packages/client-protocol",
+    "@trans-hub/public-client": "link:packages/public-client",
+    "@trans-hub/translation-export-client": "link:packages/translation-export-client",
+    "@trans-hub/uida": "link:packages/uida"
+  },
+  "pnpm": {
+    "overrides": {
+      "fast-uri@<3.1.4": "3.1.4"
+    }
+  },
   "scripts": {
     "build": "node esbuild.config.mjs",
     "package": "node scripts/package.mjs",

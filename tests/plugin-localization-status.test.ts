@@ -11,6 +11,18 @@ const baseSubmission = {
   submittedAt: "2026-07-18T00:00:00Z",
 };
 
+const exactIdentity = {
+  protocol: "trans-hub.source-catalog-identity" as const,
+  revision: 1 as const,
+  resourceKey: "dataview",
+  resourceVersion: "0.5.68",
+  sourceLocale: "en",
+  artifactDigest: "ab".repeat(32),
+  unitCount: 2,
+  digest: "cd".repeat(32),
+  scopes: [{ scope: "runtime-ui", unitCount: 2, digest: "ef".repeat(32) }],
+};
+
 describe("describePluginLocalizationStatus", () => {
   it("marks the English source locale as complete without waiting for translation", () => {
     expect(describePluginLocalizationStatus({ targetLocale: "en" })).toEqual({
@@ -28,6 +40,86 @@ describe("describePluginLocalizationStatus", () => {
       },
       targetLocale: "zh-CN",
     })).toEqual({ kind: "waiting", label: "等待本地化需求处理" });
+  });
+
+  it("shows actionable machine translation and publication progress", () => {
+    const status = {
+      state: "mt_running" as const,
+      sourceVersionId: "source-version",
+      targetLocale: "zh-CN",
+      targetVariant: "default",
+      totalUnitCount: 77,
+      workItemCount: 7,
+      nativeUnitCount: 70,
+      queuedCount: 0,
+      runningCount: 2,
+      succeededCount: 5,
+      failedCount: 0,
+      reviewedUnitCount: 0,
+      publishedUnitCount: 0,
+      retryAfterSeconds: 10,
+      failureRetryable: false,
+      updatedAt: "2026-07-20T00:00:00Z",
+    };
+    expect(describePluginLocalizationStatus({
+      submission: { ...baseSubmission, localizationDemandStatus: status },
+      targetLocale: "zh-CN",
+    })).toEqual({
+      kind: "waiting",
+      label: "机器翻译中：已完成 5/7 条，正在处理 2 条",
+    });
+    expect(describePluginLocalizationStatus({
+      submission: {
+        ...baseSubmission,
+        localizationDemandStatus: {
+          ...status,
+          state: "export_pending",
+          runningCount: 0,
+          succeededCount: 7,
+        },
+      },
+      targetLocale: "zh-CN",
+    })).toEqual({
+      kind: "waiting",
+      label: "翻译已完成 7/7 条，等待译文制品发布",
+    });
+  });
+
+  it("distinguishes retryable and terminal machine translation failures", () => {
+    const failed = {
+      state: "mt_failed" as const,
+      sourceVersionId: "source-version",
+      targetLocale: "zh-CN",
+      targetVariant: "default",
+      totalUnitCount: 2,
+      workItemCount: 2,
+      nativeUnitCount: 0,
+      queuedCount: 0,
+      runningCount: 0,
+      succeededCount: 1,
+      failedCount: 1,
+      reviewedUnitCount: 0,
+      publishedUnitCount: 0,
+      retryAfterSeconds: 60,
+      failureCode: "MachineTranslationTransientError",
+      failureRetryable: true,
+      failureAttemptNumber: 2,
+      updatedAt: "2026-07-20T00:00:00Z",
+    };
+    expect(describePluginLocalizationStatus({
+      submission: { ...baseSubmission, localizationDemandStatus: failed },
+      targetLocale: "zh-CN",
+    }).label).toContain("服务器将自动重试（第 2/5 次）");
+    expect(describePluginLocalizationStatus({
+      submission: {
+        ...baseSubmission,
+        localizationDemandStatus: { ...failed, failureRetryable: false },
+      },
+      targetLocale: "zh-CN",
+    })).toEqual({
+      kind: "failed",
+      label: "机器翻译失败，自动重试已停止。可单独重试此插件。",
+    });
   });
 
   it("prioritizes an applied translation for the selected locale", () => {
@@ -71,7 +163,10 @@ describe("describePluginLocalizationStatus", () => {
         pulledAt: "2026-07-18T00:00:00Z",
       },
       targetLocale: "zh-CN",
-    })).toEqual({ kind: "waiting", label: "已本地化 1/2 条（50%），1 条等待发布；待补 1" });
+    })).toEqual({
+      kind: "catalog-mismatch",
+      label: "服务器正在更新目录身份；已安全应用 1 条精确命中译文",
+    });
   });
 
   it("有可信来源元数据时展示原生、补充、校订和自动翻译构成", () => {
@@ -97,11 +192,76 @@ describe("describePluginLocalizationStatus", () => {
     });
   });
 
+  it("仅在权威需求仍处理中时把精确目录缺口称为等待发布", () => {
+    const catalog = {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+      sourceLocale: "en", digest: exactIdentity.digest,
+      artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
+      scannedAt: "2026-07-18T00:00:00Z",
+      strings: [
+        { key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" },
+        { key: "two", source: "New option", origins: ["ui-call" as const], placeholderSignature: "" },
+      ],
+    };
+    const translation = {
+      pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
+      artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
+      targetLocale: "zh-CN",
+      entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
+      pulledAt: "2026-07-18T00:00:00Z",
+    };
+    expect(describePluginLocalizationStatus({ catalog, translation, targetLocale: "zh-CN" })).toEqual({
+      kind: "localized",
+      label: "已发布 1/2 条（50%），1 条尚未发布；插件界面 1/2",
+    });
+    expect(describePluginLocalizationStatus({
+      catalog,
+      translation,
+      submission: {
+        ...baseSubmission,
+        localizationDemandStatus: {
+          state: "mt_running", sourceVersionId: "stale-source", targetLocale: "zh-CN",
+          targetVariant: "default", totalUnitCount: 2, workItemCount: 1,
+          nativeUnitCount: 0, queuedCount: 0, runningCount: 1, succeededCount: 0,
+          failedCount: 0, reviewedUnitCount: 0, publishedUnitCount: 1,
+          retryAfterSeconds: 5, failureRetryable: false,
+          updatedAt: "2026-07-20T00:00:00Z",
+        },
+      },
+      targetLocale: "zh-CN",
+    })).toEqual({
+      kind: "localized",
+      label: "已发布 1/2 条（50%），1 条尚未发布；插件界面 1/2",
+    });
+    expect(describePluginLocalizationStatus({
+      catalog,
+      translation,
+      submission: {
+        ...baseSubmission,
+        localizationDemandStatus: {
+          state: "mt_running", sourceVersionId: "source", targetLocale: "zh-CN",
+          targetVariant: "default", totalUnitCount: 2, workItemCount: 1,
+          nativeUnitCount: 0, queuedCount: 0, runningCount: 1, succeededCount: 0,
+          failedCount: 0, reviewedUnitCount: 0, publishedUnitCount: 1,
+          retryAfterSeconds: 5, failureRetryable: false,
+          updatedAt: "2026-07-20T00:00:00Z",
+        },
+      },
+      targetLocale: "zh-CN",
+    })).toEqual({
+      kind: "waiting",
+      label: "已本地化 1/2 条（50%），1 条等待发布；插件界面 1/2",
+    });
+  });
+
   it("仅有覆盖摘要时也展示插件自带语言，不伪造语枢译文条目", () => {
     expect(describePluginLocalizationStatus({
       catalog: {
         pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
-        sourceLocale: "en", digest: "catalog", artifactDigest: "artifact", scannedAt: "2026-07-18T00:00:00Z",
+        sourceLocale: "en", digest: exactIdentity.digest,
+        artifactDigest: exactIdentity.artifactDigest,
+        catalogIdentity: exactIdentity,
+        scannedAt: "2026-07-18T00:00:00Z",
         strings: [
           { key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" },
           { key: "two", source: "New option", origins: ["ui-call"], placeholderSignature: "" },
@@ -109,11 +269,51 @@ describe("describePluginLocalizationStatus", () => {
       },
       translation: {
         pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
+        artifactDigest: exactIdentity.artifactDigest,
+        catalogIdentity: exactIdentity,
         targetLocale: "zh-CN", upstreamNativeCount: 2, entries: [],
         pulledAt: "2026-07-18T00:00:00Z",
       },
       targetLocale: "zh-CN",
-    })).toEqual({ kind: "localized", label: "已本地化 2/2 条（100%）；插件自带 2" });
+    })).toEqual({
+      kind: "localized",
+      label: "已本地化 2/2 条（100%）；插件自带覆盖范围明细待服务端提供；插件自带 2",
+    });
+  });
+
+  it("目录作用域不一致时不把本地额外条目误报为等待翻译", () => {
+    expect(describePluginLocalizationStatus({
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+        sourceLocale: "en", digest: "11".repeat(32), artifactDigest: "ab".repeat(32),
+        catalogIdentity: {
+          ...exactIdentity,
+          digest: "11".repeat(32),
+          scopes: [{ scope: "runtime-ui", unitCount: 2, digest: "22".repeat(32) }],
+        },
+        scannedAt: "2026-07-18T00:00:00Z",
+        strings: [
+          { key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" },
+          { key: "two", source: "New option", origins: ["ui-call"], placeholderSignature: "" },
+        ],
+      },
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
+        artifactDigest: "ab".repeat(32),
+        catalogIdentity: {
+          ...exactIdentity,
+          digest: "33".repeat(32),
+          scopes: [{ scope: "runtime-ui", unitCount: 1, digest: "44".repeat(32) }],
+        },
+        targetLocale: "zh-CN",
+        entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
+        pulledAt: "2026-07-18T00:00:00Z",
+      },
+      targetLocale: "zh-CN",
+    })).toEqual({
+      kind: "catalog-mismatch",
+      label: "服务器目录正在更新：插件界面；已安全应用 1 条精确命中译文",
+    });
   });
 
   it("deduplicates historical rows by source and reports only the strongest effective provenance", () => {

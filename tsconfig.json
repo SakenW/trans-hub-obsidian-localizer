@@ -18,6 +18,8 @@
     "paths": {
       "@trans-hub/client-protocol": ["packages/client-protocol/src/index.ts"],
       "@trans-hub/public-client": ["packages/public-client/src/index.ts"],
+      "@trans-hub/translation-export-client": ["packages/translation-export-client/src/index.ts"],
+      "@trans-hub/translation-export-client/node": ["packages/translation-export-client/src/node.ts"],
       "@trans-hub/uida": ["packages/uida/src/index.ts"],
       "@trans-hub/language-tags": ["packages/language-tags/src/index.ts"]
     }

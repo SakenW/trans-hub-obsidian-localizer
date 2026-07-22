@@ -151,8 +151,11 @@ function manifestFixture(): TranslationExportManifest {
     canonicalPayloadDigest: "sha256:b", logicalObjectDigest: "sha256:c",
   };
   return {
-    manifestId: "manifest", sourceVersionId: "version", targetLocale: "zh-CN",
+    schema: "trans-hub.translation-export", revision: 1,
+    manifestId: "manifest", generationId: "generation", generationNumber: 1,
+    sourceStreamId: "stream", sourceVersionId: "version", targetLocale: "zh-CN",
     targetVariant: "default", scope: { kind: "public", publicScopeId: "scope" },
+    manifestDigest: `sha256:${"d".repeat(64)}`,
     packs: [pack],
   };
 }

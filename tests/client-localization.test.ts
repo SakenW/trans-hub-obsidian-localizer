@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { localizedClientName, setClientLocale, translate } from "../src/client-localization";
+import {
+  isClientDisplayName,
+  localizedClientName,
+  setClientLocale,
+  translate,
+} from "../src/client-localization";
 
 describe("client localization", () => {
   afterEach(() => { setClientLocale("zh-CN"); });
@@ -18,6 +23,18 @@ describe("client localization", () => {
     setClientLocale("zh-CN");
     expect(translate("翻译为")).toBe("翻译为");
     expect(localizedClientName()).toBe("语枢 · 插件本地化");
+  });
+
+  it("recognizes the previous navigation title after switching client locale", () => {
+    setClientLocale("zh-CN");
+    const previousNavigationTitle = localizedClientName();
+
+    setClientLocale("en");
+
+    expect(localizedClientName()).toBe("Trans-Hub Localizer");
+    expect(isClientDisplayName(previousNavigationTitle)).toBe(true);
+    expect(isClientDisplayName(localizedClientName())).toBe(true);
+    expect(isClientDisplayName("Dataview")).toBe(false);
   });
 
   it("falls back deterministically when a bundled target pack is not published yet", () => {

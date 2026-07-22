@@ -9,7 +9,7 @@ import {
 } from "obsidian";
 
 import { errorMessage } from "./error-message";
-import { localizedClientName, translate } from "./client-localization";
+import { isClientDisplayName, localizedClientName, translate } from "./client-localization";
 import type TransHubObsidianPlugin from "./main";
 import { localizedPluginDescription, localizedPluginDisplayName } from "./plugin-catalog-diff";
 import { discoverInstalledPlugins, type InstalledObsidianPlugin } from "./plugin-discovery";
@@ -299,11 +299,11 @@ export class TransHubSettingTab extends PluginSettingTab {
     ]));
     const pluginGroups = Array.from(settingsModal.querySelectorAll<HTMLElement>(".vertical-tab-header-group"))
       .filter((group) => Array.from(group.querySelectorAll<HTMLElement>(".vertical-tab-nav-item-title"))
-        .some((title) => title.textContent?.trim() === this.plugin.manifest.name));
+        .some((title) => isClientDisplayName(title.textContent?.trim() ?? "")));
     for (const group of pluginGroups) {
       for (const title of Array.from(group.querySelectorAll<HTMLElement>(".vertical-tab-nav-item-title"))) {
         const officialName = title.textContent?.trim() ?? "";
-        if (officialName === this.plugin.manifest.name) {
+        if (isClientDisplayName(officialName)) {
           const clientName = localizedClientName();
           if (clientName !== officialName) {
             title.setAttribute(ORIGINAL_PLUGIN_NAME_ATTRIBUTE, officialName);

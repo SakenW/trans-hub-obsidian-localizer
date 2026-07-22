@@ -13,21 +13,27 @@ export const CONTROL_PATHS = Object.freeze({
   contributions: "/v1/public-client/contributions",
   contributionStatus: (contributionId: string) =>
     `/v1/public-client/contributions/${pathSegment(contributionId)}/status`,
+  localizationDemandStatus: (contributionId: string) =>
+    `/v1/public-client/contributions/${pathSegment(contributionId)}/localization-demand-status`,
   createUploadGrant: (contributionId: string) =>
     `/v1/public-client/contributions/${pathSegment(contributionId)}/upload-grants`,
 });
 
 function pathSegment(value: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value)) {
-    throw publicClientError("PC_CONFIGURATION", "Identifier cannot be used in a control path", {
-      operation: "control-path",
-    });
+    throw publicClientError(
+      "PC_CONFIGURATION",
+      "Identifier cannot be used in a control path",
+      {
+        operation: "control-path",
+      },
+    );
   }
   return encodeURIComponent(value);
 }
 
 export function assertPublicCredential(
-  credential: PublicControlCredential | null
+  credential: PublicControlCredential | null,
 ): PublicControlCredential | null {
   if (credential === null) return null;
   if (
@@ -48,7 +54,7 @@ export function assertPublicCredential(
     throw publicClientError(
       "PC_CREDENTIAL_AUDIENCE",
       "Only a server-issued public-contribution-intake credential is accepted",
-      { operation: "credential" }
+      { operation: "credential" },
     );
   }
   return credential;
@@ -61,7 +67,7 @@ function retryableStatus(status: number): boolean {
 export async function controlRequest(
   transport: PublicHttpTransportPort,
   request: ControlHttpRequest,
-  operation: string
+  operation: string,
 ): Promise<ControlHttpResponse> {
   let response: ControlHttpResponse;
   try {
@@ -77,7 +83,7 @@ export async function controlRequest(
       "PC_HTTP_STATUS",
       "The control endpoint returned a non-success status",
       { operation, status: response.status },
-      { retryable: retryableStatus(response.status) }
+      { retryable: retryableStatus(response.status) },
     );
   }
   return response;
@@ -86,7 +92,7 @@ export async function controlRequest(
 export async function transferRequest(
   transport: PublicHttpTransportPort,
   request: TransferHttpRequest,
-  operation: string
+  operation: string,
 ): Promise<TransferHttpResponse> {
   let response: TransferHttpResponse;
   try {
@@ -99,7 +105,7 @@ export async function transferRequest(
       "PC_HTTP_STATUS",
       "The transfer endpoint returned a non-success status",
       { operation, status: response.status },
-      { retryable: retryableStatus(response.status) }
+      { retryable: retryableStatus(response.status) },
     );
   }
   return response;

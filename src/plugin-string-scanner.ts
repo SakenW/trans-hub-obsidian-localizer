@@ -1,4 +1,7 @@
-import { canonicalizeProtocolJson } from "@trans-hub/client-protocol";
+import {
+  computeSourceCatalogIdentity,
+  type SourceCatalogIdentity,
+} from "@trans-hub/client-protocol";
 
 import { sha256Hex } from "./identity";
 import type { InstalledObsidianPlugin } from "./plugin-discovery";
@@ -14,6 +17,7 @@ export type PluginStringOrigin =
   | "ui-property";
 export type PluginStringExtractionStrategy = "manifest" | "registry" | "markdown" | "structured" | "regex-fallback";
 export type PluginStringSemanticRole = "official-name" | "description" | "readme" | "runtime-ui";
+export type PluginContentScope = "runtime-ui" | "metadata" | "readme";
 
 export interface PluginStringEvidence {
   readonly origin: PluginStringOrigin;
@@ -42,6 +46,8 @@ export interface PluginUiCatalog {
   readonly sourceLocale: string;
   readonly digest: string;
   readonly artifactDigest: string;
+  /** Missing only on catalogs persisted before identity revision 1. */
+  readonly catalogIdentity?: SourceCatalogIdentity;
   readonly strings: readonly PluginUiString[];
   readonly scannedAt: string;
 }
@@ -74,6 +80,10 @@ const UI_PROPERTY_NAMES = new Set([
   "name", "description", "text", "placeholder", "label", "tooltip", "title", "header", "desc",
   "message", "buttonText", "ariaLabel", "caption", "subtitle", "summary", "warning", "error", "success", "hint",
 ]);
+const UI_CONTEXT_SIGNAL_PROPERTIES = new Set([
+  "callback", "checkCallback", "editorCallback", "editorCheckCallback", "onClick", "onclick",
+]);
+const BARE_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const QUOTED = String.raw`("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`;
 const UI_CALL = new RegExp(String.raw`(?:Notice|setText|setButtonText|setName|setDesc|setPlaceholder|setTooltip|setTitle|addHeading|appendText)\s*\(\s*${QUOTED}`, "gu");
 const OPTION_CALL = new RegExp(String.raw`addOption\s*\(\s*${QUOTED}\s*,\s*${QUOTED}`, "gu");
@@ -129,26 +139,46 @@ export async function scanPluginUiStrings(input: {
       placeholderSignature: placeholderSignature(source),
       evidence: [...aggregate.evidence.values()].sort(compareEvidence),
     })));
-  const digest = await sha256Hex(canonicalizeProtocolJson({
-    plugin_id: input.plugin.id,
-    plugin_version: input.plugin.version,
-    source_locale: input.sourceLocale,
-    strings: strings.map((item) => ({
+  const artifactDigest = await sha256Hex(input.bundle);
+  const catalogIdentity = await computeSourceCatalogIdentity({
+    resourceKey: input.plugin.id,
+    resourceVersion: input.plugin.version,
+    sourceLocale: input.sourceLocale,
+    artifactDigest,
+    units: strings.map((item) => ({
       key: item.key,
-      source: item.source,
-      placeholder_signature: item.placeholderSignature,
+      text: item.source,
+      placeholderSignature: item.placeholderSignature,
+      formatSignature: "plain-text-v1",
+      scopes: resolvePluginStringScopes(item.origins),
     })),
-  }));
+  }, { sha256Hex });
   return {
     pluginId: input.plugin.id,
     pluginName: input.plugin.name,
     pluginVersion: input.plugin.version,
     sourceLocale: input.sourceLocale,
-    digest,
-    artifactDigest: await sha256Hex(input.bundle),
+    digest: catalogIdentity.digest,
+    artifactDigest,
+    catalogIdentity,
     strings,
     scannedAt: (input.now?.() ?? new Date()).toISOString(),
   };
+}
+
+export function resolvePluginStringScopes(
+  origins: readonly PluginStringOrigin[],
+): readonly PluginContentScope[] {
+  const scopes = new Set<PluginContentScope>();
+  if (origins.some((origin) => origin === "ui-call" || origin === "ui-property")) {
+    scopes.add("runtime-ui");
+  }
+  if (origins.some((origin) => origin === "manifest.name" || origin === "manifest.description"
+    || origin === "registry.name" || origin === "registry.description")) {
+    scopes.add("metadata");
+  }
+  if (origins.includes("readme")) scopes.add("readme");
+  return [...scopes];
 }
 
 function collectEmbeddedEnglishCatalog(
@@ -299,7 +329,16 @@ function collectStructuredMatches(
     }
     if (UI_PROPERTY_NAMES.has(token.raw) && next?.raw === ":") {
       const expression = readPropertyExpression(tokens, index + 2);
-      if (expression.length > 0) addStructuredExpression(target, expression, "ui-property", token, sourceLocale);
+      if (expression.length > 0) {
+        addStructuredExpression(
+          target,
+          expression,
+          "ui-property",
+          token,
+          sourceLocale,
+          hasUiRegistrationObjectContext(tokens, index),
+        );
+      }
     }
   }
   return true;
@@ -311,6 +350,7 @@ function addStructuredExpression(
   origin: PluginStringOrigin,
   symbol: Token,
   sourceLocale: string,
+  uiContextVerified = false,
 ): void {
   const counter = { value: 0 };
   const rendered = renderExpression(expression, counter);
@@ -322,7 +362,47 @@ function addStructuredExpression(
     offset: symbol.start,
     line: symbol.line,
     column: symbol.column,
-  }, rendered.staticText);
+  }, rendered.staticText, uiContextVerified);
+}
+
+function hasUiRegistrationObjectContext(tokens: readonly Token[], propertyIndex: number): boolean {
+  const openIndex = nearestContainingObjectOpen(tokens, propertyIndex);
+  if (openIndex === -1) return false;
+  if (!isObjectLiteralOpen(tokens, openIndex)) return false;
+  const closeIndex = matchingTokenIndex(tokens, openIndex);
+  if (closeIndex === -1 || closeIndex <= propertyIndex) return false;
+  let depth = 0;
+  for (let index = openIndex + 1; index < closeIndex - 1; index += 1) {
+    const token = tokens[index];
+    if (token?.raw === "(" || token?.raw === "[" || token?.raw === "{") depth += 1;
+    else if (token?.raw === ")" || token?.raw === "]" || token?.raw === "}") depth -= 1;
+    else if (
+      depth === 0
+      && token?.kind === "identifier"
+      && tokens[index + 1]?.raw === ":"
+      && UI_CONTEXT_SIGNAL_PROPERTIES.has(token.raw)
+    ) return true;
+  }
+  return false;
+}
+
+function isObjectLiteralOpen(tokens: readonly Token[], openIndex: number): boolean {
+  const previous = tokens[openIndex - 1]?.raw;
+  return previous !== undefined
+    && ["=", "(", "[", ",", ":", "return", ">"].includes(previous);
+}
+
+function nearestContainingObjectOpen(tokens: readonly Token[], index: number): number {
+  let depth = 0;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const raw = tokens[cursor]?.raw;
+    if (raw === "}") depth += 1;
+    else if (raw === "{") {
+      if (depth === 0) return cursor;
+      depth -= 1;
+    }
+  }
+  return -1;
 }
 
 function renderExpression(tokens: readonly Token[], counter: { value: number }): RenderedExpression | null {
@@ -585,9 +665,16 @@ function addCandidate(
   sourceLocale: string,
   evidence: PluginStringEvidence,
   staticProbe = raw,
+  uiContextVerified = false,
 ): void {
   const value = raw.normalize("NFC").trim();
   const probe = staticProbe.normalize("NFC").trim();
+  if (
+    origin === "ui-property"
+    && (UI_PROPERTY_NAMES.has(evidence.symbol) || evidence.symbol === "ui-property")
+    && BARE_IDENTIFIER.test(value)
+    && !uiContextVerified
+  ) return;
   if (!isTranslatableUiText(value) || !isTranslatableUiText(probe) || !isPlausibleSourceLocaleText(value, sourceLocale)) return;
   const aggregate = target.get(value) ?? { origins: new Set<PluginStringOrigin>(), evidence: new Map<string, PluginStringEvidence>() };
   aggregate.origins.add(origin);

@@ -57,6 +57,26 @@ describe("scanPluginUiStrings", () => {
     expect(catalog.scannedAt).toBe("2026-07-15T00:00:00.000Z");
   });
 
+  it("rejects bare parser identifiers unless an enclosing UI registration proves presentation", async () => {
+    const falsePositives = [
+      "Attribute", "AttributeValue", "Attributes", "CharClass", "CharCode", "CharCodeRange",
+      "CharRange", "Comment", "Link", "PrimaryPreDecoration", "RULE_Char", "Url", "wrapper",
+    ];
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: [
+        `const grammar = [${falsePositives.map((value) => `{name:"${value}",bnf:[]}`).join(",")}];`,
+        'const wrapper = { name: "wrapper", func: execute };',
+        'plugin.addCommand({ id: "transpose", name: "Transpose", editorCheckCallback: run });',
+      ].join("\n"),
+    });
+
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toContain("Transpose");
+    expect(sources).not.toEqual(expect.arrayContaining(falsePositives));
+  });
+
   it("把官方社区目录说明与安装包说明同时纳入可翻译目录", async () => {
     const catalog = await scanPluginUiStrings({
       plugin,

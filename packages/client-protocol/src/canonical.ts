@@ -22,7 +22,10 @@ import {
   type ProtocolDigest,
 } from "./digest.js";
 import { protocolError } from "./errors.js";
-import { DEFAULT_STRICT_JSON_LIMITS } from "./strict-json.js";
+import {
+  DEFAULT_STRICT_JSON_LIMITS,
+  type StrictJsonLimits,
+} from "./strict-json.js";
 
 export type ProtocolJsonValue =
   | null
@@ -59,7 +62,7 @@ function assertPairedSurrogates(value: string, path: string): void {
         protocolError(
           "CP_UNPAIRED_SURROGATE",
           path,
-          "canonical JSON must not contain unpaired UTF-16 surrogates"
+          "canonical JSON must not contain unpaired UTF-16 surrogates",
         );
       }
       index += 1;
@@ -67,7 +70,7 @@ function assertPairedSurrogates(value: string, path: string): void {
       protocolError(
         "CP_UNPAIRED_SURROGATE",
         path,
-        "canonical JSON must not contain unpaired UTF-16 surrogates"
+        "canonical JSON must not contain unpaired UTF-16 surrogates",
       );
     }
   }
@@ -77,44 +80,46 @@ class CanonicalJsonEncoder {
   private nodes = 0;
   private readonly ancestors = new WeakSet<object>();
 
+  constructor(private readonly limits: StrictJsonLimits) {}
+
   encode(value: unknown): Uint8Array {
     const text = this.encodeValue(value, "$", 0);
     const bytes = new TextEncoder().encode(text);
-    if (bytes.byteLength > DEFAULT_STRICT_JSON_LIMITS.maxBytes) {
+    if (bytes.byteLength > this.limits.maxBytes) {
       protocolError(
         "CP_JSON_LIMIT_EXCEEDED",
         "$",
-        `canonical JSON exceeds ${DEFAULT_STRICT_JSON_LIMITS.maxBytes} bytes`
+        `canonical JSON exceeds ${this.limits.maxBytes} bytes`,
       );
     }
     return bytes;
   }
 
   private encodeValue(value: unknown, path: string, depth: number): string {
-    if (depth > DEFAULT_STRICT_JSON_LIMITS.maxDepth) {
+    if (depth > this.limits.maxDepth) {
       protocolError(
         "CP_JSON_LIMIT_EXCEEDED",
         path,
-        `canonical JSON nesting exceeds ${DEFAULT_STRICT_JSON_LIMITS.maxDepth}`
+        `canonical JSON nesting exceeds ${this.limits.maxDepth}`,
       );
     }
     this.nodes += 1;
-    if (this.nodes > DEFAULT_STRICT_JSON_LIMITS.maxNodes) {
+    if (this.nodes > this.limits.maxNodes) {
       protocolError(
         "CP_JSON_LIMIT_EXCEEDED",
         path,
-        `canonical JSON node count exceeds ${DEFAULT_STRICT_JSON_LIMITS.maxNodes}`
+        `canonical JSON node count exceeds ${this.limits.maxNodes}`,
       );
     }
     if (value === null) return "null";
     if (typeof value === "boolean") return value ? "true" : "false";
     if (typeof value === "string") {
       assertPairedSurrogates(value, path);
-      if (value.length > DEFAULT_STRICT_JSON_LIMITS.maxStringLength) {
+      if (value.length > this.limits.maxStringLength) {
         protocolError(
           "CP_JSON_LIMIT_EXCEEDED",
           path,
-          `string length exceeds ${DEFAULT_STRICT_JSON_LIMITS.maxStringLength}`
+          `string length exceeds ${this.limits.maxStringLength}`,
         );
       }
       return JSON.stringify(value);
@@ -124,23 +129,31 @@ class CanonicalJsonEncoder {
         protocolError(
           "CP_FLOAT_FORBIDDEN",
           path,
-          "floating-point numbers are forbidden in canonical protocol JSON"
+          "floating-point numbers are forbidden in canonical protocol JSON",
         );
       }
       if (!Number.isSafeInteger(value)) {
         protocolError(
           "CP_INTEGER_OUT_OF_RANGE",
           path,
-          "canonical protocol integers must be within the safe integer range"
+          "canonical protocol integers must be within the safe integer range",
         );
       }
       return Object.is(value, -0) ? "0" : String(value);
     }
     if (typeof value !== "object") {
-      protocolError("CP_INVALID_TYPE", path, "canonical protocol JSON supports only JSON values");
+      protocolError(
+        "CP_INVALID_TYPE",
+        path,
+        "canonical protocol JSON supports only JSON values",
+      );
     }
     if (this.ancestors.has(value)) {
-      protocolError("CP_INVALID_VALUE", path, "circular protocol JSON is forbidden");
+      protocolError(
+        "CP_INVALID_VALUE",
+        path,
+        "circular protocol JSON is forbidden",
+      );
     }
     this.ancestors.add(value);
     try {
@@ -151,12 +164,16 @@ class CanonicalJsonEncoder {
     }
   }
 
-  private encodeArray(value: readonly unknown[], path: string, depth: number): string {
-    if (value.length > DEFAULT_STRICT_JSON_LIMITS.maxArrayLength) {
+  private encodeArray(
+    value: readonly unknown[],
+    path: string,
+    depth: number,
+  ): string {
+    if (value.length > this.limits.maxArrayLength) {
       protocolError(
         "CP_JSON_LIMIT_EXCEEDED",
         path,
-        `array length exceeds ${DEFAULT_STRICT_JSON_LIMITS.maxArrayLength}`
+        `array length exceeds ${this.limits.maxArrayLength}`,
       );
     }
     return `[${value
@@ -167,36 +184,48 @@ class CanonicalJsonEncoder {
   private encodeObject(value: object, path: string, depth: number): string {
     const prototype = Object.getPrototypeOf(value) as unknown;
     if (prototype !== Object.prototype && prototype !== null) {
-      protocolError("CP_INVALID_TYPE", path, "canonical JSON object must be plain");
+      protocolError(
+        "CP_INVALID_TYPE",
+        path,
+        "canonical JSON object must be plain",
+      );
     }
     const ownKeys = Reflect.ownKeys(value);
     if (ownKeys.some((key) => typeof key !== "string")) {
-      protocolError("CP_INVALID_TYPE", path, "symbol keys are forbidden in protocol JSON");
+      protocolError(
+        "CP_INVALID_TYPE",
+        path,
+        "symbol keys are forbidden in protocol JSON",
+      );
     }
-    if (ownKeys.length > DEFAULT_STRICT_JSON_LIMITS.maxObjectKeys) {
+    if (ownKeys.length > this.limits.maxObjectKeys) {
       protocolError(
         "CP_JSON_LIMIT_EXCEEDED",
         path,
-        `object key count exceeds ${DEFAULT_STRICT_JSON_LIMITS.maxObjectKeys}`
+        `object key count exceeds ${this.limits.maxObjectKeys}`,
       );
     }
     const descriptors = Object.getOwnPropertyDescriptors(value);
     const keys = ownKeys as string[];
     for (const key of keys) {
       assertPairedSurrogates(key, `${path}.${key}`);
-      if (key.length > DEFAULT_STRICT_JSON_LIMITS.maxStringLength) {
+      if (key.length > this.limits.maxStringLength) {
         protocolError(
           "CP_JSON_LIMIT_EXCEEDED",
           `${path}.${key}`,
-          `object key length exceeds ${DEFAULT_STRICT_JSON_LIMITS.maxStringLength}`
+          `object key length exceeds ${this.limits.maxStringLength}`,
         );
       }
       const descriptor = descriptors[key];
-      if (descriptor === undefined || descriptor.enumerable !== true || !("value" in descriptor)) {
+      if (
+        descriptor === undefined ||
+        descriptor.enumerable !== true ||
+        !("value" in descriptor)
+      ) {
         protocolError(
           "CP_INVALID_TYPE",
           `${path}.${key}`,
-          "accessor and non-enumerable properties are forbidden in protocol JSON"
+          "accessor and non-enumerable properties are forbidden in protocol JSON",
         );
       }
     }
@@ -205,12 +234,16 @@ class CanonicalJsonEncoder {
       .map((key) => {
         const descriptor = descriptors[key];
         if (descriptor === undefined || !("value" in descriptor)) {
-          protocolError("CP_INVALID_TYPE", `${path}.${key}`, "invalid JSON property");
+          protocolError(
+            "CP_INVALID_TYPE",
+            `${path}.${key}`,
+            "invalid JSON property",
+          );
         }
         return `${JSON.stringify(key)}:${this.encodeValue(
           descriptor.value,
           `${path}.${key}`,
-          depth
+          depth,
         )}`;
       })
       .join(",")}}`;
@@ -218,12 +251,20 @@ class CanonicalJsonEncoder {
 }
 
 export function canonicalizeProtocolJson(value: unknown): Uint8Array {
-  return new CanonicalJsonEncoder().encode(value);
+  return new CanonicalJsonEncoder(DEFAULT_STRICT_JSON_LIMITS).encode(value);
+}
+
+/** Internal bounded variant for protocol contracts whose documented payload ceiling exceeds 1 MiB. */
+export function canonicalizeProtocolJsonWithLimits(
+  value: unknown,
+  limits: StrictJsonLimits,
+): Uint8Array {
+  return new CanonicalJsonEncoder(limits).encode(value);
 }
 
 export function buildProtocolDigestFrame(
   domain: DigestDomain,
-  canonicalBytes: Uint8Array
+  canonicalBytes: Uint8Array,
 ): Uint8Array {
   const prefix = new TextEncoder().encode(digestDomainSeparator(domain));
   const frame = new Uint8Array(prefix.byteLength + canonicalBytes.byteLength);
@@ -233,36 +274,46 @@ export function buildProtocolDigestFrame(
 }
 
 function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }
 
 export async function computeProtocolDigest<Domain extends DigestDomain>(
   domain: Domain,
   value: unknown,
-  digestPort: ProtocolDigestPort
+  digestPort: ProtocolDigestPort,
 ): Promise<ProtocolDigest<Domain>> {
   const canonicalBytes = canonicalizeProtocolJson(value);
-  const digestBytes = await digestPort.digest(buildProtocolDigestFrame(domain, canonicalBytes));
+  const digestBytes = await digestPort.digest(
+    buildProtocolDigestFrame(domain, canonicalBytes),
+  );
   if (digestBytes.byteLength !== 32) {
-    protocolError("CP_INVALID_DIGEST", "$.digest", "DigestPort must return exactly 32 bytes");
+    protocolError(
+      "CP_INVALID_DIGEST",
+      "$.digest",
+      "DigestPort must return exactly 32 bytes",
+    );
   }
   return createDigest(domain, bytesToHex(digestBytes));
 }
 
-export function contributionSigningPayload(intent: ContributionIntent): ContributionSigningPayload {
+export function contributionSigningPayload(
+  intent: ContributionIntent,
+): ContributionSigningPayload {
   const { installationProof: _installationProof, ...payload } = intent;
   return payload;
 }
 
 export function publicUploadGrantSigningPayload(
-  request: PublicUploadGrantRequest
+  request: PublicUploadGrantRequest,
 ): PublicUploadGrantSigningPayload {
   const { installationProof: _installationProof, ...payload } = request;
   return payload;
 }
 
 export function installationLifecycleRotationSigningPayload(
-  request: InstallationLifecycleRotationRequest
+  request: InstallationLifecycleRotationRequest,
 ): InstallationLifecycleRotationSigningPayload {
   const {
     currentInstallationProof: _currentInstallationProof,
@@ -273,21 +324,24 @@ export function installationLifecycleRotationSigningPayload(
 }
 
 export function installationLifecycleRecoverySigningPayload(
-  request: InstallationLifecycleRecoveryRequest
+  request: InstallationLifecycleRecoveryRequest,
 ): InstallationLifecycleRecoverySigningPayload {
-  const { replacementInstallationProof: _replacementInstallationProof, ...payload } = request;
+  const {
+    replacementInstallationProof: _replacementInstallationProof,
+    ...payload
+  } = request;
   return payload;
 }
 
 export function sourceAcquisitionManifestDigestPayload(
-  manifest: SourceAcquisitionManifest
+  manifest: SourceAcquisitionManifest,
 ): Omit<SourceAcquisitionManifest, "rootDigest"> {
   const { rootDigest: _rootDigest, ...payload } = manifest;
   return payload;
 }
 
 export function sourceAttestationSigningPayload(
-  attestation: SourceAttestation
+  attestation: SourceAttestation,
 ): Omit<SourceAttestation, "verifier"> {
   const { verifier: _verifier, ...payload } = attestation;
   return payload;
@@ -300,15 +354,17 @@ export function serverEnvelopeSigningPayload(
     | PublicArtifactManifest
     | PublicInstallationLifecycleCommand
     | PublicInstallationRecoveryCommand
-    | InstallationLifecycleReceipt
+    | InstallationLifecycleReceipt,
 ): Omit<typeof document, "serverProof"> {
   const { serverProof: _serverProof, ...payload } = document;
   return payload;
 }
 
 export async function assertInstallationLifecycleRequestDigest(
-  request: InstallationLifecycleRotationRequest | InstallationLifecycleRecoveryRequest,
-  digestPort: ProtocolDigestPort
+  request:
+    | InstallationLifecycleRotationRequest
+    | InstallationLifecycleRecoveryRequest,
+  digestPort: ProtocolDigestPort,
 ): Promise<void> {
   const payload =
     request.action === "rotate"
@@ -317,15 +373,21 @@ export async function assertInstallationLifecycleRequestDigest(
   const actual = await computeProtocolDigest("request", payload, digestPort);
   const currentMatches =
     request.action === "reinstall" ||
-    equalDigestHex(actual.hex, request.currentInstallationProof.requestDigest.hex);
+    equalDigestHex(
+      actual.hex,
+      request.currentInstallationProof.requestDigest.hex,
+    );
   if (
     !currentMatches ||
-    !equalDigestHex(actual.hex, request.replacementInstallationProof.requestDigest.hex)
+    !equalDigestHex(
+      actual.hex,
+      request.replacementInstallationProof.requestDigest.hex,
+    )
   ) {
     protocolError(
       "CP_REQUEST_DIGEST_MISMATCH",
       "$.currentInstallationProof.requestDigest",
-      "lifecycle request digest does not match both key proofs"
+      "lifecycle request digest does not match both key proofs",
     );
   }
 }
@@ -341,54 +403,54 @@ function equalDigestHex(left: string, right: string): boolean {
 
 export async function assertContributionRequestDigest(
   intent: ContributionIntent,
-  digestPort: ProtocolDigestPort
+  digestPort: ProtocolDigestPort,
 ): Promise<void> {
   const actual = await computeProtocolDigest(
     "request",
     contributionSigningPayload(intent),
-    digestPort
+    digestPort,
   );
   if (!equalDigestHex(actual.hex, intent.installationProof.requestDigest.hex)) {
     protocolError(
       "CP_REQUEST_DIGEST_MISMATCH",
       "$.installationProof.requestDigest",
-      "contribution request digest does not match its signing payload"
+      "contribution request digest does not match its signing payload",
     );
   }
 }
 
 export async function assertSourceAcquisitionManifestRoot(
   manifest: SourceAcquisitionManifest,
-  digestPort: ProtocolDigestPort
+  digestPort: ProtocolDigestPort,
 ): Promise<void> {
   const actual = await computeProtocolDigest(
     "manifest_root",
     sourceAcquisitionManifestDigestPayload(manifest),
-    digestPort
+    digestPort,
   );
   if (!equalDigestHex(actual.hex, manifest.rootDigest.hex)) {
     protocolError(
       "CP_INVALID_MANIFEST_CLOSURE",
       "$.rootDigest",
-      "manifest root digest does not match the complete acquisition closure"
+      "manifest root digest does not match the complete acquisition closure",
     );
   }
 }
 
 export async function assertSourceAttestationPayloadDigest(
   attestation: SourceAttestation,
-  digestPort: ProtocolDigestPort
+  digestPort: ProtocolDigestPort,
 ): Promise<void> {
   const actual = await computeProtocolDigest(
     "attestation_payload",
     sourceAttestationSigningPayload(attestation),
-    digestPort
+    digestPort,
   );
   if (!equalDigestHex(actual.hex, attestation.verifier.payloadDigest.hex)) {
     protocolError(
       "CP_ATTESTATION_PAYLOAD_MISMATCH",
       "$.verifier.payloadDigest",
-      "attestation digest does not match its signed payload"
+      "attestation digest does not match its signed payload",
     );
   }
 }
@@ -401,18 +463,18 @@ export async function assertServerEnvelopePayloadDigest(
     | PublicInstallationLifecycleCommand
     | PublicInstallationRecoveryCommand
     | InstallationLifecycleReceipt,
-  digestPort: ProtocolDigestPort
+  digestPort: ProtocolDigestPort,
 ): Promise<void> {
   const actual = await computeProtocolDigest(
     "signed_payload",
     serverEnvelopeSigningPayload(document),
-    digestPort
+    digestPort,
   );
   if (!equalDigestHex(actual.hex, document.serverProof.payloadDigest.hex)) {
     protocolError(
       "CP_SIGNED_PAYLOAD_MISMATCH",
       "$.serverProof.payloadDigest",
-      "server proof digest does not match its payload"
+      "server proof digest does not match its payload",
     );
   }
 }

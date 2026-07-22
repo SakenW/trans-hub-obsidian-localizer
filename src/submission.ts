@@ -16,8 +16,8 @@ import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 export const OBSIDIAN_PUBLIC_PROFILE = {
   externalRegistry: "obsidian_community_plugins",
   adapterDefinitionId: "obsidian",
-  adapterVersion: "1.1.0",
-  adapterBuildDigestHex: "2111e10336edf23c59661e66b6155a1ef127642161ea4ccd766fb1cc16b15580",
+  adapterVersion: "1.2.0",
+  adapterBuildDigestHex: "117aade03541d1e4740eb0892fb9866be6ddc1973059453049a5a7e01fe8d518",
 } as const;
 
 export async function submitObsidianPluginDiscovery(input: {
@@ -42,7 +42,7 @@ export async function submitObsidianPluginDiscovery(input: {
     },
   };
   const observationDigest = await computeProtocolDigest("request", observationMaterial, digestPort);
-  const idempotencyKey = `obsidian-public-v11-${await sha256Hex([
+  const idempotencyKey = `obsidian-public-v12-${await sha256Hex([
     input.repository,
     input.catalog.pluginVersion,
     input.catalog.artifactDigest,

@@ -90,10 +90,20 @@ const ENGLISH_MESSAGES: Readonly<Record<string, string>> = {
   "已检查 {count} 个插件，目前没有新译文。": "Checked {count} plugins. No new translations are available.",
   "全部状态": "All statuses",
   "已本地化": "Localized",
+  "目录待同步": "Catalog updating",
   "等待发布": "Awaiting publication",
   "未收录": "Not cataloged",
   "处理失败": "Failed",
   "已本地化 {translated}/{total} 条（{percent}%），{missing} 条等待发布": "Localized {translated}/{total} strings ({percent}%); {missing} awaiting publication",
+  "已发布 {translated}/{total} 条（{percent}%），{missing} 条尚未发布": "Published {translated}/{total} strings ({percent}%); {missing} not yet published",
+  "{scope} {translated}/{total}": "{scope} {translated}/{total}",
+  "插件自带覆盖范围明细待服务端提供": "Scope details for plugin-native coverage are not yet available from the server",
+  "本地插件文件与官方版本不一致；已安全应用 {count} 条精确命中译文": "The local plugin files differ from the official version; {count} exact-match translations were applied safely",
+  "服务器正在更新目录身份；已安全应用 {count} 条精确命中译文": "The server is updating catalog identity; {count} exact-match translations were applied safely",
+  "服务器目录正在更新：{scopes}；已安全应用 {count} 条精确命中译文": "The server catalog is updating: {scopes}; {count} exact-match translations were applied safely",
+  "目录范围": "catalog scopes",
+  "插件界面": "plugin UI",
+  "名称与说明": "names and descriptions",
   "已沿用 {translated}/{total} 条安全译文": "Reused {translated}/{total} safe translations",
   "已本地化 {count} 条": "Localized {count} strings",
   "处理失败：需求未被接受": "Failed: request was not accepted",
@@ -135,6 +145,11 @@ const ENGLISH_MESSAGES: Readonly<Record<string, string>> = {
 
 let activeLocale: TargetLocale = "zh-CN";
 
+const CLIENT_DISPLAY_NAMES = new Set([
+  "语枢 · 插件本地化",
+  "Trans-Hub Localizer",
+]);
+
 export function setClientLocale(locale: TargetLocale): void {
   activeLocale = locale;
 }
@@ -145,6 +160,10 @@ export function clientLocale(): TargetLocale {
 
 export function localizedClientName(): string {
   return activeLocale === "zh-CN" ? "语枢 · 插件本地化" : "Trans-Hub Localizer";
+}
+
+export function isClientDisplayName(value: string): boolean {
+  return CLIENT_DISPLAY_NAMES.has(value);
 }
 
 export function translate(source: string, parameters: MessageParameters = {}): string {

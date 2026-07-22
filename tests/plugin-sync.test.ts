@@ -26,7 +26,12 @@ describe("validatePluginTranslations", () => {
       "source-version",
       "zh-CN",
     );
-    expect(state.entries).toEqual([{ pluginId: "sample-plugin", source: "Delete {0} items?", target: "删除 {0} 个项目？" }]);
+    expect(state.entries).toEqual([{
+      pluginId: "sample-plugin",
+      source: "Delete {0} items?",
+      target: "删除 {0} 个项目？",
+      scopes: ["runtime-ui"],
+    }]);
   });
 
   it("fails closed for placeholder loss or unknown keys", () => {
@@ -49,6 +54,7 @@ describe("validatePluginTranslations", () => {
       pluginId: "sample-plugin",
       source: "Delete {0} items?",
       target: "删除 {0} 个项目？",
+      scopes: ["runtime-ui"],
     }]);
   });
 
@@ -74,6 +80,7 @@ describe("validatePluginTranslations", () => {
       provenanceKind: "th-reviewed-correction",
       application: "correction",
       nativeTarget: "删除 {0} 项？",
+      scopes: ["runtime-ui"],
     });
     expect(() => validatePluginTranslations(catalog, [{
       stringKey: "a".repeat(32),
@@ -88,6 +95,7 @@ describe("validatePluginTranslations", () => {
 describe("isPublishedExportPending", () => {
   it("only classifies an explicit 404 as a pending publication", () => {
     expect(isPublishedExportPending(new Error("Published export not found：HTTP 404"))).toBe(true);
+    expect(isPublishedExportPending(new Error("translation_manifest_failed:404"))).toBe(true);
     expect(isPublishedExportPending(new Error("Published export not found：HTTP 401"))).toBe(false);
     expect(isPublishedExportPending(new Error("Published export not found：HTTP 500"))).toBe(false);
     expect(isPublishedExportPending(new Error("Other request failed：HTTP 404"))).toBe(false);

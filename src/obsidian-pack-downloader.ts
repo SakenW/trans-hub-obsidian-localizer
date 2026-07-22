@@ -1,7 +1,11 @@
 import { requestUrl, type RequestUrlResponse } from "obsidian";
 
 export interface PackDownloadPort {
-  download(input: Readonly<{ url: string; objectVersion: string }>): Promise<Uint8Array>;
+  download(input: Readonly<{
+    url: string;
+    objectVersion: string;
+    expectedBytes: number;
+  }>): Promise<Uint8Array>;
 }
 
 type ObsidianRequest = (request: {
@@ -23,6 +27,7 @@ export class ObsidianPackDownloader implements PackDownloadPort {
   async download(input: Readonly<{
     url: string;
     objectVersion: string;
+    expectedBytes: number;
   }>): Promise<Uint8Array> {
     assertSafeDownloadUrl(input.url, this.options.developmentOrigin);
     const response = await this.request({
@@ -33,7 +38,11 @@ export class ObsidianPackDownloader implements PackDownloadPort {
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`translation_pack_download_failed:${response.status}`);
     }
-    return new Uint8Array(response.arrayBuffer);
+    const bytes = new Uint8Array(response.arrayBuffer);
+    if (bytes.byteLength !== input.expectedBytes) {
+      throw new Error("translation_pack_download_size_mismatch");
+    }
+    return bytes;
   }
 }
 

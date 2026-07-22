@@ -32,9 +32,9 @@ Most Trans-Hub translations are currently machine-generated and are clearly labe
 
 ## Install / 安装
 
-After the plugin is accepted into the Obsidian Community directory, install **Trans-Hub Localizer** from **Settings → Community plugins**.
+Install **Trans-Hub Localizer** from **Settings → Community plugins** in Obsidian.
 
-插件通过 Obsidian 社区目录审核后，可在 **设置 → 第三方插件** 中安装 **Trans-Hub Localizer**。
+可直接在 Obsidian 的 **设置 → 第三方插件** 中安装 **Trans-Hub Localizer**。
 
 For a manual installation, download `main.js`, `manifest.json`, and `styles.css` from the [matching GitHub Release](https://github.com/SakenW/trans-hub-obsidian-localizer/releases). Place all three files in:
 

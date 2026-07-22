@@ -16,12 +16,18 @@ export function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
   }
   if (isRetryBudgetExhausted(error)) {
-    return error.diagnostic.operation === "contribution-status"
+    return ["contribution-status", "localization-demand-status"].includes(
+      error.diagnostic.operation,
+    )
       ? translate("服务器暂时无法查询插件处理状态，请稍后重试。")
       : translate("服务器暂时无法完成请求，请稍后重试。");
   }
   const status = error.diagnostic.status;
-  if (status === 401 && ["submit-contribution", "contribution-status"].includes(
+  if (status === 401 && [
+    "submit-contribution",
+    "contribution-status",
+    "localization-demand-status",
+  ].includes(
     error.diagnostic.operation,
   )) {
     return translate("此设备的语枢授权已失效，请重新连接。已缓存译文仍可继续使用。");

@@ -55,6 +55,9 @@ export type {
   InstallationState,
   IssueIntent,
   LocalizationObservationIntent,
+  LocalizationDemandCoordinateStatus,
+  LocalizationDemandState,
+  LocalizationDemandStatus,
   NativeTransferAuthorizationWire,
   NativeTransferCapabilityWire,
   ObservationContributionState,
@@ -132,6 +135,7 @@ export {
   parsePublicCredentialRenewalResponse,
   parseContributionIntent,
   parseContributionStateReceipt,
+  parseLocalizationDemandStatus,
   parseInstallationLifecycleReceipt,
   parseInstallationLifecycleRecoveryRequest,
   parseInstallationLifecycleRotationRequest,
@@ -173,6 +177,17 @@ export {
   parseStrictJson,
   type StrictJsonLimits,
 } from "./strict-json.js";
+export {
+  computeSourceCatalogIdentity,
+  parseSourceCatalogIdentity,
+  SOURCE_CATALOG_IDENTITY_PROTOCOL,
+  SOURCE_CATALOG_IDENTITY_REVISION,
+  type SourceCatalogHashPort,
+  type SourceCatalogIdentity,
+  type SourceCatalogIdentityInput,
+  type SourceCatalogIdentityUnitInput,
+  type SourceCatalogScopeIdentity,
+} from "./source-catalog-identity.js";
 export {
   CLIENT_PROTOCOL_ID,
   CLIENT_PROTOCOL_REVISION,

@@ -4,6 +4,7 @@ import type {
   ClientType,
   ContributionSigningPayload,
   ContributionStateReceipt,
+  LocalizationDemandStatus,
   PublicCapability,
   PublicUploadGrant,
 } from "@trans-hub/client-protocol";
@@ -56,12 +57,16 @@ export interface PublicClientControl {
   bootstrap(input: BootstrapInput): Promise<BootstrapResponse>;
   submitContribution(
     payload: ContributionSigningPayload,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<ContributionStateReceipt>;
   getContributionStatus(
     contributionId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<ContributionStateReceipt>;
+  getLocalizationDemandStatus(
+    contributionId: string,
+    signal?: AbortSignal,
+  ): Promise<LocalizationDemandStatus>;
   createUploadGrant(input: CreateUploadGrantInput): Promise<PublicUploadGrant>;
 }
 

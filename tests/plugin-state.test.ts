@@ -107,4 +107,44 @@ describe("parsePluginState", () => {
     expect(state.pluginCatalogs.dataview?.strings[0]?.origins)
       .toEqual(["registry.description"]);
   });
+
+  it("在重启后保留译文适用作用域并拒绝未知作用域", () => {
+    const base = {
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      sourceVersionId: "source-version",
+      targetLocale: "zh-CN",
+      pulledAt: "2026-07-23T00:00:00.000Z",
+    };
+    const valid = parsePluginState({
+      pluginTranslations: {
+        dataview: {
+          ...base,
+          entries: [{
+            pluginId: "dataview",
+            source: "Settings",
+            target: "设置",
+            scopes: ["runtime-ui", "metadata"],
+          }],
+        },
+      },
+    });
+    expect(valid.pluginTranslations.dataview?.entries[0]?.scopes)
+      .toEqual(["runtime-ui", "metadata"]);
+
+    const invalid = parsePluginState({
+      pluginTranslations: {
+        dataview: {
+          ...base,
+          entries: [{
+            pluginId: "dataview",
+            source: "Settings",
+            target: "设置",
+            scopes: ["unknown"],
+          }],
+        },
+      },
+    });
+    expect(invalid.pluginTranslations).toEqual({});
+  });
 });
