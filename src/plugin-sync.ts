@@ -9,6 +9,7 @@ import { placeholderSignature, type PluginUiCatalog } from "./plugin-string-scan
 import type { PluginState, PluginSubmissionState, PluginTranslationState } from "./plugin-state";
 import type { PluginUiTranslation } from "./plugin-ui-runtime";
 import {
+  OBSIDIAN_PUBLIC_PROFILE,
   submitObsidianLocalizationObservation,
   submitObsidianPluginDiscovery,
 } from "./submission";
@@ -46,12 +47,17 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   const waitingPluginIds: string[] = [];
   for (const catalog of Object.values(input.getState().pluginCatalogs)) {
     if (excluded.has(catalog.pluginId) || (only !== null && !only.has(catalog.pluginId))) continue;
-    const published = await resolvePublishedPluginSource({
-      transport: new ObsidianHttpTransport(input.apiBaseUrl),
-      pluginId: catalog.pluginId,
-      pluginVersion: catalog.pluginVersion,
-      targetLocale: input.targetLocale,
-    });
+    const savedSubmission = input.getState().pluginSubmissions[catalog.pluginId];
+    const profileChanged = savedSubmission !== undefined
+      && savedSubmission.adapterProfileDigest !== OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex;
+    const published = profileChanged
+      ? undefined
+      : await resolvePublishedPluginSource({
+          transport: new ObsidianHttpTransport(input.apiBaseUrl),
+          pluginId: catalog.pluginId,
+          pluginVersion: catalog.pluginVersion,
+          targetLocale: input.targetLocale,
+        });
     if (published !== undefined) {
       const sourceVersionId = published.sourceVersionId;
       const existingSubmission = input.getState().pluginSubmissions[catalog.pluginId];
@@ -74,7 +80,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           ...(row.provenanceKind === undefined ? {} : { provenanceKind: row.provenanceKind }),
           ...(row.application === undefined ? {} : { application: row.application }),
           ...(row.nativeTarget === undefined ? {} : { nativeTarget: row.nativeTarget }),
-        })), sourceVersionId, input.targetLocale);
+        })), sourceVersionId, input.targetLocale, published.upstreamNativeCount);
         const state = input.getState();
         const dictionary = mergePublishedPluginTranslation(
           catalog,
@@ -90,8 +96,30 @@ export async function synchronizeConfiguredPluginTranslations(input: {
         translationCount += dictionary.entries.length;
       } catch (error) {
         if (!isPublishedExportPending(error)) throw error;
-        waitingCount += 1;
-        waitingPluginIds.push(catalog.pluginId);
+        const state = input.getState();
+        input.replaceState({
+          ...state,
+          pluginTranslations: {
+            ...state.pluginTranslations,
+            [catalog.pluginId]: {
+              pluginId: catalog.pluginId,
+              pluginVersion: catalog.pluginVersion,
+              sourceVersionId,
+              targetLocale: input.targetLocale,
+              upstreamNativeCount: published.upstreamNativeCount,
+              entries: [],
+              pulledAt: new Date().toISOString(),
+            },
+          },
+        });
+        await input.save();
+        const catalogUnitCount = new Set(catalog.strings.map((item) => item.source)).size;
+        if (published.upstreamNativeCount >= catalogUnitCount) {
+          pulledCount += 1;
+        } else {
+          waitingCount += 1;
+          waitingPluginIds.push(catalog.pluginId);
+        }
       }
       continue;
     }
@@ -99,7 +127,8 @@ export async function synchronizeConfiguredPluginTranslations(input: {
     let submission = input.getState().pluginSubmissions[catalog.pluginId];
     if (submission?.installationId !== bootstrap.installationId ||
       submission.catalogDigest !== catalog.digest ||
-      submission.pluginVersion !== catalog.pluginVersion) {
+      submission.pluginVersion !== catalog.pluginVersion ||
+      submission.adapterProfileDigest !== OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex) {
       const receipt = await submitObsidianPluginDiscovery({
         client,
         installationId: bootstrap.installationId,
@@ -174,6 +203,7 @@ function submissionFromReceipt(
     pluginId: catalog.pluginId,
     pluginVersion: catalog.pluginVersion,
     catalogDigest: catalog.digest,
+    adapterProfileDigest: OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
     installationId,
     contributionId: receipt.contributionId,
     contributionState: receipt.state,
@@ -205,6 +235,7 @@ export function validatePluginTranslations(
   }[],
   sourceVersionId: string,
   targetLocale: string,
+  upstreamNativeCount = 0,
 ): PluginTranslationState {
   const sourceByKey = new Map(catalog.strings.map((item) => [item.key, item]));
   const matchingRows = rows.filter((row) => sourceByKey.has(row.stringKey));
@@ -242,13 +273,14 @@ export function validatePluginTranslations(
     pluginVersion: catalog.pluginVersion,
     sourceVersionId,
     targetLocale,
+    upstreamNativeCount,
     entries,
     pulledAt: new Date().toISOString(),
   };
 }
 
-function isPublishedExportPending(error: unknown): boolean {
-  return error instanceof Error && /Published export not found|尚未发布|HTTP 404/iu.test(error.message);
+export function isPublishedExportPending(error: unknown): boolean {
+  return error instanceof Error && /^Published export not found：HTTP 404$/u.test(error.message);
 }
 
 function isLocalHttp(value: string): boolean {

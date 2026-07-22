@@ -25,7 +25,12 @@ export function calculatePluginTranslationCoverage(
   const staleCount = new Set(translation.entries
     .map((entry) => entry.source)
     .filter((source) => !currentSources.has(source))).size;
-  const translatedCount = translatedSources.size;
+  const correctionCount = translation.entries.filter(
+    (entry) => entry.provenanceKind === "th-reviewed-correction"
+      && translatedSources.has(entry.source),
+  ).length;
+  const effectiveNativeCount = Math.max((translation.upstreamNativeCount ?? 0) - correctionCount, 0);
+  const translatedCount = Math.min(currentSources.size, translatedSources.size + effectiveNativeCount);
   const totalCount = currentSources.size;
   return {
     totalCount,

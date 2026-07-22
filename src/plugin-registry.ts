@@ -11,10 +11,23 @@ export interface CommunityPluginIdentity {
   readonly readmeMarkdown?: string;
 }
 
-interface CommunityPluginRegistryEntry {
+export interface CommunityPluginRegistryEntry {
   readonly repository: string;
   readonly officialName: string;
   readonly officialDescription: string;
+}
+
+export type CommunityPluginSourceEligibility =
+  | { readonly kind: "supported"; readonly repository: string }
+  | { readonly kind: "unsupported" };
+
+class CommunityPluginNotFoundError extends Error {
+  readonly code = "community_plugin_not_found";
+
+  constructor(readonly pluginId: string) {
+    super(`Obsidian 官方社区目录中找不到插件：${pluginId}`);
+    this.name = "CommunityPluginNotFoundError";
+  }
 }
 
 let cachedRegistry: ReadonlyMap<string, CommunityPluginRegistryEntry> | null = null;
@@ -28,7 +41,7 @@ export async function resolveCommunityPluginIdentity(
   cachedRegistry = registry;
   const entry = registry.get(pluginId);
   if (entry === undefined) {
-    throw new Error(`Obsidian 官方社区目录中找不到插件：${pluginId}`);
+    throw new CommunityPluginNotFoundError(pluginId);
   }
   const { repository } = entry;
   const root = `https://github.com/${repository}`;
@@ -44,6 +57,28 @@ export async function resolveCommunityPluginIdentity(
     ],
     ...(readmeMarkdown === undefined ? {} : { readmeMarkdown }),
   };
+}
+
+export async function resolveCommunityPluginSourceEligibility(
+  pluginIds: readonly string[],
+): Promise<ReadonlyMap<string, CommunityPluginSourceEligibility>> {
+  const registry = cachedRegistry ?? await loadCommunityRegistry();
+  cachedRegistry = registry;
+  return classifyCommunityPluginSources(pluginIds, registry);
+}
+
+export function classifyCommunityPluginSources(
+  pluginIds: readonly string[],
+  registry: ReadonlyMap<string, CommunityPluginRegistryEntry>,
+): ReadonlyMap<string, CommunityPluginSourceEligibility> {
+  const result = new Map<string, CommunityPluginSourceEligibility>();
+  for (const pluginId of pluginIds) {
+    const entry = registry.get(pluginId);
+    result.set(pluginId, entry === undefined
+      ? { kind: "unsupported" }
+      : { kind: "supported", repository: entry.repository });
+  }
+  return result;
 }
 
 async function loadVersionReadme(repository: string, pluginVersion: string): Promise<string | undefined> {

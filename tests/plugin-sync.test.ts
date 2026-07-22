@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { validatePluginTranslations } from "../src/plugin-sync";
+import { isPublishedExportPending, validatePluginTranslations } from "../src/plugin-sync";
 
 const catalog = {
   pluginId: "sample-plugin",
@@ -52,6 +52,13 @@ describe("validatePluginTranslations", () => {
     }]);
   });
 
+  it("只保存插件自带语言的覆盖数量，不保存其目标正文", () => {
+    const state = validatePluginTranslations(catalog, [], "v", "zh-CN", 1);
+
+    expect(state.upstreamNativeCount).toBe(1);
+    expect(state.entries).toEqual([]);
+  });
+
   it("accepts only reviewed corrections bound to exact native text", () => {
     const state = validatePluginTranslations(catalog, [{
       stringKey: "a".repeat(32),
@@ -75,5 +82,14 @@ describe("validatePluginTranslations", () => {
       application: "correction",
       nativeTarget: "删除 {0} 项？",
     }], "v", "zh-CN")).toThrow("缺少已审核");
+  });
+});
+
+describe("isPublishedExportPending", () => {
+  it("only classifies an explicit 404 as a pending publication", () => {
+    expect(isPublishedExportPending(new Error("Published export not found：HTTP 404"))).toBe(true);
+    expect(isPublishedExportPending(new Error("Published export not found：HTTP 401"))).toBe(false);
+    expect(isPublishedExportPending(new Error("Published export not found：HTTP 500"))).toBe(false);
+    expect(isPublishedExportPending(new Error("Other request failed：HTTP 404"))).toBe(false);
   });
 });

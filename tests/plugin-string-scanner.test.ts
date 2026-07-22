@@ -104,7 +104,7 @@ describe("scanPluginUiStrings", () => {
         source: "Read the {{th:expr:0}} before using {{th:expr:1}}.",
         origins: ["readme"],
         semanticRole: "readme",
-        placeholderSignature: "{{th:expr:0}}\u0000{{th:expr:1}}",
+        placeholderSignature: '["{{th:expr:0}}","{{th:expr:1}}"]',
       }),
     ]));
     expect(catalog.strings.some((item) => item.source.includes("hidden"))).toBe(false);
@@ -134,13 +134,54 @@ describe("scanPluginUiStrings", () => {
     expect(catalog.strings.map((item) => item.source)).not.toContain("dataview/cache/{{th:expr:0}}");
 
     const dynamic = catalog.strings.find((item) => item.source.startsWith("Rows:"));
-    expect(dynamic?.placeholderSignature).toBe("{{th:expr:0}}\u0000{{th:expr:1}}");
+    expect(dynamic?.placeholderSignature).toBe('["{{th:expr:0}}","{{th:expr:1}}"]');
     expect(dynamic?.evidence).toEqual([expect.objectContaining({
       origin: "ui-call",
       strategy: "structured",
       symbol: "setDesc",
       line: 2,
     })]);
+  });
+
+  it("uses the English source catalog from a minified locale registry", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: [
+        'var en={rules:{name:"Try to escape arrays",description:"Array starts with [ and ends with ]."}};',
+        'var es={rules:{name:"Intente escapar matrices",description:"La matriz comienza con [ y termina con ]."}};',
+        'var de={rules:{name:"Arrays maskieren",description:"Ein Array beginnt mit [ und endet mit ]."}};',
+        'var locales={de:de,en:en,es:es};',
+        'const unrelated={name:"Internal worker",description:"Debug only"};',
+      ].join(""),
+    });
+
+    expect(catalog.strings.map((item) => item.source)).toEqual(expect.arrayContaining([
+      "Try to escape arrays",
+      "Array starts with [ and ends with ].",
+    ]));
+    expect(catalog.strings.map((item) => item.source)).not.toEqual(expect.arrayContaining([
+      "Intente escapar matrices",
+      "Arrays maskieren",
+      "Internal worker",
+    ]));
+  });
+
+  it("handles regex literals before a minified locale registry", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: [
+        "var probe=/['\\\"]/;",
+        'var en={title:"English title"};',
+        'var es={title:"Titulo espanol"};',
+        'var de={title:"Deutscher Titel"};',
+        "var locales={de:de,en:en,es:es};",
+      ].join(""),
+    });
+
+    expect(catalog.strings.map((item) => item.source)).toContain("English title");
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Titulo espanol");
   });
 
   it("falls back to conservative literal regexes when structured tokenization fails", async () => {
@@ -161,6 +202,6 @@ describe("scanPluginUiStrings", () => {
     expect(placeholderSignature("<unknown widget '{{th:expr:0}}>'"))
       .toBe("{{th:expr:0}}");
     expect(placeholderSignature('<strong class="name">Value</strong>'))
-      .toBe('<strong class="name">\u0000</strong>');
+      .toBe('["<strong class=\\"name\\">","</strong>"]');
   });
 });

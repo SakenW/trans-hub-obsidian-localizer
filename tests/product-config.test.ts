@@ -24,6 +24,7 @@ describe("Obsidian product configuration", () => {
       await readFile(new URL("../manifest.json", import.meta.url), "utf8"),
     ) as Record<string, unknown>;
     expect(manifest.id).toBe(OBSIDIAN_PLUGIN_ID);
+    expect(manifest.version).toBe("0.2.0");
     expect(OBSIDIAN_CLIENT_VERSION).toBe(`obsidian-plugin/${String(manifest.version)}`);
     expect(manifest.name).toBe("Trans-Hub Localizer");
     const description = manifest.description;

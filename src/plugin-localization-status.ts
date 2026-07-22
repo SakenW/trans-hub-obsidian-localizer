@@ -44,7 +44,11 @@ export function describePluginLocalizationStatus(input: {
   }
   if (input.translation?.targetLocale === input.targetLocale) {
     const coverage = calculatePluginTranslationCoverage(input.catalog, input.translation, input.targetLocale);
-    const sourceSummary = describePluginTranslationSources(input.translation, input.catalog);
+    const sourceSummary = describePluginTranslationSources(
+      input.translation,
+      input.catalog,
+      coverage?.missingCount ?? 0,
+    );
     if (coverage !== undefined && coverage.missingCount > 0) {
       return {
         kind: "waiting",
@@ -71,10 +75,25 @@ export function describePluginLocalizationStatus(input: {
         ),
       };
     }
+    if (coverage !== undefined) {
+      return {
+        kind: "localized",
+        label: appendSourceSummary(
+          translate("已本地化 {translated}/{total} 条（{percent}%）", {
+            translated: coverage.translatedCount,
+            total: coverage.totalCount,
+            percent: coverage.percent,
+          }),
+          sourceSummary,
+        ),
+      };
+    }
     return {
       kind: "localized",
       label: appendSourceSummary(
-        translate("已本地化 {count} 条", { count: input.translation.entries.length }),
+        translate("已本地化 {count} 条", {
+          count: new Set(input.translation.entries.map((entry) => entry.source)).size,
+        }),
         sourceSummary,
       ),
     };
@@ -101,7 +120,14 @@ export function summarizePluginTranslationSources(
     automatic: 0,
     published: 0,
   };
-  return translation.entries.reduce((current, entry) => {
+  const effectiveEntries = new Map<string, (typeof translation.entries)[number]>();
+  for (const entry of translation.entries) {
+    const current = effectiveEntries.get(entry.source);
+    if (current === undefined || provenancePriority(entry.provenanceKind) > provenancePriority(current.provenanceKind)) {
+      effectiveEntries.set(entry.source, entry);
+    }
+  }
+  return [...effectiveEntries.values()].reduce((current, entry) => {
     switch (entry.provenanceKind) {
       case "upstream-native": return { ...current, upstreamNative: current.upstreamNative + 1 };
       case "th-reviewed-fill": return { ...current, reviewedFill: current.reviewedFill + 1 };
@@ -116,22 +142,43 @@ export function summarizePluginTranslationSources(
 function describePluginTranslationSources(
   translation: PluginTranslationState,
   catalog: PluginUiCatalog | undefined,
+  missingCount: number,
 ): string {
   const currentSources = catalog === undefined ? null : new Set(catalog.strings.map((item) => item.source));
   const currentTranslation = currentSources === null
     ? translation
     : { ...translation, entries: translation.entries.filter((entry) => currentSources.has(entry.source)) };
-  if (!currentTranslation.entries.some((entry) => entry.provenanceKind !== undefined)) return "";
+  if (!currentTranslation.entries.some((entry) => entry.provenanceKind !== undefined)
+    && (currentTranslation.upstreamNativeCount ?? 0) === 0
+    && missingCount === 0) return "";
   const summary = summarizePluginTranslationSources(currentTranslation);
+  const effectiveUpstreamNative = Math.max(
+    (currentTranslation.upstreamNativeCount ?? 0) - summary.reviewedCorrection,
+    summary.upstreamNative,
+  );
   return [
-    summary.upstreamNative > 0 ? translate("插件自带 {count}", { count: summary.upstreamNative }) : "",
-    summary.reviewedFill > 0 ? translate("语枢补充 {count}", { count: summary.reviewedFill }) : "",
-    summary.reviewedCorrection > 0 ? translate("语枢校订 {count}", { count: summary.reviewedCorrection }) : "",
-    summary.automatic > 0 ? translate("自动翻译 {count}", { count: summary.automatic }) : "",
-    summary.published > 0 ? translate("语枢已发布 {count}", { count: summary.published }) : "",
+    effectiveUpstreamNative > 0 ? translate("插件自带 {count}", { count: effectiveUpstreamNative }) : "",
+    summary.reviewedFill > 0 ? translate("语枢已校对 {count}", { count: summary.reviewedFill }) : "",
+    summary.reviewedCorrection > 0 ? translate("语枢校对修正 {count}", { count: summary.reviewedCorrection }) : "",
+    summary.automatic > 0 ? translate("语枢机翻 {count}（未经人工校对）", { count: summary.automatic }) : "",
+    summary.published > 0 ? translate("语枢已发布（未分类）{count}", { count: summary.published }) : "",
+    missingCount > 0 ? translate("待补 {count}", { count: missingCount }) : "",
   ].filter((value) => value !== "").join(" · ");
 }
 
 function appendSourceSummary(label: string, summary: string): string {
   return summary === "" ? label : `${label}；${summary}`;
+}
+
+function provenancePriority(
+  provenance: PluginTranslationState["entries"][number]["provenanceKind"],
+): number {
+  switch (provenance) {
+    case "th-reviewed-correction": return 5;
+    case "upstream-native": return 4;
+    case "th-reviewed-fill": return 3;
+    case "th-automatic": return 2;
+    case "th-published": return 1;
+    default: return 0;
+  }
 }

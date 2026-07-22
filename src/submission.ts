@@ -16,8 +16,8 @@ import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 export const OBSIDIAN_PUBLIC_PROFILE = {
   externalRegistry: "obsidian_community_plugins",
   adapterDefinitionId: "obsidian",
-  adapterVersion: "0.4.0",
-  adapterBuildDigestHex: "69abf4735abe6d181b98890ed899be98e7ab4c3388de5ea96fd037d609b39b97",
+  adapterVersion: "1.1.0",
+  adapterBuildDigestHex: "2111e10336edf23c59661e66b6155a1ef127642161ea4ccd766fb1cc16b15580",
 } as const;
 
 export async function submitObsidianPluginDiscovery(input: {
@@ -42,7 +42,7 @@ export async function submitObsidianPluginDiscovery(input: {
     },
   };
   const observationDigest = await computeProtocolDigest("request", observationMaterial, digestPort);
-  const idempotencyKey = `obsidian-public-v4-${await sha256Hex([
+  const idempotencyKey = `obsidian-public-v11-${await sha256Hex([
     input.repository,
     input.catalog.pluginVersion,
     input.catalog.artifactDigest,
@@ -103,7 +103,7 @@ export async function submitObsidianLocalizationObservation(input: {
     },
   };
   const summaryDigest = await computeProtocolDigest("request", summaryMaterial, digestPort);
-  const idempotencyKey = `obsidian-localize-v2-${await sha256Hex([
+  const idempotencyKey = `obsidian-localize-v9-${await sha256Hex([
     input.repository,
     input.catalog.pluginVersion,
     input.targetLocale,
@@ -144,23 +144,35 @@ export async function submitObsidianLocalizationObservation(input: {
   return input.client.submitContribution(payload) as Promise<ContributionStateReceipt<"localization_observation">>;
 }
 
-export async function submitObsidianMissingTranslationIssue(input: {
+export type ObsidianLocalizationIssueKind = "missing" | "inaccurate";
+
+export async function submitObsidianLocalizationIssue(input: {
   readonly client: PublicClient;
   readonly installationId: string;
+  readonly issueKind: ObsidianLocalizationIssueKind;
   readonly pluginId: string;
   readonly pluginVersion: string;
   readonly repository: string;
   readonly targetLocale: string;
   readonly sourceText: string;
+  readonly currentTargetText?: string;
+  readonly suggestedTargetText?: string;
   readonly submittedAt?: string;
 }): Promise<ContributionStateReceipt<"issue">> {
   const sourceText = normalizeMissingUiSourceText(input.sourceText);
+  const currentTargetText = input.issueKind === "inaccurate"
+    ? normalizeReportedTargetText(input.currentTargetText, "请填写当前显示的译文。")
+    : undefined;
+  const suggestedTargetText = normalizeOptionalReportedTargetText(input.suggestedTargetText);
   const evidence = {
+    issueKind: input.issueKind,
     pluginId: input.pluginId,
     pluginVersion: input.pluginVersion,
     repository: input.repository,
     targetLocale: input.targetLocale,
     sourceText,
+    ...(currentTargetText === undefined ? {} : { currentTargetText }),
+    ...(suggestedTargetText === undefined ? {} : { suggestedTargetText }),
   };
   const digestPort = {
     async digest(bytes: Uint8Array): Promise<Uint8Array> {
@@ -169,11 +181,14 @@ export async function submitObsidianMissingTranslationIssue(input: {
     },
   };
   const evidenceDigest = await computeProtocolDigest("request", evidence, digestPort);
-  const idempotencyKey = `obsidian-missing-ui-v1-${await sha256Hex([
+  const idempotencyKey = `obsidian-localization-quality-v2-${await sha256Hex([
+    input.issueKind,
     input.repository,
     input.pluginVersion,
     input.targetLocale,
     sourceText,
+    currentTargetText ?? "",
+    suggestedTargetText ?? "",
     OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
   ].join("\u0000"))}`;
   const payload: Omit<IssueIntent, "installationProof"> = {
@@ -203,11 +218,19 @@ export async function submitObsidianMissingTranslationIssue(input: {
     issue: {
       category: "localization_quality",
       severity: "info",
-      summary: `Missing UI localization: ${input.pluginId}@${input.pluginVersion} -> ${input.targetLocale}: ${sourceText}`,
+      summary: input.issueKind === "missing"
+        ? `Missing UI localization: ${input.pluginId}@${input.pluginVersion} -> ${input.targetLocale}: ${sourceText}`
+        : `Inaccurate upstream localization: ${input.pluginId}@${input.pluginVersion} -> ${input.targetLocale}: ${sourceText} => ${currentTargetText}${suggestedTargetText === undefined ? "" : `; suggested: ${suggestedTargetText}`}`,
       evidenceDigest,
     },
   };
   return input.client.submitContribution(payload) as Promise<ContributionStateReceipt<"issue">>;
+}
+
+export function submitObsidianMissingTranslationIssue(
+  input: Omit<Parameters<typeof submitObsidianLocalizationIssue>[0], "issueKind">,
+): Promise<ContributionStateReceipt<"issue">> {
+  return submitObsidianLocalizationIssue({ ...input, issueKind: "missing" });
 }
 
 export function normalizeMissingUiSourceText(value: string): string {
@@ -215,4 +238,16 @@ export function normalizeMissingUiSourceText(value: string): string {
   if (normalized.length < 2) throw new Error("请填写仍显示的原文。");
   if (normalized.length > 500) throw new Error("原文最多 500 个字符。");
   return normalized;
+}
+
+export function normalizeReportedTargetText(value: string | undefined, emptyMessage: string): string {
+  const normalized = value?.normalize("NFC").replace(/\s+/gu, " ").trim() ?? "";
+  if (normalized.length < 1) throw new Error(emptyMessage);
+  if (normalized.length > 500) throw new Error("单条译文不能超过 500 个字符。");
+  return normalized;
+}
+
+function normalizeOptionalReportedTargetText(value: string | undefined): string | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  return normalizeReportedTargetText(value, "");
 }

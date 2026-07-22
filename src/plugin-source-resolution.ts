@@ -3,6 +3,7 @@ import type { TransportClient } from "./http-transport";
 export interface PublishedPluginSource {
   readonly sourceVersionId: string;
   readonly objectVersionId: string;
+  readonly upstreamNativeCount: number;
 }
 
 export async function resolvePublishedPluginSource(input: {
@@ -48,14 +49,17 @@ export async function resolvePublishedPluginSource(input: {
     && item.target_locale === input.targetLocale
     && item.target_variant === "default"
     && typeof item.published_unit_count === "number"
-    && item.published_unit_count > 0
+    && typeof item.upstream_unit_count === "number"
+    && (item.published_unit_count > 0 || item.upstream_unit_count > 0)
   ));
   if (published.length === 0) return undefined;
-  const highestPublishedUnitCount = Math.max(...published.map(
-    (item) => requiredPositiveNumber(item.published_unit_count, "译文覆盖数量无效"),
+  const highestLocalizedUnitCount = Math.max(...published.map(
+    (item) => requiredNonNegativeNumber(item.published_unit_count, "译文覆盖数量无效")
+      + requiredNonNegativeNumber(item.upstream_unit_count, "插件自带覆盖数量无效"),
   ));
   const sourceVersionIds = [...new Set(published
-    .filter((item) => item.published_unit_count === highestPublishedUnitCount)
+    .filter((item) => (item.published_unit_count as number) + (item.upstream_unit_count as number)
+      === highestLocalizedUnitCount)
     .map((item) => requiredString(item.source_version_id, "译文覆盖缺少源版本 ID")))];
   if (sourceVersionIds.length !== 1) {
     throw new Error(`Obsidian 插件发布源版本不唯一：${input.pluginId}@${input.pluginVersion}`);
@@ -63,6 +67,10 @@ export async function resolvePublishedPluginSource(input: {
   return {
     sourceVersionId: requiredString(sourceVersionIds[0], "译文覆盖缺少源版本 ID"),
     objectVersionId,
+    upstreamNativeCount: requiredNonNegativeNumber(
+      published.find((item) => item.source_version_id === sourceVersionIds[0])?.upstream_unit_count,
+      "插件自带覆盖数量无效",
+    ),
   };
 }
 
@@ -71,8 +79,8 @@ function requiredString(value: unknown, message: string): string {
   return value;
 }
 
-function requiredPositiveNumber(value: unknown, message: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) throw new Error(message);
+function requiredNonNegativeNumber(value: unknown, message: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(message);
   return value;
 }
 

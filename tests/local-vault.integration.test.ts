@@ -18,6 +18,7 @@ describeLocal("local Obsidian vault integration", () => {
     const pluginDirs = await readdir(join(configDir, "plugins"), { withFileTypes: true });
     const enabledIds = new Set(enabled.filter((item): item is string => typeof item === "string"));
     const results: { id: string; count: number }[] = [];
+    let linterSources: ReadonlySet<string> | undefined;
     for (const dir of pluginDirs.filter((item) => item.isDirectory() && (scanAllInstalled || enabledIds.has(item.name)))) {
       const root = join(configDir, "plugins", dir.name);
       const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as Record<string, unknown>;
@@ -36,8 +37,19 @@ describeLocal("local Obsidian vault integration", () => {
         sourceLocale: "en",
       });
       results.push({ id: catalog.pluginId, count: catalog.strings.length });
+      if (catalog.pluginId === "obsidian-linter") {
+        linterSources = new Set(catalog.strings.map((item) => item.source));
+      }
     }
     expect(results.length).toBeGreaterThan(0);
     expect(results.every((result) => result.count > 0)).toBe(true);
-  });
+    if (linterSources !== undefined) {
+      expect(linterSources).toContain(
+        'Tries to escape array values assuming that an array starts with "[", ends with "]", and has items that are delimited by ",".',
+      );
+      expect(linterSources).not.toContain(
+        'Intenta escapar de los valores de matriz suponiendo que una matriz comienza con "[", termina con "]" y tiene elementos que están delimitados por ",".',
+      );
+    }
+  }, 30_000);
 });

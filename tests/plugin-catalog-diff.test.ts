@@ -53,6 +53,31 @@ describe("plugin catalog version carry-over", () => {
     });
   });
 
+  it("把插件自带覆盖计入结果，并避免把语枢校订修正重复计数", () => {
+    const translation = {
+      ...previous,
+      pluginVersion: "2.0.0",
+      upstreamNativeCount: 4,
+      entries: [
+        { pluginId: "sample", source: "Settings", target: "设置", provenanceKind: "th-reviewed-fill" as const },
+        {
+          pluginId: "sample", source: "Rows: {{th:expr:0}}", target: "行数：{{th:expr:0}}",
+          provenanceKind: "th-reviewed-correction" as const, application: "correction" as const,
+          nativeTarget: "列数：{{th:expr:0}}",
+        },
+      ],
+    };
+
+    expect(calculatePluginTranslationCoverage(catalog, translation, "zh-CN")).toEqual({
+      totalCount: 5,
+      translatedCount: 5,
+      missingCount: 0,
+      staleCount: 0,
+      percent: 100,
+      exactPluginVersion: true,
+    });
+  });
+
   it("不修改官方身份，并在开关开启时显示名称和说明译文", () => {
     const translation = {
       ...previous,

@@ -11,6 +11,7 @@ describe("client localization", () => {
     expect(translate("已选择 {selected} / {total}", { selected: 2, total: 3 }))
       .toBe("Selected 2 / 3");
     expect(localizedClientName()).toBe("Trans-Hub Localizer");
+    expect(translate("查看进展并参与贡献")).toBe("View progress and contribute");
   });
 
   it("keeps Simplified Chinese source copy for the Simplified Chinese target", () => {

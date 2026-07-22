@@ -22,9 +22,17 @@ Runtime localization uses exact, version-aware matches. Markdown editors, readin
 
 运行时本地化采用精确且与版本绑定的匹配；Markdown 编辑器、阅读视图、代码、脚本及可编辑内容均被排除在外。
 
+## Translation quality and contribution / 翻译质量与贡献
+
+Most Trans-Hub translations are currently machine-generated and are clearly labeled as not human reviewed. If you know a plugin or language well, you can help translate, proofread, and review its localization. Your contribution makes the text more accurate and keeps it maintainable as plugins evolve.
+
+[View Obsidian localization progress and contribute](https://trans-hub.net/ecosystems/obsidian)
+
+当前多数语枢译文由机器翻译生成，并会明确标注未经人工校对。欢迎参与翻译、校对和审查，让插件本地化更准确，也能随版本持续维护。
+
 ## Install / 安装
 
-After acceptance into the Obsidian Community directory, install **Trans-Hub Localizer** from **Settings → Community plugins**.
+After the plugin is accepted into the Obsidian Community directory, install **Trans-Hub Localizer** from **Settings → Community plugins**.
 
 插件通过 Obsidian 社区目录审核后，可在 **设置 → 第三方插件** 中安装 **Trans-Hub Localizer**。
 
@@ -36,7 +44,7 @@ For a manual installation, download `main.js`, `manifest.json`, and `styles.css`
 <vault-config-dir>/plugins/trans-hub-plugin-localizer/
 ```
 
-Enable the plugin, connect your Trans-Hub account in the browser, choose a display language, then select the plugins you want to localize.
+Enable the plugin, connect your Trans-Hub account in the browser, choose your display language, and select the plugins you want to localize.
 
 启用插件后，在浏览器中连接语枢账号，选择显示语言，再选择要本地化的插件即可。
 
@@ -76,6 +84,10 @@ pnpm build
 Release tags use plain `x.y.z` semantic versions and match `manifest.json`, `package.json`, and `versions.json`. Every release is rebuilt from its immutable tag, tested, and accompanied by GitHub artifact attestations for the three files Obsidian downloads.
 
 Release 标签使用纯 `x.y.z` 语义化版本，并与 `manifest.json`、`package.json`、`versions.json` 保持一致。每个版本均从不可变标签重新构建、经测试，并附带 Obsidian 下载的三个文件对应的 GitHub 制品证明。
+
+Versions below `1.0.0` are public testing releases. Trans-Hub will publish `1.0.0` only after community-directory testing, upgrade compatibility, and the human-review workflow have proven stable. Internal server, adapter, and database revisions do not change the plugin's public version.
+
+`1.0.0` 以下版本均为公开测试版。只有在社区目录测试、升级兼容性和人工审核流程稳定后，语枢才会发布 `1.0.0`；服务端、适配器和数据库内部迭代不会改变插件的公开版本号。
 
 ## License / 许可证
 

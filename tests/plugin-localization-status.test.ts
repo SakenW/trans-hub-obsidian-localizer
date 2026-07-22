@@ -71,7 +71,7 @@ describe("describePluginLocalizationStatus", () => {
         pulledAt: "2026-07-18T00:00:00Z",
       },
       targetLocale: "zh-CN",
-    })).toEqual({ kind: "waiting", label: "已本地化 1/2 条（50%），1 条等待发布" });
+    })).toEqual({ kind: "waiting", label: "已本地化 1/2 条（50%），1 条等待发布；待补 1" });
   });
 
   it("有可信来源元数据时展示原生、补充、校订和自动翻译构成", () => {
@@ -93,7 +93,44 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "localized",
-      label: "已本地化 4 条；插件自带 1 · 语枢补充 1 · 语枢校订 1 · 自动翻译 1",
+      label: "已本地化 4 条；插件自带 1 · 语枢已校对 1 · 语枢校对修正 1 · 语枢机翻 1（未经人工校对）",
+    });
+  });
+
+  it("仅有覆盖摘要时也展示插件自带语言，不伪造语枢译文条目", () => {
+    expect(describePluginLocalizationStatus({
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+        sourceLocale: "en", digest: "catalog", artifactDigest: "artifact", scannedAt: "2026-07-18T00:00:00Z",
+        strings: [
+          { key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" },
+          { key: "two", source: "New option", origins: ["ui-call"], placeholderSignature: "" },
+        ],
+      },
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
+        targetLocale: "zh-CN", upstreamNativeCount: 2, entries: [],
+        pulledAt: "2026-07-18T00:00:00Z",
+      },
+      targetLocale: "zh-CN",
+    })).toEqual({ kind: "localized", label: "已本地化 2/2 条（100%）；插件自带 2" });
+  });
+
+  it("deduplicates historical rows by source and reports only the strongest effective provenance", () => {
+    expect(describePluginLocalizationStatus({
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
+        targetLocale: "zh-CN",
+        entries: [
+          { pluginId: "dataview", source: "One", target: "一", provenanceKind: "th-automatic" },
+          { pluginId: "dataview", source: "One", target: "壹", provenanceKind: "th-reviewed-fill" },
+        ],
+        pulledAt: "2026-07-18T00:00:00Z",
+      },
+      targetLocale: "zh-CN",
+    })).toEqual({
+      kind: "localized",
+      label: "已本地化 1 条；语枢已校对 1",
     });
   });
 });

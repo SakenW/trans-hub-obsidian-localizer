@@ -30,15 +30,37 @@
   white-space: pre-wrap;
 }
 
-.trans-hub-settings__intro {
-  line-height: 1.6;
-  margin-block: 0 1.25rem;
+.trans-hub-settings__header {
+  margin-bottom: 1.4rem;
   max-width: 56rem;
 }
 
-.trans-hub-settings__ecosystem-link {
-  font-weight: var(--font-medium);
-  white-space: nowrap;
+.trans-hub-settings__title {
+  font-size: var(--font-ui-large);
+  line-height: 1.25;
+  margin-block: 0 0.4rem;
+}
+
+.trans-hub-settings__summary {
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  line-height: 1.5;
+  margin-block: 0 0.45rem;
+}
+
+.trans-hub-settings__facts {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.trans-hub-settings__facts > span:not(:first-child)::before {
+  color: var(--text-faint);
+  content: "·";
+  margin-inline: 0.5rem;
 }
 
 .trans-hub-settings {
@@ -48,12 +70,62 @@
   padding-bottom: 2rem;
 }
 
+.trans-hub-settings__contribution {
+  align-items: center;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-inline-start: 3px solid var(--color-yellow);
+  border-radius: var(--radius-m);
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-block: 0 1.25rem;
+  max-width: 56rem;
+  padding: 0.9rem 1rem;
+}
+
+.trans-hub-settings__contribution-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  line-height: 1.4;
+}
+
+.trans-hub-settings__contribution-description {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+  margin: 0.25rem 0 0;
+}
+
+.trans-hub-settings__contribution-link {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium);
+  white-space: nowrap;
+}
+
 .trans-hub-settings__card {
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   margin-block: 0.75rem;
   padding: 1rem 1.1rem;
+}
+
+.trans-hub-settings__group {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  margin-block: 0.5rem 1.25rem;
+  padding-inline: 1rem;
+}
+
+.trans-hub-settings__group .setting-item {
+  padding-block: 0.9rem;
+}
+
+.trans-hub-settings__group .setting-item.is-disabled .setting-item-info {
+  opacity: 0.65;
 }
 
 .trans-hub-settings__connection .setting-item-control {
@@ -89,8 +161,13 @@
 }
 
 .trans-hub-plugin-picker__status {
+  background: var(--background-secondary-alt);
+  border: 1px solid var(--background-modifier-border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-m) var(--radius-m);
   min-height: 1.5em;
-  padding: 0.55rem 0.25rem 0.7rem;
+  margin: -1px 0 0;
+  padding: 0.6rem 1rem 0.7rem;
 }
 
 .trans-hub-plugin-picker__controls {
@@ -171,6 +248,33 @@
   box-shadow: inset 3px 0 var(--color-red);
 }
 
+.trans-hub-plugin-picker__item--unsupported,
+.trans-hub-plugin-picker__item--source-pending {
+  box-shadow: inset 3px 0 var(--text-faint);
+}
+
+.trans-hub-plugin-picker__list .setting-item.is-disabled {
+  background: var(--background-secondary-alt);
+}
+
+.trans-hub-plugin-picker__description {
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin-bottom: 0.2rem;
+}
+
+.trans-hub-plugin-picker__metadata {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.trans-hub-plugin-picker__provenance {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  margin-top: 0.25rem;
+}
+
 .trans-hub-plugin-picker__empty {
   padding: 1rem;
   text-align: center;
@@ -198,9 +302,112 @@
   margin-top: 0.5rem;
 }
 
+.trans-hub-settings__brand {
+  border: 0;
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: 1.5rem;
+  max-width: 56rem;
+  padding-top: 0.9rem;
+}
+
+.trans-hub-settings__brand > summary {
+  align-items: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  min-height: 2rem;
+  user-select: none;
+}
+
+.trans-hub-settings__brand > summary > span {
+  align-items: baseline;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.55rem;
+}
+
+.trans-hub-settings__brand > summary strong {
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+}
+
+.trans-hub-settings__brand-name {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.trans-hub-settings__brand-tagline {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.trans-hub-settings__brand-content {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-sizing: border-box;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.55;
+  margin-top: 0.65rem;
+  max-width: 46rem;
+  padding: 1rem 1.1rem;
+}
+
+.trans-hub-settings__brand-heading {
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  margin-block: 1rem 0.4rem;
+}
+
+.trans-hub-settings__brand-principles {
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 0.75rem;
+}
+
+.trans-hub-settings__brand-lead {
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+  margin-block: 0 0.2rem;
+}
+
+.trans-hub-settings__brand-infrastructure {
+  margin: 0;
+}
+
+.trans-hub-settings__brand-description p {
+  margin-block: 0.4rem;
+}
+
+.trans-hub-settings__brand-link {
+  display: inline-block;
+  font-weight: var(--font-medium);
+  margin-top: 0.5rem;
+}
+
 @media (max-width: 520px) {
   .trans-hub-settings__card {
     padding: 0.9rem;
+  }
+
+  .trans-hub-settings__facts {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .trans-hub-settings__facts > span:not(:first-child)::before {
+    content: none;
+  }
+
+  .trans-hub-settings__contribution {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
+    padding: 0.85rem 0.9rem;
+  }
+
+  .trans-hub-settings__contribution-link {
+    white-space: normal;
   }
 
   .trans-hub-plugin-picker__summary {
@@ -228,5 +435,14 @@
   .trans-hub-plugin-picker__list .setting-item {
     min-height: 4rem;
     padding: 0.75rem 0.8rem;
+  }
+
+  .trans-hub-settings__brand > summary > span {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .trans-hub-settings__brand-content {
+    padding: 0.9rem;
   }
 }

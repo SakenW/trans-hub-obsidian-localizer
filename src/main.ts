@@ -2,6 +2,7 @@ import { getLanguage, Notice, Plugin } from "obsidian";
 
 import { ActivationStore } from "./activation";
 import { localizedClientName, setClientLocale, translate } from "./client-localization";
+import { errorMessage } from "./error-message";
 import { registerPluginTranslationCommands } from "./plugin-actions";
 import {
   PluginAutomationController,
@@ -27,7 +28,10 @@ import {
 } from "./product-config";
 import { TransHubSettingTab } from "./settings";
 import { DEFAULT_SETTINGS, loadSettings, type TransHubPluginSettings } from "./settings-data";
-import { submitObsidianMissingTranslationIssue } from "./submission";
+import {
+  submitObsidianLocalizationIssue,
+  type ObsidianLocalizationIssueKind,
+} from "./submission";
 
 const AUTOMATION_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -84,8 +88,8 @@ export default class TransHubObsidianPlugin extends Plugin {
     this.addSettingTab(this.settingTab);
     this.register(() => this.pluginAutomation.stop());
     this.register(() => this.clearPendingTranslationRetry());
+    this.pluginAutomation.start();
     this.app.workspace.onLayoutReady(() => {
-      this.pluginAutomation.start();
       void this.runAutomaticPluginTranslation();
     });
     this.registerInterval(window.setInterval(() => { void this.runAutomaticPluginTranslation(); }, AUTOMATION_INTERVAL_MS));
@@ -112,6 +116,7 @@ export default class TransHubObsidianPlugin extends Plugin {
 
   disconnect(): void { this.activation.clear(); }
   hasUserSession(): boolean { return this.activation.isConfigured(); }
+  requiresReconnect(): boolean { return this.activation.requiresReconnect(); }
   getPluginState(): PluginState { return this.state; }
 
   applyClientLocale(locale: TransHubPluginSettings["targetLocale"]): void {
@@ -146,10 +151,13 @@ export default class TransHubObsidianPlugin extends Plugin {
     return result;
   }
 
-  async reportMissingPluginTranslation(input: {
+  async reportPluginLocalizationIssue(input: {
+    readonly issueKind: ObsidianLocalizationIssueKind;
     readonly pluginId: string;
     readonly pluginVersion: string;
     readonly sourceText: string;
+    readonly currentTargetText?: string;
+    readonly suggestedTargetText?: string;
   }): Promise<void> {
     const catalog = this.state.pluginCatalogs[input.pluginId];
     if (catalog === undefined || catalog.pluginVersion !== input.pluginVersion) {
@@ -159,14 +167,17 @@ export default class TransHubObsidianPlugin extends Plugin {
       apiBaseUrl: TRANS_HUB_API_BASE_URL,
     });
     const identity = await resolveCommunityPluginIdentity(input.pluginId, input.pluginVersion);
-    await submitObsidianMissingTranslationIssue({
+    await submitObsidianLocalizationIssue({
       client,
       installationId: bootstrap.installationId,
+      issueKind: input.issueKind,
       pluginId: input.pluginId,
       pluginVersion: input.pluginVersion,
       repository: identity.repository,
       targetLocale: this.settings.targetLocale,
       sourceText: input.sourceText,
+      currentTargetText: input.currentTargetText,
+      suggestedTargetText: input.suggestedTargetText,
     });
   }
 
@@ -201,7 +212,11 @@ export default class TransHubObsidianPlugin extends Plugin {
       const result = await this.processSelectedPlugins();
       this.settingTab.reportCommandStatus(describePluginSelectionProcessing(result), false);
     }
-    catch (error) { console.warn("[Trans-Hub] 插件自动翻译暂未完成", error); }
+    catch (error) {
+      const message = errorMessage(error);
+      console.warn("[Trans-Hub] 插件自动翻译暂未完成", error);
+      this.settingTab.reportCommandStatus(message, true);
+    }
   }
 
   private async autoSyncInstalledPluginTranslations(): Promise<PluginSyncSummary> {

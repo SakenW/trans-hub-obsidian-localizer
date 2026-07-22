@@ -17,10 +17,11 @@ describe("resolvePublishedPluginSource", () => {
     expect(result).toEqual({
       sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
+      upstreamNativeCount: 0,
     });
   });
 
-  it("waits when the exact version has no published target coverage", async () => {
+  it("waits when the exact version has neither published nor upstream coverage", async () => {
     const body = catalog();
     body.objects[0].coverage[0].published_unit_count = 0;
     await expect(resolvePublishedPluginSource({
@@ -29,6 +30,22 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
     })).resolves.toBeUndefined();
+  });
+
+  it("resolves native-only coverage without pretending a TH pack exists", async () => {
+    const body = catalog();
+    body.objects[0].coverage[0].published_unit_count = 0;
+    body.objects[0].coverage[0].upstream_unit_count = 65;
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+    })).resolves.toEqual({
+      sourceVersionId: SOURCE_VERSION_ID,
+      objectVersionId: OBJECT_VERSION_ID,
+      upstreamNativeCount: 65,
+    });
   });
 
   it("fails closed when one plugin version resolves to multiple source versions", async () => {
@@ -61,6 +78,7 @@ describe("resolvePublishedPluginSource", () => {
     })).resolves.toEqual({
       sourceVersionId: "019f0000-0000-7000-8000-000000000003",
       objectVersionId: OBJECT_VERSION_ID,
+      upstreamNativeCount: 0,
     });
   });
 });
@@ -86,6 +104,7 @@ function catalog() {
         target_locale: "zh-CN",
         target_variant: "default",
         published_unit_count: 77,
+        upstream_unit_count: 0,
       }],
     }],
   };

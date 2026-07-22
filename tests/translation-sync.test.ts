@@ -61,7 +61,7 @@ describe("parsePluginTranslationPack", () => {
         },
       }],
     }));
-    expect(parsePluginTranslationPack(payload, manifest, pack)).toEqual([{
+    expect(parsePluginTranslationPack(payload, manifest, pack, "sample-plugin")).toEqual([{
       pluginId: "sample-plugin",
       stringKey: key,
       translatedText: "设置",
@@ -85,7 +85,7 @@ describe("parsePluginTranslationPack", () => {
         structured_content: { delivery_provenance: { kind: "th-reviewed-correction", application: "correction" } },
       }],
     }));
-    expect(() => parsePluginTranslationPack(payload, manifest, pack)).toThrow("correction_invalid");
+    expect(() => parsePluginTranslationPack(payload, manifest, pack, "sample-plugin")).toThrow("correction_invalid");
 
     const mislabeled = new TextEncoder().encode(JSON.stringify({
       schema: "trans-hub.translation-pack", version: 1,
@@ -99,7 +99,48 @@ describe("parsePluginTranslationPack", () => {
         },
       }],
     }));
-    expect(() => parsePluginTranslationPack(mislabeled, manifest, pack)).toThrow("correction_invalid");
+    expect(() => parsePluginTranslationPack(mislabeled, manifest, pack, "sample-plugin")).toThrow("correction_invalid");
+  });
+
+  it("accepts canonical catalog keys only inside an exact plugin source scope", () => {
+    const manifest = manifestFixture();
+    const pack = manifest.packs[0];
+    const key = "c".repeat(32);
+    const payload = new TextEncoder().encode(JSON.stringify({
+      schema: "trans-hub.translation-pack", version: 1,
+      source_version_id: manifest.sourceVersionId, target_locale: manifest.targetLocale,
+      target_variant: manifest.targetVariant, pack_index: 0,
+      items: [{
+        occurrence_key: key,
+        target_text: "设置",
+        payload_digest: `sha256:${"d".repeat(64)}`,
+        structured_content: {},
+      }],
+    }));
+    expect(parsePluginTranslationPack(payload, manifest, pack, "sample-plugin")).toEqual([{
+      pluginId: "sample-plugin",
+      stringKey: key,
+      translatedText: "设置",
+      translationDigest: `sha256:${"d".repeat(64)}`,
+    }]);
+
+    const crossPluginPayload = new TextEncoder().encode(JSON.stringify({
+      schema: "trans-hub.translation-pack", version: 1,
+      source_version_id: manifest.sourceVersionId, target_locale: manifest.targetLocale,
+      target_variant: manifest.targetVariant, pack_index: 0,
+      items: [{
+        occurrence_key: `obsidian:plugin-ui:other-plugin:${key}`,
+        target_text: "设置",
+        payload_digest: `sha256:${"d".repeat(64)}`,
+        structured_content: {},
+      }],
+    }));
+    expect(() => parsePluginTranslationPack(
+      crossPluginPayload,
+      manifest,
+      pack,
+      "sample-plugin",
+    )).toThrow("与当前插件不匹配");
   });
 });
 

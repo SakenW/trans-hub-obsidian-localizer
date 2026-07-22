@@ -91,12 +91,10 @@ export async function downloadPluginTranslations(input: DownloadInput & {
 }): Promise<TranslationSyncOutput<PluginTranslationRow>> {
   const result = await downloadTranslationOccurrences(input);
   const rows = result.rows.map((row): PluginTranslationRow => {
-    const match = /^obsidian:plugin-ui:([^:]+):([a-f0-9]{32})$/u.exec(row.occurrenceKey);
-    if (match === null) throw new Error(`译文 occurrence 不属于 Obsidian 插件：${row.occurrenceKey}`);
-    if (match[1] !== input.expectedPluginId) throw new Error(`译文 occurrence 与当前插件不匹配：${match[1]}`);
+    const stringKey = parsePluginOccurrenceKey(row.occurrenceKey, input.expectedPluginId);
     return {
-      pluginId: match[1],
-      stringKey: match[2],
+      pluginId: input.expectedPluginId,
+      stringKey,
       translatedText: row.translatedText,
       translationDigest: row.translationDigest,
       ...parseDeliveryProvenance(row.structuredContent),
@@ -122,18 +120,26 @@ export function parsePluginTranslationPack(
   bytes: Uint8Array,
   manifest: TranslationExportManifest,
   pack: TranslationPackRef,
+  expectedPluginId: string,
 ): PluginTranslationRow[] {
   return parseTranslationPack(bytes, manifest, pack).map((row) => {
-    const match = /^obsidian:plugin-ui:([^:]+):([a-f0-9]{32})$/u.exec(row.occurrenceKey);
-    if (match === null) throw new Error(`译文 occurrence 不属于 Obsidian 插件：${row.occurrenceKey}`);
+    const stringKey = parsePluginOccurrenceKey(row.occurrenceKey, expectedPluginId);
     return {
-      pluginId: match[1],
-      stringKey: match[2],
+      pluginId: expectedPluginId,
+      stringKey,
       translatedText: row.translatedText,
       translationDigest: row.translationDigest,
       ...parseDeliveryProvenance(row.structuredContent),
     };
   });
+}
+
+function parsePluginOccurrenceKey(occurrenceKey: string, expectedPluginId: string): string {
+  if (/^[a-f0-9]{32}$/u.test(occurrenceKey)) return occurrenceKey;
+  const scoped = /^obsidian:plugin-ui:([^:]+):([a-f0-9]{32})$/u.exec(occurrenceKey);
+  if (scoped === null) throw new Error(`译文 occurrence 不属于 Obsidian 插件：${occurrenceKey}`);
+  if (scoped[1] !== expectedPluginId) throw new Error(`译文 occurrence 与当前插件不匹配：${scoped[1]}`);
+  return scoped[2];
 }
 
 async function downloadTranslationOccurrences(

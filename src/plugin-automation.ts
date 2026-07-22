@@ -2,7 +2,10 @@ import type { App } from "obsidian";
 
 import { selectCurrentCatalogTranslations } from "./plugin-catalog-diff";
 import { discoverInstalledPlugins, readPluginBundle } from "./plugin-discovery";
-import { resolveCommunityPluginIdentity } from "./plugin-registry";
+import {
+  resolveCommunityPluginIdentity,
+  resolveCommunityPluginSourceEligibility,
+} from "./plugin-registry";
 import type { PluginState, PluginTranslationState } from "./plugin-state";
 import { scanPluginUiStrings } from "./plugin-string-scanner";
 import { PluginUiTranslationRuntime, type PluginUiTranslation } from "./plugin-ui-runtime";
@@ -69,9 +72,13 @@ export class PluginAutomationController {
     const excluded = new Set(settings.excludedPluginIds);
     const discovered = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
     const selected = discovered.filter((plugin) => plugin.enabled && !excluded.has(plugin.id));
+    const eligibility = await resolveCommunityPluginSourceEligibility(selected.map((plugin) => plugin.id));
+    const eligibleSelected = selected.filter((plugin) => eligibility.get(plugin.id)?.kind === "supported");
     const only = onlyPluginIds === undefined ? null : new Set(onlyPluginIds);
-    const candidates = only === null ? selected : selected.filter((plugin) => only.has(plugin.id));
-    const enabledPluginIds = selected.map((plugin) => plugin.id);
+    const candidates = only === null
+      ? eligibleSelected
+      : eligibleSelected.filter((plugin) => only.has(plugin.id));
+    const enabledPluginIds = eligibleSelected.map((plugin) => plugin.id);
     const activeIds = new Set(enabledPluginIds);
     const catalogs = Object.fromEntries(
       Object.entries(this.input.state().pluginCatalogs).filter(([pluginId]) => activeIds.has(pluginId)),

@@ -60,6 +60,8 @@ interface StoredInstallation {
 }
 
 export class ActivationStore {
+  private reconnectRequired = false;
+
   constructor(private readonly app: App) {}
 
   async client(input: {
@@ -83,7 +85,8 @@ export class ActivationStore {
       return { client, bootstrap: reusable, authorityWorkspaceId: stored.authorityWorkspaceId };
     }
     if (existing === null || Date.parse(stored.bootstrap.challengeExpiresAt) <= Date.now()) {
-      throw new Error("此设备的语枢授权已过期，请重新连接。");
+      this.invalidate();
+      throw new Error("设备授权已失效，需要重新连接。");
     }
     const bootstrap = await this.renewCredential({
       apiBaseUrl: input.apiBaseUrl,
@@ -99,6 +102,7 @@ export class ActivationStore {
     readonly ecosystemSlug: string;
     readonly callbackAction: string;
   }): Promise<string> {
+    this.reconnectRequired = false;
     // Browser authorization is an explicit device re-enrollment. Reusing one
     // signing key for another installation is correctly contained as cloning.
     const freshKey = await createSigningKey();
@@ -164,6 +168,7 @@ export class ActivationStore {
       linkingCode: input.linkingCode,
       prepared: pending.prepared,
     });
+    this.reconnectRequired = false;
     this.app.secretStorage.setSecret(PENDING_AUTHORIZATION_SECRET_ID, "");
     return bootstrap;
   }
@@ -175,7 +180,21 @@ export class ActivationStore {
       Date.parse(stored.bootstrap.challengeExpiresAt) > Date.now();
   }
 
+  requiresReconnect(): boolean {
+    return this.reconnectRequired;
+  }
+
   clear(): void {
+    this.reconnectRequired = false;
+    this.clearStoredActivation();
+  }
+
+  private invalidate(): void {
+    this.reconnectRequired = true;
+    this.clearStoredActivation();
+  }
+
+  private clearStoredActivation(): void {
     this.app.secretStorage.setSecret(INSTALLATION_SECRET_ID, "");
     this.app.secretStorage.setSecret(SIGNING_KEY_SECRET_ID, "");
     this.app.secretStorage.setSecret(PENDING_AUTHORIZATION_SECRET_ID, "");
@@ -276,7 +295,10 @@ export class ActivationStore {
         },
       },
     });
-    if (response.status !== 200) throw new Error(`设备授权续期失败：HTTP ${response.status}`);
+    if (response.status !== 200) {
+      if (response.status === 401 || response.status === 403) this.invalidate();
+      throw new Error(`设备授权续期失败：HTTP ${response.status}`);
+    }
     const renewal = parsePublicCredentialRenewalResponse(response.body);
     if (renewal.installationId !== input.bootstrap.installationId ||
       renewal.intakeCredential.value !== `${pending.tokenPrefix}.${pending.secret}`) {

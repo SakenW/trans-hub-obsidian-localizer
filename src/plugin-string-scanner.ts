@@ -112,10 +112,12 @@ export async function scanPluginUiStrings(input: {
       });
     }
   }
-  if (!collectStructuredMatches(input.bundle, collected, input.sourceLocale)) {
-    collectRegexMatches(input.bundle, UI_CALL, "ui-call", "ui-call", collected, input.sourceLocale);
-    collectRegexMatches(input.bundle, OPTION_CALL, "ui-call", "addOption", collected, input.sourceLocale, 2);
-    collectRegexMatches(input.bundle, UI_PROPERTY, "ui-property", "ui-property", collected, input.sourceLocale);
+  if (!collectEmbeddedEnglishCatalog(input.bundle, collected, input.sourceLocale)) {
+    if (!collectStructuredMatches(input.bundle, collected, input.sourceLocale)) {
+      collectRegexMatches(input.bundle, UI_CALL, "ui-call", "ui-call", collected, input.sourceLocale);
+      collectRegexMatches(input.bundle, OPTION_CALL, "ui-call", "addOption", collected, input.sourceLocale, 2);
+      collectRegexMatches(input.bundle, UI_PROPERTY, "ui-property", "ui-property", collected, input.sourceLocale);
+    }
   }
   const strings = await Promise.all([...collected.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
@@ -147,6 +149,121 @@ export async function scanPluginUiStrings(input: {
     strings,
     scannedAt: (input.now?.() ?? new Date()).toISOString(),
   };
+}
+
+function collectEmbeddedEnglishCatalog(
+  bundle: string,
+  target: Map<string, CandidateAggregate>,
+  sourceLocale: string,
+): boolean {
+  const tokens = tokenizeJavascript(bundle);
+  if (tokens === null) return false;
+  const assignments = new Map<string, readonly Token[]>();
+  for (let index = 0; index < tokens.length - 2; index += 1) {
+    const name = tokens[index];
+    if (name?.kind !== "identifier" || tokens[index + 1]?.raw !== "=" || tokens[index + 2]?.raw !== "{") continue;
+    const end = matchingTokenIndex(tokens, index + 2);
+    if (end === -1) continue;
+    assignments.set(name.raw, tokens.slice(index + 2, end + 1));
+  }
+  for (const registry of assignments.values()) {
+    const localeTargets = localeRegistryTargets(registry);
+    if (localeTargets.size < 3) continue;
+    const englishTarget = localeTargets.get("en");
+    const english = englishTarget === undefined ? undefined : assignments.get(englishTarget);
+    if (english === undefined) continue;
+    collectLocaleValues(english, target, sourceLocale);
+    return true;
+  }
+  return false;
+}
+
+function localeRegistryTargets(tokens: readonly Token[]): ReadonlyMap<string, string> {
+  const targets = new Map<string, string>();
+  if (tokens[0]?.raw !== "{" || matchingTokenIndex(tokens, 0) !== tokens.length - 1) return targets;
+  for (const entry of splitTopLevelTokens(tokens.slice(1, -1))) {
+    const colon = topLevelTokenIndex(entry, ":");
+    if (colon <= 0) continue;
+    const key = staticCatalogKey(entry.slice(0, colon));
+    const value = entry.slice(colon + 1);
+    if (key === null || value.length !== 1 || value[0]?.kind !== "identifier") continue;
+    if (!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/u.test(key)) continue;
+    targets.set(canonicalLocale(key), value[0].raw);
+  }
+  return targets;
+}
+
+function canonicalLocale(value: string): string {
+  const parts = value.split("-");
+  return parts.map((part, index) => {
+    if (index === 0) return part.toLowerCase();
+    if (part.length === 4) return part[0]?.toUpperCase() + part.slice(1).toLowerCase();
+    if (part.length === 2) return part.toUpperCase();
+    return part.toLowerCase();
+  }).join("-");
+}
+
+function collectLocaleValues(
+  tokens: readonly Token[],
+  target: Map<string, CandidateAggregate>,
+  sourceLocale: string,
+): void {
+  if (tokens[0]?.raw === "{" && matchingTokenIndex(tokens, 0) === tokens.length - 1) {
+    for (const entry of splitTopLevelTokens(tokens.slice(1, -1))) {
+      const colon = topLevelTokenIndex(entry, ":");
+      if (colon <= 0) continue;
+      collectLocaleValues(entry.slice(colon + 1), target, sourceLocale);
+    }
+    return;
+  }
+  if (tokens[0]?.raw === "[" && matchingTokenIndex(tokens, 0) === tokens.length - 1) {
+    for (const entry of splitTopLevelTokens(tokens.slice(1, -1))) {
+      collectLocaleValues(entry, target, sourceLocale);
+    }
+    return;
+  }
+  const counter = { value: 0 };
+  const rendered = renderExpression(tokens, counter);
+  const symbol = tokens[0];
+  if (rendered === null || symbol === undefined) return;
+  addCandidate(target, rendered.text, "ui-property", sourceLocale, {
+    origin: "ui-property",
+    strategy: "structured",
+    symbol: "locale:en",
+    offset: symbol.start,
+    line: symbol.line,
+    column: symbol.column,
+  }, rendered.staticText);
+}
+
+function splitTopLevelTokens(tokens: readonly Token[]): readonly (readonly Token[])[] {
+  const result: Token[][] = [[]];
+  let depth = 0;
+  for (const token of tokens) {
+    if (token.raw === "(" || token.raw === "[" || token.raw === "{") depth += 1;
+    else if (token.raw === ")" || token.raw === "]" || token.raw === "}") depth -= 1;
+    if (token.raw === "," && depth === 0) result.push([]);
+    else result.at(-1)?.push(token);
+  }
+  return result;
+}
+
+function topLevelTokenIndex(tokens: readonly Token[], expected: string): number {
+  let depth = 0;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const raw = tokens[index]?.raw;
+    if (raw === "(" || raw === "[" || raw === "{") depth += 1;
+    else if (raw === ")" || raw === "]" || raw === "}") depth -= 1;
+    else if (raw === expected && depth === 0) return index;
+  }
+  return -1;
+}
+
+function staticCatalogKey(tokens: readonly Token[]): string | null {
+  if (tokens.length !== 1) return null;
+  if (tokens[0]?.kind === "identifier") return tokens[0].raw;
+  if (tokens[0]?.kind === "literal") return decodeJsLiteral(tokens[0].raw);
+  return null;
 }
 
 export function resolvePluginStringSemanticRole(
@@ -372,6 +489,14 @@ function tokenizeJavascript(source: string): Token[] | null {
       continue;
     }
     const start = index;
+    if (character === "/" && isRegexLiteralStart(tokens)) {
+      const end = findRegexEnd(source, index);
+      if (end === -1) return null;
+      index = end;
+      while (index < source.length && /[A-Za-z]/u.test(source[index] ?? "")) index += 1;
+      tokens.push(makeToken("other", source.slice(start, index), start, index, lineStarts));
+      continue;
+    }
     if (character === "\"" || character === "'" || character === "`") {
       const end = findQuotedEnd(source, index, character);
       if (end === -1) return null;
@@ -390,6 +515,26 @@ function tokenizeJavascript(source: string): Token[] | null {
     tokens.push(makeToken(kind, character, start, index, lineStarts));
   }
   return tokens;
+}
+
+function isRegexLiteralStart(tokens: readonly Token[]): boolean {
+  const previous = tokens.at(-1)?.raw;
+  if (previous === undefined) return true;
+  return ["(", "[", "{", "=", ":", ",", ";", "!", "?", "+", "-", "*", "%", "&", "|", "^", "~", ">", "<"].includes(previous)
+    || ["return", "case", "throw", "delete", "typeof", "void", "new", "in", "of"].includes(previous);
+}
+
+function findRegexEnd(source: string, start: number): number {
+  let inCharacterClass = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\") index += 1;
+    else if (character === "\n" || character === "\r") return -1;
+    else if (character === "[") inCharacterClass = true;
+    else if (character === "]") inCharacterClass = false;
+    else if (character === "/" && !inCharacterClass) return index + 1;
+  }
+  return -1;
 }
 
 function findQuotedEnd(source: string, start: number, quote: string): number {
@@ -486,9 +631,10 @@ export function isTranslatableUiText(value: string): boolean {
 }
 
 export function placeholderSignature(value: string): string {
-  return [...value.matchAll(/\$\{[^}]+\}|\{\{[^}]+\}\}|\{\d+\}|%[sdif]|<\/?[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][\w:.-]*(?:=(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*\s*\/?>/gu)]
-    .map((match) => match[0])
-    .join("\u0000");
+  const placeholders = [...value.matchAll(/\$\{[^}]+\}|\{\{[^}]+\}\}|\{\d+\}|%[sdif]|<\/?[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][\w:.-]*(?:=(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*\s*\/?>/gu)]
+    .map((match) => match[0]);
+  if (placeholders.length < 2) return placeholders[0] ?? "";
+  return JSON.stringify(placeholders);
 }
 
 function decodeJsLiteral(literal: string): string | null {

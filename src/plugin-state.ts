@@ -32,6 +32,7 @@ export interface PluginTranslationState {
   readonly pluginVersion: string;
   readonly sourceVersionId: string;
   readonly targetLocale: string;
+  readonly upstreamNativeCount?: number;
   readonly entries: readonly PluginUiTranslation[];
   readonly pulledAt: string;
 }
@@ -40,6 +41,7 @@ export interface PluginSubmissionState {
   readonly pluginId: string;
   readonly pluginVersion: string;
   readonly catalogDigest: string;
+  readonly adapterProfileDigest?: string;
   readonly installationId?: string;
   readonly contributionId: string;
   readonly contributionState: string;
@@ -169,6 +171,9 @@ function parsePluginSubmission(value: unknown): PluginSubmissionState | null {
     pluginId: value.pluginId as string,
     pluginVersion: value.pluginVersion as string,
     catalogDigest: value.catalogDigest as string,
+    ...(typeof value.adapterProfileDigest === "string" && value.adapterProfileDigest !== ""
+      ? { adapterProfileDigest: value.adapterProfileDigest }
+      : {}),
     ...(typeof value.installationId === "string" && value.installationId !== ""
       ? { installationId: value.installationId }
       : {}),
@@ -190,6 +195,10 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
   const sourceVersionId = stringValue(value.sourceVersionId);
   const targetLocale = stringValue(value.targetLocale);
   const pulledAt = stringValue(value.pulledAt);
+  const upstreamNativeCount = typeof value.upstreamNativeCount === "number"
+    && Number.isInteger(value.upstreamNativeCount) && value.upstreamNativeCount >= 0
+    ? value.upstreamNativeCount
+    : 0;
   if ([pluginId, pluginVersion, sourceVersionId, targetLocale, pulledAt].some((item) => item === null)) return null;
   const entries = value.entries.map((entry) => {
     if (!isRecord(entry)) return null;
@@ -227,6 +236,7 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
   return {
     pluginId: pluginId!, pluginVersion: pluginVersion!, sourceVersionId: sourceVersionId!,
     targetLocale: targetLocale!, pulledAt: pulledAt!,
+    upstreamNativeCount,
     entries: entries.filter((entry): entry is PluginUiTranslation => entry !== null),
   };
 }

@@ -29,6 +29,9 @@ vi.mock("../src/plugin-source-resolution", () => ({
 }));
 
 vi.mock("../src/submission", () => ({
+  OBSIDIAN_PUBLIC_PROFILE: {
+    adapterBuildDigestHex: "2111e10336edf23c59661e66b6155a1ef127642161ea4ccd766fb1cc16b15580",
+  },
   submitObsidianLocalizationObservation: vi.fn(),
   submitObsidianPluginDiscovery: vi.fn(),
 }));
@@ -77,6 +80,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
           pluginId: "dataview",
           pluginVersion: "0.5.68",
           catalogDigest: "catalog-digest",
+          adapterProfileDigest: "2111e10336edf23c59661e66b6155a1ef127642161ea4ccd766fb1cc16b15580",
           installationId: "installation",
           contributionId: "discovery-contribution",
           contributionState: "received",
@@ -177,7 +181,6 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       contributionId: "new-localization",
       state: "received",
     } as never);
-    mocks.resolvePublished.mockResolvedValue(undefined);
     const getContributionStatus = vi.fn();
     const activationStore = {
       client: vi.fn().mockResolvedValue({
@@ -201,10 +204,94 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     });
 
     expect(getContributionStatus).not.toHaveBeenCalled();
+    expect(mocks.resolvePublished).not.toHaveBeenCalled();
     expect(submitObsidianPluginDiscovery).toHaveBeenCalledOnce();
     expect(submitObsidianLocalizationObservation).toHaveBeenCalledOnce();
     expect(state.pluginSubmissions.dataview).toEqual(expect.objectContaining({
       installationId: "new-installation",
+      contributionId: "new-discovery",
+      localizationContributionId: "new-localization",
+    }));
+    expect(summary).toEqual(expect.objectContaining({
+      submittedCount: 1,
+      requestedCount: 1,
+      waitingCount: 1,
+    }));
+  });
+
+  it("re-submits automatically after the public observation profile changes", async () => {
+    let state: PluginState = {
+      ...EMPTY_PLUGIN_STATE,
+      pluginCatalogs: {
+        dataview: {
+          pluginId: "dataview",
+          pluginName: "Dataview",
+          pluginVersion: "0.5.68",
+          sourceLocale: "en",
+          digest: "catalog-digest",
+          artifactDigest: "a".repeat(64),
+          scannedAt: "2026-07-18T00:00:00.000Z",
+          strings: [{
+            key: STRING_KEY,
+            source: "Current source",
+            origins: ["ui-call"],
+            placeholderSignature: "",
+          }],
+        },
+      },
+      pluginSubmissions: {
+        dataview: {
+          pluginId: "dataview",
+          pluginVersion: "0.5.68",
+          catalogDigest: "catalog-digest",
+          adapterProfileDigest: "old-profile",
+          installationId: "installation",
+          contributionId: "old-discovery",
+          contributionState: "received",
+          localizationTargetLocale: "zh-CN",
+          localizationContributionId: "old-localization",
+          localizationContributionState: "received",
+          submittedAt: "2026-07-18T00:00:00.000Z",
+        },
+      },
+    };
+    vi.mocked(submitObsidianPluginDiscovery).mockResolvedValue({
+      contributionId: "new-discovery",
+      state: "received",
+      recordedAt: "2026-07-19T00:00:00.000Z",
+    } as never);
+    vi.mocked(submitObsidianLocalizationObservation).mockResolvedValue({
+      contributionId: "new-localization",
+      state: "received",
+    } as never);
+    const getContributionStatus = vi.fn();
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: { getContributionStatus },
+        bootstrap: {
+          installationId: "installation",
+          intakeCredential: { value: "installation-token" },
+        },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+
+    const summary = await synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      targetLocale: "zh-CN",
+      excludedPluginIds: [],
+      activationStore,
+      getState: () => state,
+      replaceState: (next) => { state = next; },
+      save: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(getContributionStatus).not.toHaveBeenCalled();
+    expect(mocks.resolvePublished).not.toHaveBeenCalled();
+    expect(submitObsidianPluginDiscovery).toHaveBeenCalledOnce();
+    expect(submitObsidianLocalizationObservation).toHaveBeenCalledOnce();
+    expect(state.pluginSubmissions.dataview).toEqual(expect.objectContaining({
+      adapterProfileDigest: "2111e10336edf23c59661e66b6155a1ef127642161ea4ccd766fb1cc16b15580",
       contributionId: "new-discovery",
       localizationContributionId: "new-localization",
     }));
