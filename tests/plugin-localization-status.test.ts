@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  describePluginLocalizationStatus,
-  pluginManualRetryKind,
-} from "../src/plugin-localization-status";
+import { describePluginLocalizationStatus } from "../src/plugin-localization-status";
 
 const baseSubmission = {
   pluginId: "dataview",
@@ -121,19 +118,8 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "failed",
-      label: "机器翻译失败，服务器已停止自动重试。点击右侧“重试此插件”。",
+      label: "机器翻译失败，自动重试已停止。可单独重试此插件。",
     });
-    expect(pluginManualRetryKind({
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: { ...failed, failureRetryable: false },
-      },
-      targetLocale: "zh-CN",
-    })).toBe("resubmit");
-    expect(pluginManualRetryKind({
-      submission: { ...baseSubmission, localizationDemandStatus: failed },
-      targetLocale: "zh-CN",
-    })).toBeNull();
   });
 
   it("prioritizes an applied translation for the selected locale", () => {
@@ -158,44 +144,7 @@ describe("describePluginLocalizationStatus", () => {
     expect(describePluginLocalizationStatus({
       submission: { ...baseSubmission, localizationContributionState: "rejected" },
       targetLocale: "zh-CN",
-    })).toEqual({
-      kind: "failed",
-      label: "需求未被接受。点击右侧“重试此插件”。",
-    });
-  });
-
-  it("仅为需要用户动作的失败提供逐项重试", () => {
-    expect(pluginManualRetryKind({
-      submission: {
-        ...baseSubmission,
-        lastError: {
-          code: "plugin_sync_failed",
-          message: "temporary network failure",
-          updatedAt: "2026-07-23T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    })).toBe("resynchronize");
-    expect(pluginManualRetryKind({
-      submission: {
-        ...baseSubmission,
-        localizationContributionId: "localization-contribution",
-        localizationContributionState: "received",
-      },
-      targetLocale: "zh-CN",
-    })).toBeNull();
-    expect(pluginManualRetryKind({
-      submission: { ...baseSubmission, localizationContributionState: "rejected" },
-      translation: {
-        pluginId: "dataview",
-        pluginVersion: "0.5.68",
-        sourceVersionId: "source-version",
-        targetLocale: "zh-CN",
-        entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
-        pulledAt: "2026-07-23T00:00:00Z",
-      },
-      targetLocale: "zh-CN",
-    })).toBeNull();
+    })).toEqual({ kind: "failed", label: "处理失败：需求未被接受" });
   });
 
   it("显示当前目录的真实覆盖率，而不是仅显示缓存条目数", () => {
@@ -211,13 +160,12 @@ describe("describePluginLocalizationStatus", () => {
       translation: {
         pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
         targetLocale: "zh-CN", entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
-        sourceUnitCount: 400, upstreamNativeCount: 374, publishedUnitCount: 0, missingUnitCount: 26,
         pulledAt: "2026-07-18T00:00:00Z",
       },
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "catalog-mismatch",
-      label: "服务器正在更新目录身份；已安全应用 1 条精确命中译文；权威目录 400 条：插件自带 374 · 语枢已发布 0 · 待补 26",
+      label: "服务器正在更新目录身份；已安全应用 1 条精确命中译文",
     });
   });
 

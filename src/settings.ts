@@ -26,9 +26,7 @@ import {
 import { describePluginSelectionProcessing } from "./plugin-selection-processing";
 import {
   describePluginLocalizationStatus,
-  pluginManualRetryKind,
   PLUGIN_LOCALIZATION_STATUS_FILTERS,
-  type PluginManualRetryKind,
   type PluginLocalizationStatusKind,
 } from "./plugin-localization-status";
 import {
@@ -486,28 +484,10 @@ export class TransHubSettingTab extends PluginSettingTab {
         const visualKind = sourceStatus?.kind ?? localizationStatus.kind;
         row.settingEl.addClass(`trans-hub-plugin-picker__item--${visualKind}`);
         if (plugin.source.kind !== "supported") row.settingEl.addClass("is-disabled");
-        const retryKind = pluginManualRetryKind({
-          submission: pluginState.pluginSubmissions[plugin.id],
-          translation: pluginState.pluginTranslations[plugin.id],
-          targetLocale: this.plugin.settings.targetLocale,
-        });
-        if (plugin.source.kind === "supported" && retryKind !== null) {
-          row.addButton((button) => {
-            button
-              .setButtonText(translate("重试此插件"))
-              .setTooltip(translate("重新检查并重试 {pluginName}，无需关闭本地化开关", {
-                pluginName: displayName,
-              }))
-              .setCta();
-            button.buttonEl.setAttr("aria-label", translate("重试 {pluginName} 本地化", {
-              pluginName: displayName,
-            }));
-            button.onClick(async () => {
-              button.buttonEl.disabled = true;
-              button.setButtonText(translate("正在重试…"));
-              await this.retrySinglePlugin(plugin.id, displayName, retryKind);
-            });
-          });
+        if (plugin.source.kind === "supported" && localizationStatus.kind === "failed") {
+          row.addButton((button) => button.setButtonText(translate("重新处理")).setTooltip(translate("仅重新处理此插件")).onClick(async () => {
+            await this.retrySinglePlugin(plugin.id);
+          }));
         }
         const catalog = pluginState.pluginCatalogs[plugin.id];
         if (plugin.source.kind === "supported" && !excluded.has(plugin.id) && catalog !== undefined) {
@@ -523,20 +503,13 @@ export class TransHubSettingTab extends PluginSettingTab {
     renderRows();
   }
 
-  private async retrySinglePlugin(
-    pluginId: string,
-    pluginName: string,
-    retryKind: PluginManualRetryKind,
-  ): Promise<void> {
+  private async retrySinglePlugin(pluginId: string): Promise<void> {
     if (this.selectionProcessing !== null) await this.selectionProcessing;
-    this.selectionStatus = translate("正在重试 {pluginName}…", { pluginName });
+    this.selectionStatus = translate("正在重新处理 {pluginId}…", { pluginId });
     this.selectionStatusFailed = false;
     new Notice(this.selectionStatus);
     try {
-      const result = await this.plugin.processSinglePlugin(
-        pluginId,
-        retryKind === "resubmit",
-      );
+      const result = await this.plugin.processSinglePlugin(pluginId);
       this.selectionStatus = describePluginSelectionProcessing(result);
       new Notice(this.selectionStatus);
     } catch (error) {
@@ -619,19 +592,13 @@ export class TransHubSettingTab extends PluginSettingTab {
   private renderBrand(container: HTMLElement): void {
     const details = container.createEl("details", { cls: "trans-hub-settings__brand" });
     const summary = details.createEl("summary");
-    const summaryCopy = summary.createSpan({ cls: "trans-hub-settings__brand-summary-copy" });
-    const summaryTitle = summaryCopy.createSpan({ cls: "trans-hub-settings__brand-summary-title" });
-    summaryTitle.createEl("strong", { text: translate("关于语枢") });
-    summaryTitle.createSpan({ text: "Trans-Hub", cls: "trans-hub-settings__brand-name" });
-    summaryCopy.createSpan({
+    const summaryText = summary.createSpan();
+    summaryText.createEl("strong", { text: translate("关于语枢") });
+    summaryText.createSpan({ text: "Trans-Hub", cls: "trans-hub-settings__brand-name" });
+    summaryText.createSpan({
       text: translate("万语汇于一枢，创想行于无碍"),
       cls: "trans-hub-settings__brand-tagline",
     });
-    const action = summary.createSpan({ cls: "trans-hub-settings__brand-action" });
-    action.setAttr("aria-hidden", "true");
-    action.createSpan({ text: translate("查看详情"), cls: "trans-hub-settings__brand-action-closed" });
-    action.createSpan({ text: translate("收起详情"), cls: "trans-hub-settings__brand-action-open" });
-    action.createSpan({ cls: "trans-hub-settings__brand-chevron" });
     const content = details.createDiv({ cls: "trans-hub-settings__brand-content" });
     const principles = content.createDiv({ cls: "trans-hub-settings__brand-principles" });
     principles.createEl("p", { text: translate("连接全球生态，沉淀语言资产"), cls: "trans-hub-settings__brand-lead" });

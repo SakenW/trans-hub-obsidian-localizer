@@ -104,35 +104,4 @@ describe("processPluginSelection", () => {
       "first:start", "first:save", "second:start", "second:save",
     ]);
   });
-
-  it("明确区分权威目录总量与本机安全应用数量", () => {
-    expect(describePluginSelectionProcessing({
-      kind: "synchronized",
-      scan: scanResult,
-      sync: {
-        submittedCount: 0,
-        requestedCount: 0,
-        pulledCount: 1,
-        waitingCount: 0,
-        translationCount: 10,
-      },
-    })).toBe("已更新 1 个插件，本机安全应用 10 条译文。");
-  });
-
-  it("失败摘要直接指向逐项重试按钮", () => {
-    expect(describePluginSelectionProcessing({
-      kind: "synchronized",
-      scan: scanResult,
-      sync: {
-        submittedCount: 0,
-        requestedCount: 0,
-        pulledCount: 0,
-        waitingCount: 0,
-        translationCount: 0,
-        failedPluginIds: ["dataview"],
-      },
-    })).toBe(
-      "已检查 2 个插件；1 个需要重试，请点击对应插件的“重试此插件”。",
-    );
-  });
 });

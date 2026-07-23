@@ -12,22 +12,6 @@ const plugin = {
 } as const;
 
 describe("scanPluginUiStrings", () => {
-  it("keeps predominantly English metadata containing a non-Latin brand name", async () => {
-    const catalog = await scanPluginUiStrings({
-      plugin: {
-        ...plugin,
-        description: "Sync your vault with Nutstore/坚果云 using WebDAV protocol.",
-      },
-      sourceLocale: "en",
-      bundle: 'setting.setName("设置");',
-    });
-
-    expect(catalog.strings.map((item) => item.source)).toContain(
-      "Sync your vault with Nutstore/坚果云 using WebDAV protocol.",
-    );
-    expect(catalog.strings.map((item) => item.source)).not.toContain("设置");
-  });
-
   it("extracts conservative static UI literals and deduplicates them", async () => {
     const catalog = await scanPluginUiStrings({
       plugin,
@@ -41,7 +25,7 @@ describe("scanPluginUiStrings", () => {
         'setting.setName("Настройки");',
         "new Notice(`Finished successfully`);",
         "const dynamic = `Hello ${name}`;",
-        'const config = { placeholder: "Search commands", onClick: run, endpoint: "https://example.com/api" };',
+        'const config = { placeholder: "Search commands", endpoint: "https://example.com/api" };',
         'const css = { class: ".workspace-leaf" };',
         'const grammar = { name: "%_Choice_1" };',
       ].join("\n"),
@@ -73,7 +57,7 @@ describe("scanPluginUiStrings", () => {
     expect(catalog.scannedAt).toBe("2026-07-15T00:00:00.000Z");
   });
 
-  it("rejects unproven object properties unless an enclosing UI registration proves presentation", async () => {
+  it("rejects bare parser identifiers unless an enclosing UI registration proves presentation", async () => {
     const falsePositives = [
       "Attribute", "AttributeValue", "Attributes", "CharClass", "CharCode", "CharCodeRange",
       "CharRange", "Comment", "Link", "PrimaryPreDecoration", "RULE_Char", "Url", "wrapper",
@@ -84,15 +68,12 @@ describe("scanPluginUiStrings", () => {
       bundle: [
         `const grammar = [${falsePositives.map((value) => `{name:"${value}",bnf:[]}`).join(",")}];`,
         'const wrapper = { name: "wrapper", func: execute };',
-        'const model = { name: "Anthropic Claude Opus 4.6", description: "Internal model metadata" };',
         'plugin.addCommand({ id: "transpose", name: "Transpose", editorCheckCallback: run });',
       ].join("\n"),
     });
 
     const sources = catalog.strings.map((item) => item.source);
     expect(sources).toContain("Transpose");
-    expect(sources).not.toContain("Anthropic Claude Opus 4.6");
-    expect(sources).not.toContain("Internal model metadata");
     expect(sources).not.toEqual(expect.arrayContaining(falsePositives));
   });
 
@@ -157,7 +138,7 @@ describe("scanPluginUiStrings", () => {
         'setting.setName("Open " + "Dataview settings");',
         'setting.setDesc("Rows: " + pageCount + " · fields: " + fieldCount);',
         'setting.setDesc(`Indexed ${pageCount} pages`);',
-        'const worker = { name: "Dataview Indexer " + (index + 1), callback: run };',
+        'const worker = { name: "Dataview Indexer " + (index + 1) };',
         'const cache = { name: "dataview/cache/" + appId };',
         'setting.setDesc(description);',
       ].join("\n"),

@@ -3,20 +3,6 @@ import { describe, expect, it } from "vitest";
 import { parsePluginState } from "../src/plugin-state";
 
 describe("parsePluginState", () => {
-  it("preserves a bounded source observation generation", () => {
-    const state = parsePluginState({
-      pluginSubmissions: {
-        dataview: {
-          pluginId: "dataview", pluginVersion: "0.5.68", catalogDigest: "catalog",
-          contributionId: "contribution", contributionState: "received",
-          observationGeneration: 1, submittedAt: "2026-07-23T00:00:00.000Z",
-        },
-      },
-    });
-
-    expect(state.pluginSubmissions.dataview?.observationGeneration).toBe(1);
-  });
-
   it("preserves valid extraction evidence across plugin reloads", () => {
     const state = parsePluginState({
       pluginCatalogs: {
@@ -160,25 +146,5 @@ describe("parsePluginState", () => {
       },
     });
     expect(invalid.pluginTranslations).toEqual({});
-  });
-
-  it("在重启后保留权威目录覆盖数量", () => {
-    const state = parsePluginState({
-      pluginTranslations: {
-        "nutstore-sync": {
-          pluginId: "nutstore-sync", pluginVersion: "1.2.2", sourceVersionId: "source-version",
-          targetLocale: "zh-CN", sourceUnitCount: 400, upstreamNativeCount: 374,
-          publishedUnitCount: 0, missingUnitCount: 26, entries: [],
-          pulledAt: "2026-07-23T00:00:00.000Z",
-        },
-      },
-    });
-
-    expect(state.pluginTranslations["nutstore-sync"]).toEqual(expect.objectContaining({
-      sourceUnitCount: 400,
-      upstreamNativeCount: 374,
-      publishedUnitCount: 0,
-      missingUnitCount: 26,
-    }));
   });
 });

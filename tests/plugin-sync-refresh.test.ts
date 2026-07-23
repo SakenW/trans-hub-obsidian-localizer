@@ -32,7 +32,7 @@ vi.mock("../src/plugin-source-resolution", () => ({
 
 vi.mock("../src/submission", () => ({
   OBSIDIAN_PUBLIC_PROFILE: {
-    adapterBuildDigestHex: "8c8b4d4a9e9996591a0f5fa92cceeac6d4a49a8aa6e9f9179c7184e948f1f7ca",
+    adapterBuildDigestHex: "117aade03541d1e4740eb0892fb9866be6ddc1973059453049a5a7e01fe8d518",
   },
   submitObsidianLocalizationObservation: vi.fn(),
   submitObsidianPluginDiscovery: vi.fn(),
@@ -104,7 +104,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
           pluginId: "dataview",
           pluginVersion: "0.5.68",
           catalogDigest: "catalog-digest",
-          adapterProfileDigest: "8c8b4d4a9e9996591a0f5fa92cceeac6d4a49a8aa6e9f9179c7184e948f1f7ca",
+          adapterProfileDigest: "117aade03541d1e4740eb0892fb9866be6ddc1973059453049a5a7e01fe8d518",
           installationId: "installation",
           contributionId: "discovery-contribution",
           contributionState: "received",
@@ -243,7 +243,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
           pluginId: "dataview",
           pluginVersion: "0.5.68",
           catalogDigest: "catalog-digest",
-          adapterProfileDigest: "8c8b4d4a9e9996591a0f5fa92cceeac6d4a49a8aa6e9f9179c7184e948f1f7ca",
+          adapterProfileDigest: "117aade03541d1e4740eb0892fb9866be6ddc1973059453049a5a7e01fe8d518",
           installationId: "installation",
           contributionId: "discovery-contribution",
           contributionState: "received",
@@ -474,208 +474,6 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     }));
   });
 
-  it("re-submits a rejected source observation once with a new generation", async () => {
-    mocks.resolvePublished.mockReturnValue(undefined);
-    let state: PluginState = {
-      ...EMPTY_PLUGIN_STATE,
-      pluginCatalogs: {
-        dataview: {
-          pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
-          sourceLocale: "en", digest: "catalog-digest", artifactDigest: "a".repeat(64),
-          scannedAt: "2026-07-18T00:00:00.000Z",
-          strings: [{ key: STRING_KEY, source: "Current source", origins: ["ui-call"], placeholderSignature: "" }],
-        },
-      },
-      pluginSubmissions: {
-        dataview: {
-          pluginId: "dataview", pluginVersion: "0.5.68", catalogDigest: "catalog-digest",
-          adapterProfileDigest: "8c8b4d4a9e9996591a0f5fa92cceeac6d4a49a8aa6e9f9179c7184e948f1f7ca",
-          installationId: "installation", contributionId: "rejected-discovery",
-          contributionState: "received", repository: "blacksmithgu/obsidian-dataview",
-          localizationTargetLocale: "zh-CN", localizationContributionId: "stale-localization",
-          localizationContributionState: "export_ready", submittedAt: "2026-07-18T00:00:00.000Z",
-        },
-      },
-    };
-    vi.mocked(submitObsidianPluginDiscovery).mockResolvedValue({
-      contributionId: "retry-discovery", state: "received",
-      recordedAt: "2026-07-23T00:00:00.000Z",
-    } as never);
-    vi.mocked(submitObsidianLocalizationObservation).mockResolvedValue({
-      contributionId: "retry-localization", state: "received",
-    } as never);
-    const getContributionStatus = vi.fn().mockResolvedValue({ state: "rejected" });
-    const activationStore = {
-      client: vi.fn().mockResolvedValue({
-        client: { getContributionStatus },
-        bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
-        authorityWorkspaceId: "workspace",
-      }),
-    } as unknown as ActivationStore;
-
-    const summary = await synchronizeConfiguredPluginTranslations({
-      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
-      activationStore, translationPackStore, getState: () => state,
-      replaceState: (next) => { state = next; }, save: vi.fn().mockResolvedValue(undefined),
-    });
-
-    expect(submitObsidianPluginDiscovery).toHaveBeenCalledWith(expect.objectContaining({
-      observationGeneration: 1,
-    }));
-    expect(submitObsidianLocalizationObservation).toHaveBeenCalledWith(expect.objectContaining({
-      observationGeneration: 1,
-    }));
-    expect(state.pluginSubmissions.dataview).toEqual(expect.objectContaining({
-      contributionId: "retry-discovery",
-      localizationContributionId: "retry-localization",
-      observationGeneration: 1,
-    }));
-    expect(summary).toEqual(expect.objectContaining({
-      submittedCount: 1, requestedCount: 1, waitingCount: 1, failedPluginIds: [],
-    }));
-  });
-
-  it("逐项手动重试会为已终止的本地化需求创建新代次", async () => {
-    mocks.resolvePublished.mockReturnValue(undefined);
-    const catalog = {
-      pluginId: "dataview",
-      pluginName: "Dataview",
-      pluginVersion: "0.5.68",
-      sourceLocale: "en",
-      digest: "catalog-digest",
-      artifactDigest: "a".repeat(64),
-      scannedAt: "2026-07-18T00:00:00.000Z",
-      strings: [{
-        key: STRING_KEY,
-        source: "Current source",
-        origins: ["ui-call" as const],
-        placeholderSignature: "",
-      }],
-    };
-    let state: PluginState = {
-      ...EMPTY_PLUGIN_STATE,
-      pluginCatalogs: { dataview: catalog },
-      pluginSubmissions: {
-        dataview: {
-          pluginId: "dataview",
-          pluginVersion: "0.5.68",
-          catalogDigest: "catalog-digest",
-          adapterProfileDigest: "8c8b4d4a9e9996591a0f5fa92cceeac6d4a49a8aa6e9f9179c7184e948f1f7ca",
-          installationId: "installation",
-          contributionId: "accepted-discovery",
-          contributionState: "accepted",
-          observationGeneration: 1,
-          repository: "blacksmithgu/obsidian-dataview",
-          localizationTargetLocale: "zh-CN",
-          localizationContributionId: "failed-localization",
-          localizationContributionState: "accepted",
-          localizationDemandStatus: {
-            state: "mt_failed",
-            sourceVersionId: "source-version",
-            targetLocale: "zh-CN",
-            targetVariant: "default",
-            totalUnitCount: 2,
-            workItemCount: 2,
-            nativeUnitCount: 0,
-            queuedCount: 0,
-            runningCount: 0,
-            succeededCount: 1,
-            failedCount: 1,
-            reviewedUnitCount: 0,
-            publishedUnitCount: 0,
-            retryAfterSeconds: 60,
-            failureRetryable: false,
-            updatedAt: "2026-07-23T00:00:00.000Z",
-          },
-          submittedAt: "2026-07-18T00:00:00.000Z",
-        },
-      },
-    };
-    vi.mocked(submitObsidianLocalizationObservation).mockResolvedValue({
-      contributionId: "manual-retry-localization",
-      state: "received",
-    } as never);
-    const getContributionStatus = vi.fn().mockResolvedValue({ state: "accepted" });
-    const activationStore = {
-      client: vi.fn().mockResolvedValue({
-        client: { getContributionStatus },
-        bootstrap: {
-          installationId: "installation",
-          intakeCredential: { value: "token" },
-        },
-        authorityWorkspaceId: "workspace",
-      }),
-    } as unknown as ActivationStore;
-
-    const summary = await synchronizeConfiguredPluginTranslations({
-      apiBaseUrl: "https://api.trans-hub.net",
-      targetLocale: "zh-CN",
-      excludedPluginIds: [],
-      onlyPluginIds: ["dataview"],
-      manualResubmitPluginIds: ["dataview"],
-      activationStore,
-      translationPackStore,
-      getState: () => state,
-      replaceState: (next) => { state = next; },
-      save: vi.fn().mockResolvedValue(undefined),
-    });
-
-    expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
-    expect(submitObsidianLocalizationObservation).toHaveBeenCalledWith(
-      expect.objectContaining({ observationGeneration: 2 }),
-    );
-    expect(state.pluginSubmissions.dataview).toEqual(expect.objectContaining({
-      observationGeneration: 2,
-      localizationContributionId: "manual-retry-localization",
-    }));
-    expect(state.pluginSubmissions.dataview?.localizationDemandStatus).toBeUndefined();
-    expect(summary).toEqual(expect.objectContaining({
-      requestedCount: 1,
-      waitingCount: 1,
-      failedPluginIds: [],
-    }));
-  });
-
-  it("does not loop after the automatic source resubmission is rejected", async () => {
-    mocks.resolvePublished.mockReturnValue(undefined);
-    const catalog = {
-      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
-      sourceLocale: "en", digest: "catalog-digest", artifactDigest: "a".repeat(64),
-      scannedAt: "2026-07-18T00:00:00.000Z",
-      strings: [{ key: STRING_KEY, source: "Current source", origins: ["ui-call" as const], placeholderSignature: "" }],
-    };
-    let state: PluginState = {
-      ...EMPTY_PLUGIN_STATE,
-      pluginCatalogs: { dataview: catalog },
-      pluginSubmissions: {
-        dataview: {
-          pluginId: "dataview", pluginVersion: "0.5.68", catalogDigest: "catalog-digest",
-          adapterProfileDigest: "8c8b4d4a9e9996591a0f5fa92cceeac6d4a49a8aa6e9f9179c7184e948f1f7ca",
-          installationId: "installation", contributionId: "retry-discovery",
-          contributionState: "received", observationGeneration: 1,
-          repository: "blacksmithgu/obsidian-dataview", submittedAt: "2026-07-23T00:00:00.000Z",
-        },
-      },
-    };
-    const activationStore = {
-      client: vi.fn().mockResolvedValue({
-        client: { getContributionStatus: vi.fn().mockResolvedValue({ state: "rejected" }) },
-        bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
-        authorityWorkspaceId: "workspace",
-      }),
-    } as unknown as ActivationStore;
-
-    const summary = await synchronizeConfiguredPluginTranslations({
-      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
-      activationStore, translationPackStore, getState: () => state,
-      replaceState: (next) => { state = next; }, save: vi.fn().mockResolvedValue(undefined),
-    });
-
-    expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
-    expect(submitObsidianLocalizationObservation).not.toHaveBeenCalled();
-    expect(summary).toEqual(expect.objectContaining({ waitingCount: 0, failedPluginIds: ["dataview"] }));
-  });
-
   it("re-submits automatically after the public observation profile changes", async () => {
     let state: PluginState = {
       ...EMPTY_PLUGIN_STATE,
@@ -749,7 +547,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     expect(submitObsidianPluginDiscovery).toHaveBeenCalledOnce();
     expect(submitObsidianLocalizationObservation).toHaveBeenCalledOnce();
     expect(state.pluginSubmissions.dataview).toEqual(expect.objectContaining({
-      adapterProfileDigest: "8c8b4d4a9e9996591a0f5fa92cceeac6d4a49a8aa6e9f9179c7184e948f1f7ca",
+      adapterProfileDigest: "117aade03541d1e4740eb0892fb9866be6ddc1973059453049a5a7e01fe8d518",
       contributionId: "new-discovery",
       localizationContributionId: "new-localization",
     }));

@@ -34,10 +34,7 @@ describe("resolvePublishedPluginSource", () => {
       artifactDigest: ARTIFACT_DIGEST,
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
       catalogIdentity: CATALOG_IDENTITY,
-      sourceUnitCount: 77,
       upstreamNativeCount: 0,
-      publishedUnitCount: 77,
-      missingUnitCount: 0,
     });
   });
 
@@ -57,7 +54,6 @@ describe("resolvePublishedPluginSource", () => {
     const body = catalog();
     body.objects[0].coverage[0].published_unit_count = 0;
     body.objects[0].coverage[0].upstream_unit_count = 65;
-    body.objects[0].coverage[0].missing_unit_count = 12;
     await expect(resolvePublishedPluginSource({
       transport: transport(200, body),
       pluginId: "dataview",
@@ -70,10 +66,7 @@ describe("resolvePublishedPluginSource", () => {
       artifactDigest: ARTIFACT_DIGEST,
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
       catalogIdentity: CATALOG_IDENTITY,
-      sourceUnitCount: 77,
       upstreamNativeCount: 65,
-      publishedUnitCount: 0,
-      missingUnitCount: 12,
     });
   });
 
@@ -108,7 +101,6 @@ describe("resolvePublishedPluginSource", () => {
   it("ignores higher-coverage candidates whose catalog identity does not match", async () => {
     const body = catalog();
     body.objects[0].coverage[0].published_unit_count = 70;
-    body.objects[0].coverage[0].missing_unit_count = 7;
     body.objects[0].coverage.push({
       ...body.objects[0].coverage[0],
       source_version_id: "019f0000-0000-7000-8000-000000000003",
@@ -127,10 +119,7 @@ describe("resolvePublishedPluginSource", () => {
       artifactDigest: ARTIFACT_DIGEST,
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
       catalogIdentity: CATALOG_IDENTITY,
-      sourceUnitCount: 77,
       upstreamNativeCount: 0,
-      publishedUnitCount: 70,
-      missingUnitCount: 7,
     });
   });
 
@@ -244,8 +233,6 @@ function catalog() {
         target_variant: "default",
         published_unit_count: 77,
         upstream_unit_count: 0,
-        total_unit_count: 77,
-        missing_unit_count: 0,
         source_snapshot_digest: SNAPSHOT_DIGEST,
         catalog_identity: CATALOG_IDENTITY,
       }],

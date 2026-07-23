@@ -18,8 +18,6 @@ export interface PluginLocalizationStatus {
   readonly label: string;
 }
 
-export type PluginManualRetryKind = "resynchronize" | "resubmit";
-
 export interface PluginTranslationSourceSummary {
   readonly upstreamNative: number;
   readonly reviewedFill: number;
@@ -37,30 +35,8 @@ export const PLUGIN_LOCALIZATION_STATUS_FILTERS: readonly {
   { value: "catalog-mismatch", label: "目录待同步" },
   { value: "waiting", label: "等待发布" },
   { value: "unrecorded", label: "未收录" },
-  { value: "failed", label: "需要重试" },
+  { value: "failed", label: "处理失败" },
 ];
-
-export function pluginManualRetryKind(input: {
-  readonly submission?: PluginSubmissionState;
-  readonly translation?: PluginTranslationState;
-  readonly targetLocale: string;
-}): PluginManualRetryKind | null {
-  if (
-    input.targetLocale === "en"
-    || input.translation?.targetLocale === input.targetLocale
-  ) return null;
-  const submission = input.submission;
-  if (submission === undefined) return null;
-  if (submission.lastError !== undefined) return "resynchronize";
-  const demand = submission.localizationDemandStatus;
-  if (
-    demand?.state === "rejected"
-    || (demand?.state === "mt_failed" && !demand.failureRetryable)
-    || submission.contributionState === "rejected"
-    || submission.localizationContributionState === "rejected"
-  ) return "resubmit";
-  return null;
-}
 
 export function describePluginLocalizationStatus(input: {
   readonly submission?: PluginSubmissionState;
@@ -78,25 +54,22 @@ export function describePluginLocalizationStatus(input: {
         if (identity.kind === "artifact") {
           return {
             kind: "catalog-mismatch",
-            label: appendAuthorityCoverage(
-              translate("本地插件文件与官方版本不一致；已安全应用 {count} 条精确命中译文", {
-                count: identity.safelyAppliedCount,
-              }),
-              input.translation,
-            ),
+            label: translate("本地插件文件与官方版本不一致；已安全应用 {count} 条精确命中译文", {
+              count: identity.safelyAppliedCount,
+            }),
           };
         }
         const scopes = identity.mismatchedScopes.map(scopeLabel).join("、");
         return {
           kind: "catalog-mismatch",
-          label: appendAuthorityCoverage(identity.kind === "legacy"
+          label: identity.kind === "legacy"
             ? translate("服务器正在更新目录身份；已安全应用 {count} 条精确命中译文", {
                 count: identity.safelyAppliedCount,
               })
             : translate("服务器目录正在更新：{scopes}；已安全应用 {count} 条精确命中译文", {
                 scopes: scopes === "" ? translate("目录范围") : scopes,
                 count: identity.safelyAppliedCount,
-              }), input.translation),
+              }),
         };
       }
     }
@@ -166,7 +139,7 @@ export function describePluginLocalizationStatus(input: {
   if (submission.lastError !== undefined) {
     return {
       kind: "failed",
-      label: translate("同步失败：{message}。点击右侧“重试此插件”，无需关闭开关。", {
+      label: translate("同步失败：{message}。可单独重试此插件。", {
         message: submission.lastError.message,
       }),
     };
@@ -177,10 +150,7 @@ export function describePluginLocalizationStatus(input: {
       case "awaiting_source":
         return { kind: "waiting", label: translate("等待可信来源收录") };
       case "rejected":
-        return {
-          kind: "failed",
-          label: translate("本地化需求未被接受。点击右侧“重试此插件”。"),
-        };
+        return { kind: "failed", label: translate("处理失败：本地化需求未被接受") };
       case "reconciled":
         return {
           kind: "waiting",
@@ -215,7 +185,7 @@ export function describePluginLocalizationStatus(input: {
             }
           : {
               kind: "failed",
-              label: translate("机器翻译失败，服务器已停止自动重试。点击右侧“重试此插件”。"),
+              label: translate("机器翻译失败，自动重试已停止。可单独重试此插件。"),
             };
       case "export_pending":
         return {
@@ -237,10 +207,7 @@ export function describePluginLocalizationStatus(input: {
     }
   }
   if (submission.contributionState === "rejected" || submission.localizationContributionState === "rejected") {
-    return {
-      kind: "failed",
-      label: translate("需求未被接受。点击右侧“重试此插件”。"),
-    };
+    return { kind: "failed", label: translate("处理失败：需求未被接受") };
   }
   if (submission.sourceVersionId !== undefined) return { kind: "waiting", label: translate("等待目标语言译文发布") };
   if (submission.localizationContributionId !== undefined) {
@@ -343,23 +310,6 @@ function hasAuthoritativePendingDemand(
 
 function appendSourceSummary(label: string, summary: string): string {
   return summary === "" ? label : `${label}；${summary}`;
-}
-
-function appendAuthorityCoverage(
-  label: string,
-  translation: PluginTranslationState,
-): string {
-  if (
-    translation.sourceUnitCount === undefined
-    || translation.publishedUnitCount === undefined
-    || translation.missingUnitCount === undefined
-  ) return label;
-  return `${label}；${translate("权威目录 {total} 条：插件自带 {native} · 语枢已发布 {published} · 待补 {missing}", {
-    total: translation.sourceUnitCount,
-    native: translation.upstreamNativeCount ?? 0,
-    published: translation.publishedUnitCount,
-    missing: translation.missingUnitCount,
-  })}`;
 }
 
 function provenancePriority(

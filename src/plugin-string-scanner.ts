@@ -83,6 +83,7 @@ const UI_PROPERTY_NAMES = new Set([
 const UI_CONTEXT_SIGNAL_PROPERTIES = new Set([
   "callback", "checkCallback", "editorCallback", "editorCheckCallback", "onClick", "onclick",
 ]);
+const BARE_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const QUOTED = String.raw`("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`;
 const UI_CALL = new RegExp(String.raw`(?:Notice|setText|setButtonText|setName|setDesc|setPlaceholder|setTooltip|setTitle|addHeading|appendText)\s*\(\s*${QUOTED}`, "gu");
 const OPTION_CALL = new RegExp(String.raw`addOption\s*\(\s*${QUOTED}\s*,\s*${QUOTED}`, "gu");
@@ -312,7 +313,6 @@ function collectStructuredMatches(
 ): boolean {
   const tokens = tokenizeJavascript(bundle);
   if (tokens === null) return false;
-  const uiContextPropertyIndices = findUiRegistrationContextPropertyIndices(tokens);
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (token?.kind !== "identifier") continue;
@@ -336,7 +336,7 @@ function collectStructuredMatches(
           "ui-property",
           token,
           sourceLocale,
-          uiContextPropertyIndices.has(index),
+          hasUiRegistrationObjectContext(tokens, index),
         );
       }
     }
@@ -365,61 +365,44 @@ function addStructuredExpression(
   }, rendered.staticText, uiContextVerified);
 }
 
-function findUiRegistrationContextPropertyIndices(tokens: readonly Token[]): ReadonlySet<number> {
-  const delimiterStack: { readonly raw: "(" | "[" | "{"; readonly index: number }[] = [];
-  const braceStack: number[] = [];
-  const propertyObjects = new Map<number, number>();
-  const registrationObjects = new Set<number>();
-  const matchingOpen: Readonly<Record<string, "(" | "[" | "{">> = {
-    ")": "(", "]": "[", "}": "{",
-  };
-
-  for (let index = 0; index < tokens.length; index += 1) {
+function hasUiRegistrationObjectContext(tokens: readonly Token[], propertyIndex: number): boolean {
+  const openIndex = nearestContainingObjectOpen(tokens, propertyIndex);
+  if (openIndex === -1) return false;
+  if (!isObjectLiteralOpen(tokens, openIndex)) return false;
+  const closeIndex = matchingTokenIndex(tokens, openIndex);
+  if (closeIndex === -1 || closeIndex <= propertyIndex) return false;
+  let depth = 0;
+  for (let index = openIndex + 1; index < closeIndex - 1; index += 1) {
     const token = tokens[index];
-    if (token === undefined) continue;
-    const expectedOpen = matchingOpen[token.raw];
-    if (expectedOpen !== undefined) {
-      const top = delimiterStack.at(-1);
-      if (top?.raw === expectedOpen) {
-        delimiterStack.pop();
-        if (expectedOpen === "{" && braceStack.at(-1) === top.index) braceStack.pop();
-      }
-      continue;
-    }
-
-    const openIndex = braceStack.at(-1);
-    if (
-      token.kind === "identifier"
+    if (token?.raw === "(" || token?.raw === "[" || token?.raw === "{") depth += 1;
+    else if (token?.raw === ")" || token?.raw === "]" || token?.raw === "}") depth -= 1;
+    else if (
+      depth === 0
+      && token?.kind === "identifier"
       && tokens[index + 1]?.raw === ":"
-      && openIndex !== undefined
-      && isObjectLiteralOpen(tokens, openIndex)
-    ) {
-      if (UI_PROPERTY_NAMES.has(token.raw)) propertyObjects.set(index, openIndex);
-      const top = delimiterStack.at(-1);
-      if (
-        UI_CONTEXT_SIGNAL_PROPERTIES.has(token.raw)
-        && top?.raw === "{"
-        && top.index === openIndex
-      ) registrationObjects.add(openIndex);
-    }
-
-    if (token.raw === "(" || token.raw === "[" || token.raw === "{") {
-      delimiterStack.push({ raw: token.raw, index });
-      if (token.raw === "{") braceStack.push(index);
-    }
+      && UI_CONTEXT_SIGNAL_PROPERTIES.has(token.raw)
+    ) return true;
   }
-
-  return new Set(
-    [...propertyObjects]
-      .filter(([, openIndex]) => registrationObjects.has(openIndex))
-      .map(([propertyIndex]) => propertyIndex),
-  );
+  return false;
 }
 
 function isObjectLiteralOpen(tokens: readonly Token[], openIndex: number): boolean {
   const previous = tokens[openIndex - 1]?.raw;
   return previous !== undefined
     && ["=", "(", "[", ",", ":", "return", ">"].includes(previous);
+}
+
+function nearestContainingObjectOpen(tokens: readonly Token[], index: number): number {
+  let depth = 0;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const raw = tokens[cursor]?.raw;
+    if (raw === "}") depth += 1;
+    else if (raw === "{") {
+      if (depth === 0) return cursor;
+      depth -= 1;
+    }
+  }
+  return -1;
 }
 
 function renderExpression(tokens: readonly Token[], counter: { value: number }): RenderedExpression | null {
@@ -689,6 +672,7 @@ function addCandidate(
   if (
     origin === "ui-property"
     && (UI_PROPERTY_NAMES.has(evidence.symbol) || evidence.symbol === "ui-property")
+    && BARE_IDENTIFIER.test(value)
     && !uiContextVerified
   ) return;
   if (!isTranslatableUiText(value) || !isTranslatableUiText(probe) || !isPlausibleSourceLocaleText(value, sourceLocale)) return;
@@ -714,14 +698,10 @@ function offsetLocation(source: string, offset: number): { readonly line: number
 
 export function isPlausibleSourceLocaleText(value: string, sourceLocale: string): boolean {
   if (sourceLocale !== "en") return true;
-  let letterCount = 0;
-  let latinLetterCount = 0;
   for (const character of value) {
-    if (!/\p{L}/u.test(character)) continue;
-    letterCount += 1;
-    if (/\p{Script=Latin}/u.test(character)) latinLetterCount += 1;
+    if (/\p{L}/u.test(character) && !/\p{Script=Latin}/u.test(character)) return false;
   }
-  return letterCount === 0 || latinLetterCount * 2 >= letterCount;
+  return true;
 }
 
 export function isTranslatableUiText(value: string): boolean {

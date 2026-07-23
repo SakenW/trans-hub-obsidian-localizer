@@ -17,10 +17,6 @@ describe("client localization", () => {
       .toBe("Selected 2 / 3");
     expect(localizedClientName()).toBe("Trans-Hub Localizer");
     expect(translate("查看进展并参与贡献")).toBe("View progress and contribute");
-    expect(translate("查看详情")).toBe("View details");
-    expect(translate("收起详情")).toBe("Hide details");
-    expect(translate("重试此插件")).toBe("Retry this plugin");
-    expect(translate("需要重试")).toBe("Retry needed");
   });
 
   it("keeps Simplified Chinese source copy for the Simplified Chinese target", () => {

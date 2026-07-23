@@ -58,19 +58,19 @@ export function describePluginSelectionProcessing(result: PluginSelectionProcess
     const withDetail = detail === "" ? summary : `${summary}（${detail}）`;
     return failedCount === 0
       ? `${withDetail}。`
-      : translate("{summary}；{failed} 个需要重试，请点击对应插件的“重试此插件”。", {
+      : translate("{summary}；{failed} 个处理失败，可在列表中单独重试。", {
           summary: withDetail,
           failed: failedCount,
         });
   }
   if (failedCount > 0) {
-    return translate("已检查 {count} 个插件；{failed} 个需要重试，请点击对应插件的“重试此插件”。", {
+    return translate("已检查 {count} 个插件；{failed} 个处理失败，可在列表中单独重试。", {
       count: scan.scannedCount,
       failed: failedCount,
     });
   }
   if (sync.pulledCount > 0) {
-    return translate("已更新 {count} 个插件，本机安全应用 {translations} 条译文。", {
+    return translate("已更新 {count} 个插件，共 {translations} 条译文。", {
       count: sync.pulledCount,
       translations: sync.translationCount,
     });

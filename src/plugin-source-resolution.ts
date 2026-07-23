@@ -11,10 +11,7 @@ export interface PublishedPluginSource {
   readonly artifactDigest: string;
   readonly sourceSnapshotDigest?: string;
   readonly catalogIdentity?: SourceCatalogIdentity;
-  readonly sourceUnitCount: number;
   readonly upstreamNativeCount: number;
-  readonly publishedUnitCount: number;
-  readonly missingUnitCount: number;
 }
 
 export interface PublishedEcosystemCatalog {
@@ -92,8 +89,6 @@ export function resolvePublishedPluginSourceFromCatalog(
     && item.target_variant === "default"
     && typeof item.published_unit_count === "number"
     && typeof item.upstream_unit_count === "number"
-    && typeof item.total_unit_count === "number"
-    && typeof item.missing_unit_count === "number"
     && (item.published_unit_count > 0 || item.upstream_unit_count > 0)
   ));
   if (published.length === 0) return undefined;
@@ -146,21 +141,9 @@ export function resolvePublishedPluginSourceFromCatalog(
       ? {}
       : { sourceSnapshotDigest: requiredSha256(sourceSnapshotDigests[0], "源快照摘要无效") }),
     catalogIdentity: selectedEntry.identity,
-    sourceUnitCount: requiredNonNegativeNumber(
-      selectedEntry.item.total_unit_count,
-      "插件权威源条目数量无效",
-    ),
     upstreamNativeCount: requiredNonNegativeNumber(
       selectedEntry.item.upstream_unit_count,
       "插件自带覆盖数量无效",
-    ),
-    publishedUnitCount: requiredNonNegativeNumber(
-      selectedEntry.item.published_unit_count,
-      "语枢已发布覆盖数量无效",
-    ),
-    missingUnitCount: requiredNonNegativeNumber(
-      selectedEntry.item.missing_unit_count,
-      "插件缺失本地化数量无效",
     ),
   };
 }

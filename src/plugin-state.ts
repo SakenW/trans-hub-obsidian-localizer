@@ -41,10 +41,7 @@ export interface PluginTranslationState {
   readonly artifactDigest?: string;
   readonly catalogIdentity?: SourceCatalogIdentity;
   readonly targetLocale: string;
-  readonly sourceUnitCount?: number;
   readonly upstreamNativeCount?: number;
-  readonly publishedUnitCount?: number;
-  readonly missingUnitCount?: number;
   readonly entries: readonly PluginUiTranslation[];
   readonly pulledAt: string;
 }
@@ -57,7 +54,6 @@ export interface PluginSubmissionState {
   readonly installationId?: string;
   readonly contributionId: string;
   readonly contributionState: string;
-  readonly observationGeneration?: number;
   readonly repository?: string;
   readonly localizationTargetLocale?: string;
   readonly localizationContributionId?: string;
@@ -253,9 +249,6 @@ function parsePluginSubmission(value: unknown): PluginSubmissionState | null {
       : {}),
     contributionId: value.contributionId as string,
     contributionState: value.contributionState as string,
-    ...(isNonNegativeInteger(value.observationGeneration)
-      ? { observationGeneration: value.observationGeneration }
-      : {}),
     ...(typeof value.repository === "string" && value.repository !== "" ? { repository: value.repository } : {}),
     ...(typeof value.localizationTargetLocale === "string" && value.localizationTargetLocale !== "" ? { localizationTargetLocale: value.localizationTargetLocale } : {}),
     ...(typeof value.localizationContributionId === "string" && value.localizationContributionId !== "" ? { localizationContributionId: value.localizationContributionId } : {}),
@@ -353,9 +346,6 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
     && Number.isInteger(value.upstreamNativeCount) && value.upstreamNativeCount >= 0
     ? value.upstreamNativeCount
     : 0;
-  const sourceUnitCount = optionalNonNegativeInteger(value.sourceUnitCount);
-  const publishedUnitCount = optionalNonNegativeInteger(value.publishedUnitCount);
-  const missingUnitCount = optionalNonNegativeInteger(value.missingUnitCount);
   if ([pluginId, pluginVersion, sourceVersionId, targetLocale, pulledAt].some((item) => item === null)) return null;
   let catalogIdentity: SourceCatalogIdentity | undefined;
   try {
@@ -411,18 +401,9 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
     ...(artifactDigest === undefined ? {} : { artifactDigest }),
     ...(catalogIdentity === undefined ? {} : { catalogIdentity }),
     targetLocale: targetLocale!, pulledAt: pulledAt!,
-    ...(sourceUnitCount === undefined ? {} : { sourceUnitCount }),
     upstreamNativeCount,
-    ...(publishedUnitCount === undefined ? {} : { publishedUnitCount }),
-    ...(missingUnitCount === undefined ? {} : { missingUnitCount }),
     entries: entries.filter((entry): entry is PluginUiTranslation => entry !== null),
   };
-}
-
-function optionalNonNegativeInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0
-    ? value
-    : undefined;
 }
 
 function parsePluginTranslationScopes(

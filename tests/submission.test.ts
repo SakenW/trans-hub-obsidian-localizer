@@ -40,7 +40,7 @@ describe("submitObsidianPluginDiscovery", () => {
       },
     });
     const captured = payload as ContributionSigningPayload | null;
-    expect(captured?.idempotencyKey).toMatch(/^obsidian-public-v14-[a-f0-9]{64}$/u);
+    expect(captured?.idempotencyKey).toMatch(/^obsidian-public-v12-[a-f0-9]{64}$/u);
     expect(captured).toMatchObject({
       submittedAt: "2026-07-17T00:00:00.000Z",
       contributionType: "source_discovery",
@@ -54,35 +54,6 @@ describe("submitObsidianPluginDiscovery", () => {
         localArtifactDigest: { algorithm: "sha256", domain: "transport", hex: "b".repeat(64) },
       },
     });
-  });
-
-  it("uses a distinct idempotency namespace for a bounded recovery", async () => {
-    let payload: ContributionSigningPayload | null = null;
-    const client = {
-      submitContribution(value: ContributionSigningPayload) {
-        payload = value;
-        return Promise.resolve({ contributionId: "retry", state: "received" } as ContributionStateReceipt);
-      },
-    } as PublicClient;
-    const catalog = {
-      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
-      sourceLocale: "en", digest: "a".repeat(64), artifactDigest: "b".repeat(64),
-      scannedAt: "2026-07-23T00:00:00.000Z", strings: [],
-    };
-
-    await submitObsidianPluginDiscovery({
-      client, installationId: "installation", repository: "blacksmithgu/obsidian-dataview",
-      candidateLocators: [], catalog, observationGeneration: 1,
-    });
-    expect((payload as ContributionSigningPayload | null)?.idempotencyKey)
-      .toMatch(/^obsidian-public-v14-r1-[a-f0-9]{64}$/u);
-
-    await submitObsidianLocalizationObservation({
-      client, installationId: "installation", repository: "blacksmithgu/obsidian-dataview",
-      targetLocale: "zh-CN", catalog, observationGeneration: 1,
-    });
-    expect((payload as ContributionSigningPayload | null)?.idempotencyKey)
-      .toMatch(/^obsidian-localize-v10-r1-[a-f0-9]{64}$/u);
   });
 });
 
@@ -203,7 +174,7 @@ describe("submitObsidianLocalizationObservation", () => {
       },
     });
     const captured = payload as ContributionSigningPayload | null;
-    expect(captured?.idempotencyKey).toMatch(/^obsidian-localize-v10-[a-f0-9]{64}$/u);
+    expect(captured?.idempotencyKey).toMatch(/^obsidian-localize-v9-[a-f0-9]{64}$/u);
     expect(captured).toMatchObject({
       contributionType: "localization_observation",
       targetHint: {
