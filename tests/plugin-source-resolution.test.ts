@@ -34,7 +34,10 @@ describe("resolvePublishedPluginSource", () => {
       artifactDigest: ARTIFACT_DIGEST,
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
       catalogIdentity: CATALOG_IDENTITY,
+      sourceUnitCount: 77,
       upstreamNativeCount: 0,
+      publishedUnitCount: 77,
+      missingUnitCount: 0,
     });
   });
 
@@ -54,6 +57,7 @@ describe("resolvePublishedPluginSource", () => {
     const body = catalog();
     body.objects[0].coverage[0].published_unit_count = 0;
     body.objects[0].coverage[0].upstream_unit_count = 65;
+    body.objects[0].coverage[0].missing_unit_count = 12;
     await expect(resolvePublishedPluginSource({
       transport: transport(200, body),
       pluginId: "dataview",
@@ -66,7 +70,10 @@ describe("resolvePublishedPluginSource", () => {
       artifactDigest: ARTIFACT_DIGEST,
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
       catalogIdentity: CATALOG_IDENTITY,
+      sourceUnitCount: 77,
       upstreamNativeCount: 65,
+      publishedUnitCount: 0,
+      missingUnitCount: 12,
     });
   });
 
@@ -101,6 +108,7 @@ describe("resolvePublishedPluginSource", () => {
   it("ignores higher-coverage candidates whose catalog identity does not match", async () => {
     const body = catalog();
     body.objects[0].coverage[0].published_unit_count = 70;
+    body.objects[0].coverage[0].missing_unit_count = 7;
     body.objects[0].coverage.push({
       ...body.objects[0].coverage[0],
       source_version_id: "019f0000-0000-7000-8000-000000000003",
@@ -119,11 +127,14 @@ describe("resolvePublishedPluginSource", () => {
       artifactDigest: ARTIFACT_DIGEST,
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
       catalogIdentity: CATALOG_IDENTITY,
+      sourceUnitCount: 77,
       upstreamNativeCount: 0,
+      publishedUnitCount: 70,
+      missingUnitCount: 7,
     });
   });
 
-  it("does not select legacy or mismatched authority catalogs", async () => {
+  it("does not select legacy authority catalogs", async () => {
     const legacy = catalog();
     delete (legacy.objects[0].coverage[0] as Record<string, unknown>).catalog_identity;
     await expect(resolvePublishedPluginSource({
@@ -133,7 +144,9 @@ describe("resolvePublishedPluginSource", () => {
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
     })).resolves.toBeUndefined();
+  });
 
+  it("downloads one mismatched authority catalog for safe per-string intersection", async () => {
     const mismatch = catalog();
     mismatch.objects[0].coverage[0].catalog_identity = {
       ...CATALOG_IDENTITY,
@@ -145,7 +158,10 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual(expect.objectContaining({
+      sourceVersionId: SOURCE_VERSION_ID,
+      catalogIdentity: mismatch.objects[0].coverage[0].catalog_identity,
+    }));
 
     const scopeMismatch = catalog();
     scopeMismatch.objects[0].coverage[0].catalog_identity = {
@@ -158,7 +174,50 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual(expect.objectContaining({
+      sourceVersionId: SOURCE_VERSION_ID,
+      catalogIdentity: scopeMismatch.objects[0].coverage[0].catalog_identity,
+    }));
+
+    const artifactMismatch = catalog();
+    const authorityIdentity = {
+      ...CATALOG_IDENTITY,
+      artifactDigest: "34".repeat(32),
+      digest: "56".repeat(32),
+    };
+    artifactMismatch.objects[0].versions[0].content_digest = authorityIdentity.artifactDigest;
+    artifactMismatch.objects[0].coverage[0].catalog_identity = authorityIdentity;
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, artifactMismatch),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).resolves.toEqual(expect.objectContaining({
+      sourceVersionId: SOURCE_VERSION_ID,
+      artifactDigest: authorityIdentity.artifactDigest,
+      catalogIdentity: authorityIdentity,
+    }));
+  });
+
+  it("fails closed when mismatched authority catalogs are ambiguous", async () => {
+    const body = catalog();
+    body.objects[0].coverage[0].catalog_identity = {
+      ...CATALOG_IDENTITY,
+      digest: "99".repeat(32),
+    };
+    body.objects[0].coverage.push({
+      ...body.objects[0].coverage[0],
+      source_version_id: "019f0000-0000-7000-8000-000000000003",
+      catalog_identity: { ...CATALOG_IDENTITY, digest: "98".repeat(32) },
+    });
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).rejects.toThrow("不唯一");
   });
 });
 
@@ -185,6 +244,8 @@ function catalog() {
         target_variant: "default",
         published_unit_count: 77,
         upstream_unit_count: 0,
+        total_unit_count: 77,
+        missing_unit_count: 0,
         source_snapshot_digest: SNAPSHOT_DIGEST,
         catalog_identity: CATALOG_IDENTITY,
       }],

@@ -16,9 +16,16 @@ import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 export const OBSIDIAN_PUBLIC_PROFILE = {
   externalRegistry: "obsidian_community_plugins",
   adapterDefinitionId: "obsidian",
-  adapterVersion: "1.2.0",
-  adapterBuildDigestHex: "117aade03541d1e4740eb0892fb9866be6ddc1973059453049a5a7e01fe8d518",
+  adapterVersion: "1.3.0",
+  adapterBuildDigestHex: "8c8b4d4a9e9996591a0f5fa92cceeac6d4a49a8aa6e9f9179c7184e948f1f7ca",
 } as const;
+
+// Bump these epochs only when an already accepted observation must be
+// re-evaluated under a newer server-side source or demand contract. The
+// observation body remains content-addressed; the epoch creates a new,
+// auditable contribution instead of mutating the previous receipt.
+const SOURCE_DISCOVERY_EPOCH = 14;
+const LOCALIZATION_OBSERVATION_EPOCH = 10;
 
 export async function submitObsidianPluginDiscovery(input: {
   readonly client: PublicClient;
@@ -26,6 +33,7 @@ export async function submitObsidianPluginDiscovery(input: {
   readonly catalog: PluginUiCatalog;
   readonly repository: string;
   readonly candidateLocators: readonly string[];
+  readonly observationGeneration?: number;
 }): Promise<ContributionStateReceipt<"source_discovery">> {
   const observationMaterial = {
     pluginId: input.catalog.pluginId,
@@ -42,7 +50,8 @@ export async function submitObsidianPluginDiscovery(input: {
     },
   };
   const observationDigest = await computeProtocolDigest("request", observationMaterial, digestPort);
-  const idempotencyKey = `obsidian-public-v12-${await sha256Hex([
+  const generationSuffix = observationGenerationSuffix(input.observationGeneration);
+  const idempotencyKey = `obsidian-public-v${SOURCE_DISCOVERY_EPOCH}${generationSuffix}-${await sha256Hex([
     input.repository,
     input.catalog.pluginVersion,
     input.catalog.artifactDigest,
@@ -87,6 +96,7 @@ export async function submitObsidianLocalizationObservation(input: {
   readonly catalog: PluginUiCatalog;
   readonly repository: string;
   readonly targetLocale: string;
+  readonly observationGeneration?: number;
 }): Promise<ContributionStateReceipt<"localization_observation">> {
   const summaryMaterial = {
     pluginId: input.catalog.pluginId,
@@ -103,7 +113,8 @@ export async function submitObsidianLocalizationObservation(input: {
     },
   };
   const summaryDigest = await computeProtocolDigest("request", summaryMaterial, digestPort);
-  const idempotencyKey = `obsidian-localize-v9-${await sha256Hex([
+  const generationSuffix = observationGenerationSuffix(input.observationGeneration);
+  const idempotencyKey = `obsidian-localize-v${LOCALIZATION_OBSERVATION_EPOCH}${generationSuffix}-${await sha256Hex([
     input.repository,
     input.catalog.pluginVersion,
     input.targetLocale,
@@ -142,6 +153,14 @@ export async function submitObsidianLocalizationObservation(input: {
     },
   };
   return input.client.submitContribution(payload) as Promise<ContributionStateReceipt<"localization_observation">>;
+}
+
+function observationGenerationSuffix(generation: number | undefined): string {
+  if (generation === undefined || generation === 0) return "";
+  if (!Number.isSafeInteger(generation) || generation < 0) {
+    throw new Error("observation_generation_invalid");
+  }
+  return `-r${generation}`;
 }
 
 export type ObsidianLocalizationIssueKind = "missing" | "inaccurate";

@@ -16,7 +16,7 @@ describe("Obsidian public client boundary", () => {
   });
 
   it("pins the exact public observation adapter descriptor", async () => {
-    const artifact = await readFile(`${ROOT}/adapter/obsidian-plugin-ui-v12.json`);
+    const artifact = await readFile(`${ROOT}/adapter/obsidian-plugin-ui-v13.json`);
     expect(createHash("sha256").update(artifact).digest("hex"))
       .toBe(OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex);
   });

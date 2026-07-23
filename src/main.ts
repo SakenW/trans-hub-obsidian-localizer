@@ -143,18 +143,28 @@ export default class TransHubObsidianPlugin extends Plugin {
     return this.processPlugins();
   }
 
-  processSinglePlugin(pluginId: string): Promise<PluginSelectionProcessingResult> {
-    return this.processPlugins([pluginId]);
+  processSinglePlugin(
+    pluginId: string,
+    resubmitObservation = false,
+  ): Promise<PluginSelectionProcessingResult> {
+    return this.processPlugins(
+      [pluginId],
+      resubmitObservation ? [pluginId] : undefined,
+    );
   }
 
   private async processPlugins(
     onlyPluginIds?: readonly string[],
+    manualResubmitPluginIds?: readonly string[],
   ): Promise<PluginSelectionProcessingResult> {
     return this.pluginProcessingQueue.run(async () => {
       const result = await processPluginSelection({
         scan: () => this.scanInstalledPluginStrings(onlyPluginIds),
         hasSession: () => this.activation.isConfigured(),
-        synchronize: () => this.syncInstalledPluginTranslations(onlyPluginIds),
+        synchronize: () => this.syncInstalledPluginTranslations(
+          onlyPluginIds,
+          manualResubmitPluginIds,
+        ),
         applyCached: () => { this.applyCachedPluginTranslations(); },
       });
       this.schedulePendingTranslationRetry(result);
@@ -192,7 +202,10 @@ export default class TransHubObsidianPlugin extends Plugin {
     });
   }
 
-  async syncInstalledPluginTranslations(onlyPluginIds?: readonly string[]): Promise<PluginSyncSummary> {
+  async syncInstalledPluginTranslations(
+    onlyPluginIds?: readonly string[],
+    manualResubmitPluginIds?: readonly string[],
+  ): Promise<PluginSyncSummary> {
     if (this.settings.targetLocale === OBSIDIAN_SOURCE_LOCALE) {
       this.pluginAutomation.applyCachedTranslations();
       return emptyPluginSyncSummary();
@@ -202,6 +215,7 @@ export default class TransHubObsidianPlugin extends Plugin {
       targetLocale: this.settings.targetLocale,
       excludedPluginIds: this.settings.excludedPluginIds,
       ...(onlyPluginIds === undefined ? {} : { onlyPluginIds }),
+      ...(manualResubmitPluginIds === undefined ? {} : { manualResubmitPluginIds }),
       activationStore: this.activation,
       translationPackStore: this.translationPackStore,
       getState: () => this.state,

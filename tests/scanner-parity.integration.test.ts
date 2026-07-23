@@ -50,6 +50,7 @@ describe.skipIf(!existsSync(ADAPTER_PATH))(
       await writeFile(bundlePath, [
         'setting.setName("Open settings");',
         'const grammar={name:"Attribute",bnf:[]};',
+        'const model={name:"Anthropic Claude Opus 4.6",description:"Internal model metadata"};',
         'plugin.addCommand({id:"transpose",name:"Transpose",editorCheckCallback:run});',
       ].join("\n"));
 
@@ -57,6 +58,8 @@ describe.skipIf(!existsSync(ADAPTER_PATH))(
       const authority = scanAuthority(manifestPath, bundlePath);
       expect(normalizeClient(client)).toEqual(normalizeAuthority(authority));
       expect(client.strings.map((item) => item.source)).not.toContain("Attribute");
+      expect(client.strings.map((item) => item.source)).not.toContain("Anthropic Claude Opus 4.6");
+      expect(client.strings.map((item) => item.source)).not.toContain("Internal model metadata");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

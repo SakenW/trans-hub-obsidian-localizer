@@ -11,7 +11,10 @@ export interface PublishedPluginSource {
   readonly artifactDigest: string;
   readonly sourceSnapshotDigest?: string;
   readonly catalogIdentity?: SourceCatalogIdentity;
+  readonly sourceUnitCount: number;
   readonly upstreamNativeCount: number;
+  readonly publishedUnitCount: number;
+  readonly missingUnitCount: number;
 }
 
 export interface PublishedEcosystemCatalog {
@@ -82,7 +85,6 @@ export function resolvePublishedPluginSourceFromCatalog(
   }
   const objectVersionId = requiredString(versions[0].object_version_id, "插件版本缺少对象版本 ID");
   const artifactDigest = requiredSha256(versions[0].content_digest, "插件版本制品摘要无效");
-  if (artifactDigest !== localCatalogIdentity.artifactDigest) return undefined;
   const published = plugin.coverage.filter((item): item is Record<string, unknown> => (
     isRecord(item)
     && item.object_version_id === objectVersionId
@@ -90,6 +92,8 @@ export function resolvePublishedPluginSourceFromCatalog(
     && item.target_variant === "default"
     && typeof item.published_unit_count === "number"
     && typeof item.upstream_unit_count === "number"
+    && typeof item.total_unit_count === "number"
+    && typeof item.missing_unit_count === "number"
     && (item.published_unit_count > 0 || item.upstream_unit_count > 0)
   ));
   if (published.length === 0) return undefined;
@@ -109,17 +113,24 @@ export function resolvePublishedPluginSourceFromCatalog(
     identity,
     localCatalogIdentity,
   ));
-  if (exact.length === 0) return undefined;
-  const sourceVersionIds = [...new Set(exact.map(
+  // A local installation may have been patched by another localization plugin even
+  // though the official plugin id and version are unchanged. The signed authority
+  // pack remains safe to download: validatePluginTranslations applies only rows
+  // whose string key and placeholder signature exactly intersect the local scan.
+  // Prefer an exact catalog when present; otherwise accept only one unambiguous
+  // current authority catalog and let the application layer expose the mismatch.
+  const candidates = exact.length > 0 ? exact : identified;
+  if (candidates.length === 0) return undefined;
+  const sourceVersionIds = [...new Set(candidates.map(
     ({ item }) => requiredString(item.source_version_id, "译文覆盖缺少源版本 ID"),
   ))];
   if (sourceVersionIds.length !== 1) {
-    throw new Error(`Obsidian 插件精确目录发布源版本不唯一：${input.pluginId}@${input.pluginVersion}`);
+    throw new Error(`Obsidian 插件权威目录发布源版本不唯一：${input.pluginId}@${input.pluginVersion}`);
   }
-  const selected = exact.filter(({ item }) => item.source_version_id === sourceVersionIds[0]);
+  const selected = candidates.filter(({ item }) => item.source_version_id === sourceVersionIds[0]);
   const selectedEntry = selected[0];
   if (selected.length !== 1 || selectedEntry === undefined) {
-    throw new Error(`Obsidian 插件精确目录覆盖行不唯一：${input.pluginId}@${input.pluginVersion}`);
+    throw new Error(`Obsidian 插件权威目录覆盖行不唯一：${input.pluginId}@${input.pluginVersion}`);
   }
   const sourceSnapshotDigests = [...new Set(selected
     .map(({ item }) => item.source_snapshot_digest)
@@ -135,9 +146,21 @@ export function resolvePublishedPluginSourceFromCatalog(
       ? {}
       : { sourceSnapshotDigest: requiredSha256(sourceSnapshotDigests[0], "源快照摘要无效") }),
     catalogIdentity: selectedEntry.identity,
+    sourceUnitCount: requiredNonNegativeNumber(
+      selectedEntry.item.total_unit_count,
+      "插件权威源条目数量无效",
+    ),
     upstreamNativeCount: requiredNonNegativeNumber(
       selectedEntry.item.upstream_unit_count,
       "插件自带覆盖数量无效",
+    ),
+    publishedUnitCount: requiredNonNegativeNumber(
+      selectedEntry.item.published_unit_count,
+      "语枢已发布覆盖数量无效",
+    ),
+    missingUnitCount: requiredNonNegativeNumber(
+      selectedEntry.item.missing_unit_count,
+      "插件缺失本地化数量无效",
     ),
   };
 }

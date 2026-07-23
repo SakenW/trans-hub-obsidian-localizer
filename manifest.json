@@ -1,7 +1,7 @@
 {
   "id": "trans-hub-plugin-localizer",
   "name": "Trans-Hub Localizer",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "minAppVersion": "1.11.4",
   "description": "Automatically translate and localize community plugin names, descriptions, and interfaces into your preferred language with Trans-Hub.",
   "author": "Trans-Hub",

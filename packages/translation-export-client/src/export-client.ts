@@ -155,6 +155,11 @@ export class TranslationExportClient {
       path: this.options.endpoint.manifestPath(request),
       headers: {
         ...this.options.endpoint.authorizationHeaders(),
+        // Embedded HTTP caches can replay a wire response after the server-side
+        // signing representation changes while the immutable translation
+        // generation (and therefore its ETag) stays the same. Force a
+        // revalidation so signed manifests always come from current authority.
+        "Cache-Control": "no-cache",
         ...(this.canRevalidate(previous)
           ? { "If-None-Match": previous.etag }
           : {}),
