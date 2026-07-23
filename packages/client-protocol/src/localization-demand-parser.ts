@@ -120,7 +120,7 @@ function parseCoordinate(
       "expected a boolean",
     );
   }
-  const failureRetryable = record.failureRetryable as boolean;
+  const failureRetryable = record.failureRetryable;
   const failureAttemptNumber = parseNullable(
     record.failureAttemptNumber,
     (item) =>

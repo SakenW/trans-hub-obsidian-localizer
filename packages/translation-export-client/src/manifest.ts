@@ -313,7 +313,7 @@ function string(input: unknown, code: string): string {
 function digest(input: unknown, code: string): Sha256Digest {
   const value = string(input, code);
   if (!SHA256.test(value)) throw new TypeError(code);
-  return value as Sha256Digest;
+  return value;
 }
 
 function integer(input: unknown, code: string): number {

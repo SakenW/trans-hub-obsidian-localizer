@@ -122,7 +122,7 @@ async function sha256(bytes: Uint8Array): Promise<Sha256Digest> {
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
   const digest = new Uint8Array(
-    await globalThis.crypto.subtle.digest("SHA-256", buffer),
+    await crypto.subtle.digest("SHA-256", buffer),
   );
   const hex = Array.from(digest, (byte) =>
     byte.toString(16).padStart(2, "0"),

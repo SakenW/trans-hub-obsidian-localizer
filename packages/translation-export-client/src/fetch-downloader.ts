@@ -9,7 +9,7 @@ export class FetchPackDownloader implements PackDownloadPort {
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: FetchPackDownloaderOptions = {}) {
-    this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.fetchImpl = options.fetch ?? fetch.bind(globalThis);
     if (options.developmentOrigin !== undefined)
       validateDevelopmentOrigin(options.developmentOrigin);
   }

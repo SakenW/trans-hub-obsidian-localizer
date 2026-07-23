@@ -140,7 +140,7 @@ export class TranslationExportClient {
       return;
     const scopeKey = scopeCacheKey(manifest.scope);
     await Promise.all(
-      manifest.packs.map((pack) =>
+      manifest.packs.map(async (pack) =>
         this.options.store.removeVerified?.(packKey(scopeKey, pack)),
       ),
     );
