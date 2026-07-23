@@ -5,6 +5,6 @@
   "minAppVersion": "1.11.4",
   "description": "Automatically translate and localize community plugin names, descriptions, and interfaces into your preferred language with Trans-Hub.",
   "author": "Trans-Hub",
-  "authorUrl": "https://github.com/SakenW/Trans-Hub",
+  "authorUrl": "https://trans-hub.net",
   "isDesktopOnly": true
 }
