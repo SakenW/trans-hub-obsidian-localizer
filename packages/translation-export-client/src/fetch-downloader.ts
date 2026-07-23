@@ -1,15 +1,15 @@
 import type { PackDownloadPort } from "./contracts";
 
 export type FetchPackDownloaderOptions = Readonly<{
-  fetch?: typeof fetch;
+  fetch: typeof fetch;
   developmentOrigin?: string;
 }>;
 
 export class FetchPackDownloader implements PackDownloadPort {
   private readonly fetchImpl: typeof fetch;
 
-  constructor(private readonly options: FetchPackDownloaderOptions = {}) {
-    this.fetchImpl = options.fetch ?? fetch.bind(globalThis);
+  constructor(private readonly options: FetchPackDownloaderOptions) {
+    this.fetchImpl = options.fetch;
     if (options.developmentOrigin !== undefined)
       validateDevelopmentOrigin(options.developmentOrigin);
   }
