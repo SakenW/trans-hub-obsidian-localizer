@@ -1,6 +1,5 @@
 import {
   CURRENT_PROTOCOL_VERSION,
-  buildProtocolSignatureFrame,
   computeProtocolDigest,
   parseBootstrapLinkBinding,
   parseBootstrapResponse,
@@ -20,7 +19,13 @@ import {
 import type { App } from "obsidian";
 
 import { ObsidianHttpTransport } from "./http-transport";
-import { base64ToBytes, bytesToBase64, sha256Hex } from "./identity";
+import { bytesToBase64 } from "./identity";
+import {
+  nodeInstallationSigningProvider,
+  STORED_SIGNING_KEY_CORRUPTED_MESSAGE,
+  type InstallationSigningProvider,
+  type StoredSigningKey,
+} from "./installation-signing";
 import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 
 const INSTALLATION_SECRET_ID = "trans-hub-obsidian-public-installation-v1";
@@ -28,13 +33,6 @@ const SIGNING_KEY_SECRET_ID = "trans-hub-obsidian-public-installation-key-v1";
 const PENDING_AUTHORIZATION_SECRET_ID = "trans-hub-obsidian-public-authorization-v1";
 const PENDING_RENEWAL_SECRET_ID = "trans-hub-obsidian-public-renewal-v1";
 const PREPARE_ONLY_TRANSPORT_ORIGIN = "https://bootstrap.invalid";
-
-interface StoredSigningKey {
-  readonly version: 1;
-  readonly keyId: string;
-  readonly publicKeyBase64Url: string;
-  readonly privateKeyPkcs8Base64: string;
-}
 
 interface PendingAuthorization {
   readonly version: 1;
@@ -62,7 +60,10 @@ interface StoredInstallation {
 export class ActivationStore {
   private reconnectRequired = false;
 
-  constructor(private readonly app: App) {}
+  constructor(
+    private readonly app: App,
+    private readonly installationSigning: InstallationSigningProvider = nodeInstallationSigningProvider,
+  ) {}
 
   async client(input: {
     readonly apiBaseUrl: string;
@@ -105,7 +106,7 @@ export class ActivationStore {
     this.reconnectRequired = false;
     // Browser authorization is an explicit device re-enrollment. Reusing one
     // signing key for another installation is correctly contained as cloning.
-    const freshKey = await createSigningKey();
+    const freshKey = this.installationSigning.createSigningKey();
     this.app.secretStorage.setSecret(SIGNING_KEY_SECRET_ID, JSON.stringify(freshKey));
     this.app.secretStorage.setSecret(INSTALLATION_SECRET_ID, "");
     this.app.secretStorage.setSecret(PENDING_RENEWAL_SECRET_ID, "");
@@ -205,43 +206,17 @@ export class ActivationStore {
     return new SecretInstallationStorage(this.app, authorityWorkspaceId);
   }
 
-  private async signer(): Promise<Ed25519InstallationSignerPort> {
-    const stored = parseSigningKey(this.app.secretStorage.getSecret(SIGNING_KEY_SECRET_ID));
-    const key = stored ?? await createSigningKey();
-    if (stored === null) {
+  private signer(): Promise<Ed25519InstallationSignerPort> {
+    const raw = this.app.secretStorage.getSecret(SIGNING_KEY_SECRET_ID);
+    const stored = parseSigningKey(raw);
+    if (raw && stored === null) {
+      throw new Error(STORED_SIGNING_KEY_CORRUPTED_MESSAGE);
+    }
+    const key = stored ?? this.installationSigning.createSigningKey();
+    if (!raw) {
       this.app.secretStorage.setSecret(SIGNING_KEY_SECRET_ID, JSON.stringify(key));
     }
-    let privateKey: CryptoKey | null = null;
-    return {
-      keyId: key.keyId,
-      publicKey: key.publicKeyBase64Url,
-      async signProof(input) {
-        privateKey ??= await crypto.subtle.importKey(
-          "pkcs8",
-          arrayBuffer(base64ToBytes(key.privateKeyPkcs8Base64)),
-          { name: "Ed25519" },
-          false,
-          ["sign"],
-        );
-        const signedAt = new Date().toISOString();
-        const frame = buildProtocolSignatureFrame("public_contribution_intake", {
-          domain: "public_contribution_intake",
-          algorithm: "ed25519",
-          keyId: key.keyId,
-          requestDigest: input.requestDigest,
-          challenge: input.challenge,
-          nonce: input.nonce,
-          credentialEpoch: input.credentialEpoch,
-          signedAt,
-        });
-        const signature = await crypto.subtle.sign(
-          { name: "Ed25519" },
-          privateKey,
-          arrayBuffer(frame),
-        );
-        return { signedAt, signature: bytesToBase64Url(new Uint8Array(signature)) };
-      },
-    };
+    return Promise.resolve(this.installationSigning.createSigner(key));
   }
 
   private async renewCredential(input: {
@@ -439,25 +414,13 @@ function randomHex(bytes: number): string {
     .join("");
 }
 
-async function createSigningKey(): Promise<StoredSigningKey> {
-  const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
-  const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", keyPair.publicKey));
-  const privateKey = new Uint8Array(await crypto.subtle.exportKey("pkcs8", keyPair.privateKey));
-  return {
-    version: 1,
-    keyId: `obsidian-${(await sha256Hex(publicKey)).slice(0, 32)}`,
-    publicKeyBase64Url: bytesToBase64Url(publicKey),
-    privateKeyPkcs8Base64: bytesToBase64(privateKey),
-  };
-}
-
 function parseSigningKey(raw: string | null): StoredSigningKey | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as Partial<StoredSigningKey>;
     return value.version === 1 &&
       typeof value.keyId === "string" && value.keyId !== "" &&
-      typeof value.publicKeyBase64Url === "string" && value.publicKeyBase64Url !== "" &&
+      typeof value.publicKeyBase64Url === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value.publicKeyBase64Url) &&
       typeof value.privateKeyPkcs8Base64 === "string" && value.privateKeyPkcs8Base64 !== ""
       ? value as StoredSigningKey
       : null;
