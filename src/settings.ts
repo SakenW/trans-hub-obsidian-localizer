@@ -331,14 +331,14 @@ export class TransHubSettingTab extends PluginSettingTab {
     let selectAllButton: ButtonComponent;
     let clearButton: ButtonComponent;
 
-    const summary = container.createDiv({ cls: "trans-hub-plugin-picker__summary" });
+    const header = container.createDiv({ cls: "trans-hub-plugin-picker__header" });
+    const summary = header.createDiv({ cls: "trans-hub-plugin-picker__summary" });
     const summaryText = summary.createSpan();
     const summaryTotal = summary.createSpan({ cls: "trans-hub-plugin-picker__total" });
-    const status = container.createDiv({
+    const status = header.createDiv({
       text: this.selectionStatus,
       cls: [
         "trans-hub-plugin-picker__status",
-        "setting-item-description",
         ...(this.selectionStatusFailed ? ["mod-warning"] : []),
       ],
     });
@@ -398,12 +398,16 @@ export class TransHubSettingTab extends PluginSettingTab {
       clearButton.setDisabled(selected === 0);
     };
 
-    const persistSelection = async (excludedPluginIds: string[]): Promise<void> => {
+    const persistSelection = async (excludedPluginIds: string[], pluginId?: string, selected?: boolean): Promise<void> => {
       this.plugin.settings.excludedPluginIds = excludedPluginIds;
       await this.plugin.savePluginData();
       this.plugin.refreshPluginTranslationRuntime();
       updateSummary();
-      this.queueSelectionProcessing(status);
+      if (selected === true && pluginId !== undefined) {
+        this.queueSelectionProcessing(status);
+      } else {
+        this.refreshSettings();
+      }
     };
 
     const renderRows = (): void => {
@@ -417,6 +421,7 @@ export class TransHubSettingTab extends PluginSettingTab {
           translation: pluginState.pluginTranslations[plugin.id],
           catalog: pluginState.pluginCatalogs[plugin.id],
           targetLocale: this.plugin.settings.targetLocale,
+          hasSession: this.plugin.hasUserSession(),
         });
         return statusFilter === "all" || localizationStatus.kind === statusFilter;
       });
@@ -435,6 +440,7 @@ export class TransHubSettingTab extends PluginSettingTab {
           translation: pluginState.pluginTranslations[plugin.id],
           catalog: pluginState.pluginCatalogs[plugin.id],
           targetLocale: this.plugin.settings.targetLocale,
+          hasSession: this.plugin.hasUserSession(),
         });
         const displayName = this.plugin.settings.pluginMetadataTranslationEnabled
           ? localizedPluginDisplayName(
@@ -477,7 +483,7 @@ export class TransHubSettingTab extends PluginSettingTab {
                 this.plugin.settings.excludedPluginIds,
                 plugin.id,
                 selected,
-              ));
+              ), plugin.id, selected);
             });
           }
         });
@@ -536,11 +542,13 @@ export class TransHubSettingTab extends PluginSettingTab {
         const result = await this.plugin.processSelectedPlugins();
         if (processedRevision === this.selectionRevision) {
           this.setSelectionStatus(status, describePluginSelectionProcessing(result));
+          this.refreshSettings();
         }
       } catch (error) {
         if (processedRevision === this.selectionRevision) {
           const message = translate("处理失败：{message}", { message: errorMessage(error) });
           this.setSelectionStatus(status, message, true);
+          this.refreshSettings();
           new Notice(message, 10_000);
         }
       }

@@ -76,7 +76,7 @@ export default class TransHubObsidianPlugin extends Plugin {
           });
           new Notice(translate("语枢已连接，此设备以后会自动恢复连接。"));
           this.settingTab.reportCommandStatus(translate("连接成功，正在同步所选插件…"), false);
-          await this.processSelectedPlugins();
+          await this.runAutomaticPluginTranslation();
         } catch (error) {
           const message = error instanceof Error ? error.message : translate("语枢连接失败。");
           new Notice(message, 10_000);
@@ -123,7 +123,11 @@ export default class TransHubObsidianPlugin extends Plugin {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  disconnect(): void { this.activation.clear(); }
+  disconnect(): void {
+    this.activation.clear();
+    this.state = structuredClone(EMPTY_PLUGIN_STATE);
+    void this.savePluginData();
+  }
   hasUserSession(): boolean { return this.activation.isConfigured(); }
   requiresReconnect(): boolean { return this.activation.requiresReconnect(); }
   getPluginState(): PluginState { return this.state; }

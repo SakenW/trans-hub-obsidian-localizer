@@ -123,10 +123,16 @@ export async function scanPluginUiStrings(input: {
     }
   }
   if (!collectEmbeddedEnglishCatalog(input.bundle, collected, input.sourceLocale)) {
-    if (!collectStructuredMatches(input.bundle, collected, input.sourceLocale)) {
+    const BUNDLE_STRUCTURED_SCAN_BYTE_LIMIT = 1_048_576;
+    if (input.bundle.length <= BUNDLE_STRUCTURED_SCAN_BYTE_LIMIT) {
+      if (!collectStructuredMatches(input.bundle, collected, input.sourceLocale)) {
+        collectRegexMatches(input.bundle, UI_CALL, "ui-call", "ui-call", collected, input.sourceLocale);
+        collectRegexMatches(input.bundle, OPTION_CALL, "ui-call", "addOption", collected, input.sourceLocale, 2);
+        collectRegexMatches(input.bundle, UI_PROPERTY, "ui-property", "ui-property", collected, input.sourceLocale);
+      }
+    } else {
       collectRegexMatches(input.bundle, UI_CALL, "ui-call", "ui-call", collected, input.sourceLocale);
       collectRegexMatches(input.bundle, OPTION_CALL, "ui-call", "addOption", collected, input.sourceLocale, 2);
-      collectRegexMatches(input.bundle, UI_PROPERTY, "ui-property", "ui-property", collected, input.sourceLocale);
     }
   }
   const strings = await Promise.all([...collected.entries()]
@@ -714,8 +720,19 @@ export function isTranslatableUiText(value: string): boolean {
   if (/^[a-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+$/u.test(value)) return false;
   if (/^[A-Z_][A-Z0-9_]+$/u.test(value)) return false;
   if (/^%[A-Za-z_][A-Za-z0-9_]*$/u.test(value)) return false;
+  if (RUNTIME_ERROR_PATTERNS.some((pattern) => pattern.test(value))) return false;
   return true;
 }
+
+const RUNTIME_ERROR_PATTERNS: readonly RegExp[] = [
+  /\b(?:is not|cannot|must be|expected|already|attempt to|has been)\b/iu,
+  /\b(?:not iterable|not a function|not defined|not async)\b/iu,
+  /\b(?:Symbol\.|Generator )/u,
+  /\b(?:private member|super expression|destructure|spread non-iterable)\b/iu,
+  /(?:concatenate|compress|decompress|recursively search|print lines that match)\b/iu,
+  /\b(?:standard output|standard input|command line)\b/iu,
+  /\b(?:file or directory|files and directories)\b/iu,
+];
 
 export function placeholderSignature(value: string): string {
   const placeholders = [...value.matchAll(/\$\{[^}]+\}|\{\{[^}]+\}\}|\{\d+\}|%[sdif]|<\/?[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][\w:.-]*(?:=(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*\s*\/?>/gu)]

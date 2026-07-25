@@ -441,18 +441,38 @@ async function saveSynchronizationError(
 ): Promise<void> {
   const state = input.getState();
   const submission = state.pluginSubmissions[pluginId];
-  if (submission === undefined) return;
+  const errorRecord = {
+    code: synchronizationErrorCode(error),
+    message: synchronizationErrorMessage(error),
+    updatedAt: new Date().toISOString(),
+  };
+  if (submission === undefined) {
+    console.error(`[Trans-Hub] ${pluginId} sync failed (no prior submission):`, error);
+    input.replaceState({
+      ...state,
+      pluginSubmissions: {
+        ...state.pluginSubmissions,
+        [pluginId]: {
+          pluginId,
+          pluginVersion: "",
+          catalogDigest: "",
+          contributionId: "",
+          contributionState: "rejected",
+          submittedAt: new Date().toISOString(),
+          lastError: errorRecord,
+        },
+      },
+    });
+    await input.save();
+    return;
+  }
   input.replaceState({
     ...state,
     pluginSubmissions: {
       ...state.pluginSubmissions,
       [pluginId]: {
         ...submission,
-        lastError: {
-          code: synchronizationErrorCode(error),
-          message: synchronizationErrorMessage(error),
-          updatedAt: new Date().toISOString(),
-        },
+        lastError: errorRecord,
       },
     },
   });

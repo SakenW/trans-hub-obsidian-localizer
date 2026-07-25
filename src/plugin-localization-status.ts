@@ -43,6 +43,7 @@ export function describePluginLocalizationStatus(input: {
   readonly translation?: PluginTranslationState;
   readonly catalog?: PluginUiCatalog;
   readonly targetLocale: string;
+  readonly hasSession?: boolean;
 }): PluginLocalizationStatus {
   if (input.targetLocale === "en") {
     return { kind: "localized", label: translate("源语言，无需翻译") };
@@ -50,15 +51,7 @@ export function describePluginLocalizationStatus(input: {
   if (input.translation?.targetLocale === input.targetLocale) {
     if (input.catalog !== undefined) {
       const identity = comparePluginCatalogIdentity(input.catalog, input.translation);
-      if (!identity.exact) {
-        if (identity.kind === "artifact") {
-          return {
-            kind: "catalog-mismatch",
-            label: translate("本地插件文件与官方版本不一致；已安全应用 {count} 条精确命中译文", {
-              count: identity.safelyAppliedCount,
-            }),
-          };
-        }
+      if (!identity.exact && identity.kind !== "artifact") {
         const scopes = identity.mismatchedScopes.map(scopeLabel).join("、");
         return {
           kind: "catalog-mismatch",
@@ -135,7 +128,10 @@ export function describePluginLocalizationStatus(input: {
     };
   }
   const submission = input.submission;
-  if (submission === undefined) return { kind: "unrecorded", label: translate("未收录") };
+  if (submission === undefined) {
+    if (input.hasSession === false) return { kind: "unrecorded", label: translate("登录后同步") };
+    return { kind: "unrecorded", label: translate("未收录") };
+  }
   if (submission.lastError !== undefined) {
     return {
       kind: "failed",
