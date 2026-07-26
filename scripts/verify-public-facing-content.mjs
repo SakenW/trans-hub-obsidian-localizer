@@ -2,20 +2,32 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const pluginRoot = resolve(import.meta.dirname, "..");
-const publicReadme = existsSync(resolve(pluginRoot, "public-repository-template/README.md"))
-  ? resolve(pluginRoot, "public-repository-template/README.md")
-  : resolve(pluginRoot, "README.md");
+const publicTemplateRoot = existsSync(resolve(pluginRoot, "public-repository-template/README.md"))
+  ? resolve(pluginRoot, "public-repository-template")
+  : pluginRoot;
+const publicReadmes = [
+  resolve(publicTemplateRoot, "README.md"),
+  resolve(publicTemplateRoot, "readme/README.zh-CN.md"),
+];
 const publicEsbuild = existsSync(resolve(pluginRoot, "public-repository-template/esbuild.config.mjs"))
   ? resolve(pluginRoot, "public-repository-template/esbuild.config.mjs")
   : resolve(pluginRoot, "esbuild.config.mjs");
 
 const publicFiles = [
-  publicReadme,
+  ...publicReadmes,
   publicEsbuild,
   resolve(pluginRoot, "SECURITY.md"),
   resolve(pluginRoot, "manifest.json"),
   resolve(pluginRoot, "package.json"),
 ];
+
+const [englishReadme, chineseReadme] = publicReadmes;
+if (
+  !readFileSync(englishReadme, "utf8").includes("readme/README.zh-CN.md")
+  || !readFileSync(chineseReadme, "utf8").includes("../README.md")
+) {
+  throw new Error("Public README language navigation is incomplete.");
+}
 
 const forbidden = [
   { label: "loopback host", pattern: /(?:127\.0\.0\.1|localhost|\[::1\])/iu },
