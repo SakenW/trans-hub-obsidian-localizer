@@ -1,7 +1,9 @@
 import { requestUrl } from "obsidian";
 
-const OBSIDIAN_COMMUNITY_REGISTRY =
-  "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugins.json";
+const OBSIDIAN_COMMUNITY_REGISTRIES = [
+  "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugins.json",
+  "https://github.com/obsidianmd/obsidian-releases/raw/refs/heads/master/community-plugins.json",
+] as const;
 
 export interface CommunityPluginIdentity {
   readonly repository: string;
@@ -109,21 +111,20 @@ async function loadVersionReadme(repository: string, pluginVersion: string): Pro
 }
 
 async function loadCommunityRegistry(): Promise<ReadonlyMap<string, CommunityPluginRegistryEntry>> {
-  const response = await requestUrl({
-    url: OBSIDIAN_COMMUNITY_REGISTRY,
-    method: "GET",
-    throw: false,
-  });
-  if (response.status !== 200) {
-    throw new Error(`读取 Obsidian 官方社区目录失败：HTTP ${response.status}`);
+  let failure = "unknown";
+  for (const url of OBSIDIAN_COMMUNITY_REGISTRIES) {
+    try {
+      const response = await requestUrl({ url, method: "GET", throw: false });
+      if (response.status !== 200) {
+        failure = `HTTP ${response.status}`;
+        continue;
+      }
+      return parseCommunityRegistry(JSON.parse(response.text) as unknown);
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
   }
-  let value: unknown;
-  try {
-    value = JSON.parse(response.text) as unknown;
-  } catch {
-    throw new Error("Obsidian 官方社区目录不是有效 JSON。");
-  }
-  return parseCommunityRegistry(value);
+  throw new Error(`读取 Obsidian 官方社区目录失败：${failure}`);
 }
 
 export function parseCommunityRegistry(

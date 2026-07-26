@@ -43,7 +43,10 @@ export interface PluginTranslationState {
   readonly artifactDigest?: string;
   readonly catalogIdentity?: SourceCatalogIdentity;
   readonly targetLocale: string;
+  readonly sourceUnitCount?: number;
   readonly upstreamNativeCount?: number;
+  readonly publishedUnitCount?: number;
+  readonly missingUnitCount?: number;
   readonly entries: readonly PluginUiTranslation[];
   readonly pulledAt: string;
 }
@@ -56,6 +59,7 @@ export interface PluginSubmissionState {
   readonly installationId?: string;
   readonly contributionId: string;
   readonly contributionState: string;
+  readonly observationGeneration?: number;
   readonly repository?: string;
   readonly localizationTargetLocale?: string;
   readonly localizationContributionId?: string;
@@ -300,8 +304,17 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
     const key = stringValue(item.key);
     const source = stringValue(item.source);
     const placeholder = typeof item.placeholderSignature === "string" ? item.placeholderSignature : null;
+    const nativeTarget = typeof item.nativeTarget === "string" && item.nativeTarget.trim() !== ""
+      ? item.nativeTarget.normalize("NFC")
+      : undefined;
+    const nativeTargetLocale = typeof item.nativeTargetLocale === "string" && item.nativeTargetLocale.trim() !== ""
+      ? item.nativeTargetLocale
+      : undefined;
     const origins = item.origins.filter(isPluginStringOrigin);
-    if (key === null || source === null || placeholder === null || origins.length !== item.origins.length) return null;
+    if (
+      key === null || source === null || placeholder === null || origins.length !== item.origins.length
+      || (nativeTarget === undefined) !== (nativeTargetLocale === undefined)
+    ) return null;
     const evidence = item.evidence === undefined
       ? undefined
       : Array.isArray(item.evidence)
@@ -316,6 +329,9 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
       semanticRole: isPluginStringSemanticRole(item.semanticRole)
         ? item.semanticRole
         : resolvePluginStringSemanticRole(origins),
+      ...(nativeTarget === undefined || nativeTargetLocale === undefined
+        ? {}
+        : { nativeTarget, nativeTargetLocale }),
       ...(evidence === undefined
         ? {}
         : { evidence: evidence.filter((entry): entry is PluginStringEvidence => entry !== null) }),
@@ -369,6 +385,9 @@ function parsePluginSubmission(value: unknown): PluginSubmissionState | null {
       : {}),
     contributionId: value.contributionId as string,
     contributionState: value.contributionState as string,
+    ...(isNonNegativeInteger(value.observationGeneration)
+      ? { observationGeneration: value.observationGeneration }
+      : {}),
     ...(typeof value.repository === "string" && value.repository !== "" ? { repository: value.repository } : {}),
     ...(typeof value.localizationTargetLocale === "string" && value.localizationTargetLocale !== "" ? { localizationTargetLocale: value.localizationTargetLocale } : {}),
     ...(typeof value.localizationContributionId === "string" && value.localizationContributionId !== "" ? { localizationContributionId: value.localizationContributionId } : {}),
@@ -471,6 +490,9 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
     && Number.isInteger(value.upstreamNativeCount) && value.upstreamNativeCount >= 0
     ? value.upstreamNativeCount
     : 0;
+  const sourceUnitCount = optionalNonNegativeInteger(value.sourceUnitCount);
+  const publishedUnitCount = optionalNonNegativeInteger(value.publishedUnitCount);
+  const missingUnitCount = optionalNonNegativeInteger(value.missingUnitCount);
   if ([pluginId, pluginVersion, sourceVersionId, targetLocale, pulledAt].some((item) => item === null)) return null;
   let catalogIdentity: SourceCatalogIdentity | undefined;
   try {
@@ -526,9 +548,18 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
     ...(artifactDigest === undefined ? {} : { artifactDigest }),
     ...(catalogIdentity === undefined ? {} : { catalogIdentity }),
     targetLocale: targetLocale!, pulledAt: pulledAt!,
+    ...(sourceUnitCount === undefined ? {} : { sourceUnitCount }),
     upstreamNativeCount,
+    ...(publishedUnitCount === undefined ? {} : { publishedUnitCount }),
+    ...(missingUnitCount === undefined ? {} : { missingUnitCount }),
     entries: entries.filter((entry): entry is PluginUiTranslation => entry !== null),
   };
+}
+
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 function parsePluginTranslationScopes(

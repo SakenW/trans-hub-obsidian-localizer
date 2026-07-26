@@ -62,10 +62,19 @@ export function comparePluginCatalogIdentity(
       safelyAppliedCount,
     };
   }
-  if (local.digest === authority.digest
+  if (local.unitCount === authority.unitCount
+    && local.digest === authority.digest
     && local.resourceKey === authority.resourceKey
     && local.resourceVersion === authority.resourceVersion
-    && local.sourceLocale === authority.sourceLocale) {
+    && local.sourceLocale === authority.sourceLocale
+    && local.scopes.length === authority.scopes.length
+    && local.scopes.every((scope, index) => {
+      const authorityScope = authority.scopes[index];
+      return authorityScope !== undefined
+        && scope.scope === authorityScope.scope
+        && scope.unitCount === authorityScope.unitCount
+        && scope.digest === authorityScope.digest;
+    })) {
     return { exact: true, mismatchedScopes: [], safelyAppliedCount };
   }
   const localScopes = new Map(local.scopes.map((item) => [item.scope, item.digest]));
@@ -87,22 +96,32 @@ export function calculatePluginTranslationCoverage(
   targetLocale: string,
 ): PluginTranslationCoverage | undefined {
   if (catalog === undefined || translation?.targetLocale !== targetLocale) return undefined;
+  const effectiveTranslation = mergeCatalogNativeTranslations(catalog, translation);
   const currentSources = new Map(catalog.strings.map((item) => [item.source, item.placeholderSignature]));
-  const translatedSources = new Set(translation.entries
+  const translatedSources = new Set(effectiveTranslation.entries
     .filter((entry) => isCompatibleEntry(entry, currentSources))
     .map((entry) => entry.source));
-  const staleCount = new Set(translation.entries
+  const staleCount = new Set(effectiveTranslation.entries
     .map((entry) => entry.source)
     .filter((source) => !currentSources.has(source))).size;
-  const correctionCount = translation.entries.filter(
+  const correctionCount = effectiveTranslation.entries.filter(
     (entry) => entry.provenanceKind === "th-reviewed-correction"
       && translatedSources.has(entry.source),
   ).length;
-  const effectiveNativeCount = Math.max((translation.upstreamNativeCount ?? 0) - correctionCount, 0);
-  const attributedNativeSources = new Set(translation.entries
+  const effectiveNativeCount = Math.max((effectiveTranslation.upstreamNativeCount ?? 0) - correctionCount, 0);
+  const attributedNativeSources = new Set(effectiveTranslation.entries
     .filter((entry) => entry.provenanceKind === "upstream-native" && translatedSources.has(entry.source))
     .map((entry) => entry.source));
-  const unattributedNativeCount = Math.max(effectiveNativeCount - attributedNativeSources.size, 0);
+  // A source-level native total is meaningful only when it was measured against
+  // the same catalog cardinality as this local scan and cannot exceed that
+  // scan. Otherwise it can belong to an older or broader parser profile and
+  // must not inflate current coverage.
+  const nativeCoverageAligned = effectiveTranslation.sourceUnitCount === undefined
+    || effectiveTranslation.sourceUnitCount === currentSources.size
+    && effectiveNativeCount <= currentSources.size;
+  const unattributedNativeCount = nativeCoverageAligned
+    ? Math.max(effectiveNativeCount - attributedNativeSources.size, 0)
+    : 0;
   const translatedCount = Math.min(currentSources.size, translatedSources.size + unattributedNativeCount);
   const totalCount = currentSources.size;
   const scopes = (["runtime-ui", "metadata", "readme"] as const).flatMap((scope) => {
@@ -125,7 +144,7 @@ export function calculatePluginTranslationCoverage(
     missingCount: Math.max(totalCount - translatedCount, 0),
     staleCount,
     percent: totalCount === 0 ? 100 : Math.round((translatedCount / totalCount) * 100),
-    exactPluginVersion: translation.pluginVersion === catalog.pluginVersion,
+    exactPluginVersion: effectiveTranslation.pluginVersion === catalog.pluginVersion,
     scopes,
     unattributedNativeCount,
   };
@@ -150,6 +169,34 @@ export function mergePublishedPluginTranslation(
   };
 }
 
+/**
+ * An exact installed-artifact language pack wins over non-reviewed server text.
+ * A reviewed correction remains the only permitted replacement for native text.
+ */
+export function mergeCatalogNativeTranslations(
+  catalog: PluginUiCatalog | undefined,
+  translation: PluginTranslationState,
+): PluginTranslationState {
+  if (catalog === undefined) return translation;
+  const entries = new Map(translation.entries.map((entry) => [entry.source, entry]));
+  for (const item of catalog.strings) {
+    if (item.nativeTargetLocale !== translation.targetLocale || item.nativeTarget === undefined) continue;
+    const existing = entries.get(item.source);
+    if (
+      existing?.provenanceKind === "th-reviewed-correction"
+      && existing.application === "correction"
+    ) continue;
+    entries.set(item.source, {
+      pluginId: translation.pluginId,
+      source: item.source,
+      target: item.nativeTarget,
+      provenanceKind: "upstream-native",
+      scopes: resolvePluginStringScopes(item.origins),
+    });
+  }
+  return { ...translation, entries: [...entries.values()] };
+}
+
 export function selectCurrentCatalogTranslations(
   catalog: PluginUiCatalog | undefined,
   translation: PluginTranslationState,
@@ -160,7 +207,7 @@ export function selectCurrentCatalogTranslations(
   const currentSources = new Map(catalog.strings
     .filter((item) => includeMetadata || resolvePluginStringScopes(item.origins).includes("runtime-ui"))
     .map((item) => [item.source, item.placeholderSignature]));
-  return translation.entries
+  return mergeCatalogNativeTranslations(catalog, translation).entries
     .filter((entry) => isCompatibleEntry(entry, currentSources))
     .map((entry) => ({
       ...entry,

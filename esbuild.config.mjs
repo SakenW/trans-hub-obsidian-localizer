@@ -5,17 +5,21 @@ import esbuild from "esbuild";
 
 const externalBuiltins = [...builtinModules, ...builtinModules.map((name) => `node:${name}`)];
 const manifest = JSON.parse(await readFile(new URL("./manifest.json", import.meta.url), "utf8"));
-const transferRootKeyId = required("TRANS_HUB_TRANSFER_ROOT_KEY_ID", /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u);
-const transferRootKeyVersion = required("TRANS_HUB_TRANSFER_ROOT_KEY_VERSION", /^[1-9][0-9]*$/u);
-const transferRootPublicKey = required("TRANS_HUB_TRANSFER_ROOT_PUBLIC_KEY_B64", /^[A-Za-z0-9_-]{43}$/u);
-const transferTrustRoots = [{
-  keyId: transferRootKeyId,
-  keyVersion: Number(transferRootKeyVersion),
-  publicKeyBase64Url: transferRootPublicKey,
-}];
+function resolveTrustRoot(envPrefix) {
+  const rawKeyId = process.env[`${envPrefix}_KEY_ID`];
+  if (rawKeyId === undefined || rawKeyId.trim() === "") return undefined;
+  return {
+    keyId: required(`${envPrefix}_KEY_ID`, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u),
+    keyVersion: Number(required(`${envPrefix}_KEY_VERSION`, /^[1-9][0-9]*$/u)),
+    publicKeyBase64Url: required(`${envPrefix}_PUBLIC_KEY_B64`, /^[A-Za-z0-9_-]{43}$/u),
+  };
+}
+const transferRoot = resolveTrustRoot("TRANS_HUB_TRANSFER_ROOT");
+if (transferRoot === undefined) throw new Error("TRANS_HUB_TRANSFER_ROOT_KEY_ID 缺失或格式无效。");
+const transferTrustRoots = [transferRoot];
 const nextRoot = optionalTrustRoot();
 if (nextRoot !== undefined) {
-  if (nextRoot.keyId === transferRootKeyId && nextRoot.keyVersion === Number(transferRootKeyVersion)) {
+  if (nextRoot.keyId === transferRoot.keyId && nextRoot.keyVersion === transferRoot.keyVersion) {
     throw new Error("next trust root duplicates the current root");
   }
   transferTrustRoots.push(nextRoot);

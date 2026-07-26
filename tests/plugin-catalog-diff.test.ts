@@ -4,6 +4,7 @@ import {
   calculatePluginTranslationCoverage,
   localizedPluginDisplayName,
   localizedPluginDescription,
+  mergeCatalogNativeTranslations,
   mergePublishedPluginTranslation,
   selectCurrentCatalogTranslations,
 } from "../src/plugin-catalog-diff";
@@ -109,6 +110,73 @@ describe("plugin catalog version carry-over", () => {
         missingCount: 4,
         unattributedNativeCount: 0,
       }));
+  });
+
+  it("忽略来自不同或不可能权威目录规模的插件自带汇总，避免膨胀当前覆盖率", () => {
+    const translation = {
+      ...previous,
+      pluginVersion: "2.0.0",
+      sourceUnitCount: 191,
+      upstreamNativeCount: 134,
+      entries: [{
+        pluginId: "sample",
+        source: "Settings",
+        target: "设置",
+        provenanceKind: "th-automatic" as const,
+      }],
+    };
+
+    expect(calculatePluginTranslationCoverage(catalog, translation, "zh-CN"))
+      .toEqual(expect.objectContaining({
+        translatedCount: 1,
+        missingCount: 4,
+        unattributedNativeCount: 0,
+      }));
+
+    expect(calculatePluginTranslationCoverage(catalog, {
+      ...translation,
+      sourceUnitCount: 5,
+    }, "zh-CN")).toEqual(expect.objectContaining({
+      translatedCount: 1,
+      missingCount: 4,
+      unattributedNativeCount: 0,
+    }));
+  });
+
+  it("将本地安装包的原生目标语言逐条归因，并仅让已审核校订覆盖它", () => {
+    const nativeCatalog = {
+      ...catalog,
+      strings: catalog.strings.map((item) => {
+        if (item.source === "Settings") {
+          return { ...item, nativeTarget: "设置（原生）", nativeTargetLocale: "zh-CN" };
+        }
+        if (item.source === "Rows: {{th:expr:0}}") {
+          return { ...item, nativeTarget: "行：{{th:expr:0}}", nativeTargetLocale: "zh-CN" };
+        }
+        return item;
+      }),
+    };
+    const translation = {
+      ...previous,
+      entries: [
+        { pluginId: "sample", source: "Settings", target: "设置（语枢机翻）", provenanceKind: "th-automatic" as const },
+        {
+          pluginId: "sample", source: "Rows: {{th:expr:0}}", target: "行数：{{th:expr:0}}",
+          provenanceKind: "th-reviewed-correction" as const, application: "correction" as const,
+          nativeTarget: "行：{{th:expr:0}}",
+        },
+      ],
+    };
+
+    expect(mergeCatalogNativeTranslations(nativeCatalog, translation).entries).toEqual(expect.arrayContaining([
+      { pluginId: "sample", source: "Settings", target: "设置（原生）", provenanceKind: "upstream-native", scopes: ["runtime-ui", "readme"] },
+      expect.objectContaining({ source: "Rows: {{th:expr:0}}", target: "行数：{{th:expr:0}}", provenanceKind: "th-reviewed-correction" }),
+    ]));
+    expect(calculatePluginTranslationCoverage(nativeCatalog, translation, "zh-CN")).toEqual(expect.objectContaining({
+      translatedCount: 2,
+      missingCount: 3,
+      unattributedNativeCount: 0,
+    }));
   });
 
   it("不修改官方身份，并在开关开启时显示名称和说明译文", () => {

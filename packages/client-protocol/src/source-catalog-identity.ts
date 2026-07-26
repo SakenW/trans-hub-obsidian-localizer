@@ -4,7 +4,9 @@ import type { StrictJsonLimits } from "./strict-json.js";
 
 export const SOURCE_CATALOG_IDENTITY_PROTOCOL =
   "trans-hub.source-catalog-identity" as const;
-export const SOURCE_CATALOG_IDENTITY_REVISION = 1 as const;
+export const SOURCE_CATALOG_IDENTITY_REVISION = 2 as const;
+export const SOURCE_CATALOG_IDENTITY_LEGACY_REVISION = 1 as const;
+export type SourceCatalogIdentityRevision = 1 | 2;
 
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 const SCOPE = /^[a-z][a-z0-9]*(?:[-.:][a-z0-9]+)*$/u;
@@ -23,6 +25,13 @@ export interface SourceCatalogIdentityUnitInput {
   readonly placeholderSignature: string;
   readonly formatSignature: string;
   readonly scopes: readonly string[];
+  readonly sourceKey?: string;
+}
+
+export interface SourceCatalogIdentitySourceInput {
+  readonly key: string;
+  readonly logicalPath: string;
+  readonly formatFamily: string;
 }
 
 export interface SourceCatalogIdentityInput {
@@ -30,6 +39,7 @@ export interface SourceCatalogIdentityInput {
   readonly resourceVersion: string;
   readonly sourceLocale: string;
   readonly artifactDigest: string;
+  readonly sources?: readonly SourceCatalogIdentitySourceInput[];
   readonly units: readonly SourceCatalogIdentityUnitInput[];
 }
 
@@ -41,7 +51,7 @@ export interface SourceCatalogScopeIdentity {
 
 export interface SourceCatalogIdentity {
   readonly protocol: typeof SOURCE_CATALOG_IDENTITY_PROTOCOL;
-  readonly revision: typeof SOURCE_CATALOG_IDENTITY_REVISION;
+  readonly revision: SourceCatalogIdentityRevision;
   readonly resourceKey: string;
   readonly resourceVersion: string;
   readonly sourceLocale: string;
@@ -61,6 +71,7 @@ interface NormalizedUnit {
   readonly placeholderSignature: string;
   readonly formatSignature: string;
   readonly scopes: readonly string[];
+  readonly sourceKey?: string;
 }
 
 export async function computeSourceCatalogIdentity(
@@ -81,11 +92,52 @@ export async function computeSourceCatalogIdentity(
       "artifact digest must be lowercase SHA-256",
     );
   }
-  if (input.units.length === 0 || input.units.length > 100_000) {
+  if (input.units.length === 0 || input.units.length > 50_000) {
     protocolError(
       "CP_INVALID_VALUE",
       "$.units",
-      "source catalog must contain 1..100000 units",
+      "source catalog must contain 1..50000 units",
+    );
+  }
+  const revision: SourceCatalogIdentityRevision =
+    input.sources === undefined
+      ? SOURCE_CATALOG_IDENTITY_LEGACY_REVISION
+      : SOURCE_CATALOG_IDENTITY_REVISION;
+  const sourceKeys = new Set<string>();
+  const sourcePaths = new Set<string>();
+  const sources = input.sources
+    ?.map((source, index) => {
+      const key = requiredText(source.key, `$.sources[${index}].key`, 240);
+      const logicalPath = requiredText(
+        source.logicalPath,
+        `$.sources[${index}].logicalPath`,
+        512,
+      );
+      if (sourceKeys.has(key) || sourcePaths.has(logicalPath)) {
+        protocolError(
+          "CP_INVALID_VALUE",
+          `$.sources[${index}]`,
+          "source keys and paths must be unique",
+        );
+      }
+      sourceKeys.add(key);
+      sourcePaths.add(logicalPath);
+      return {
+        key,
+        logicalPath,
+        formatFamily: requiredText(
+          source.formatFamily,
+          `$.sources[${index}].formatFamily`,
+          80,
+        ),
+      };
+    })
+    .sort((left, right) => compareUnicodeScalar(left.key, right.key));
+  if (revision === SOURCE_CATALOG_IDENTITY_REVISION && sources?.length === 0) {
+    protocolError(
+      "CP_INVALID_VALUE",
+      "$.sources",
+      "v2 identity needs at least one source",
     );
   }
   const keys = new Set<string>();
@@ -126,6 +178,25 @@ export async function computeSourceCatalogIdentity(
           "each unit needs 1..64 content scopes",
         );
       }
+      const sourceKey =
+        unit.sourceKey === undefined
+          ? undefined
+          : requiredText(unit.sourceKey, `$.units[${index}].sourceKey`, 240);
+      if (revision === SOURCE_CATALOG_IDENTITY_REVISION) {
+        if (sourceKey === undefined || !sourceKeys.has(sourceKey)) {
+          protocolError(
+            "CP_INVALID_VALUE",
+            `$.units[${index}].sourceKey`,
+            "unit source is not declared",
+          );
+        }
+      } else if (sourceKey !== undefined) {
+        protocolError(
+          "CP_INVALID_VALUE",
+          `$.units[${index}].sourceKey`,
+          "v1 identity cannot carry source ownership",
+        );
+      }
       return {
         key,
         text: requiredText(unit.text, `$.units[${index}].text`, 1024 * 1024),
@@ -140,19 +211,26 @@ export async function computeSourceCatalogIdentity(
           4096,
         ),
         scopes,
+        ...(sourceKey === undefined ? {} : { sourceKey }),
       };
     })
     .sort((left, right) => compareUnicodeScalar(left.key, right.key));
 
   const base = {
     protocol: SOURCE_CATALOG_IDENTITY_PROTOCOL,
-    revision: SOURCE_CATALOG_IDENTITY_REVISION,
+    revision,
     resourceKey,
     resourceVersion,
     sourceLocale,
     artifactDigest: input.artifactDigest,
   } as const;
-  const digest = await checkedDigest(hash, { ...base, units }, "$.digest");
+  const digestBase =
+    revision === SOURCE_CATALOG_IDENTITY_REVISION ? { ...base, sources } : base;
+  const digest = await checkedDigest(
+    hash,
+    { ...digestBase, units },
+    "$.digest",
+  );
   const scopeNames = [...new Set(units.flatMap((unit) => unit.scopes))].sort();
   const scopes = await Promise.all(
     scopeNames.map(async (scope): Promise<SourceCatalogScopeIdentity> => {
@@ -164,7 +242,7 @@ export async function computeSourceCatalogIdentity(
         unitCount: scopedUnits.length,
         digest: await checkedDigest(
           hash,
-          { ...base, scope, units: scopedUnits },
+          { ...digestBase, scope, units: scopedUnits },
           `$.scopes.${scope}.digest`,
         ),
       };
@@ -217,7 +295,8 @@ export function parseSourceCatalogIdentity(
   ]);
   if (
     input.protocol !== SOURCE_CATALOG_IDENTITY_PROTOCOL ||
-    input.revision !== SOURCE_CATALOG_IDENTITY_REVISION
+    (input.revision !== SOURCE_CATALOG_IDENTITY_REVISION &&
+      input.revision !== SOURCE_CATALOG_IDENTITY_LEGACY_REVISION)
   ) {
     protocolError(
       "CP_UNSUPPORTED_PROTOCOL_REVISION",
@@ -300,7 +379,7 @@ export function parseSourceCatalogIdentity(
   }
   return Object.freeze({
     protocol: SOURCE_CATALOG_IDENTITY_PROTOCOL,
-    revision: SOURCE_CATALOG_IDENTITY_REVISION,
+    revision: input.revision,
     resourceKey: requiredUnknownText(input.resourceKey, "$.resourceKey", 200),
     resourceVersion: requiredUnknownText(
       input.resourceVersion,

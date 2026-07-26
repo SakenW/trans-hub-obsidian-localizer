@@ -1,7 +1,6 @@
 import {
   App,
   type ButtonComponent,
-  Modal,
   Notice,
   PluginSettingTab,
   Setting,
@@ -27,9 +26,15 @@ import {
 import { describePluginSelectionProcessing } from "./plugin-selection-processing";
 import {
   describePluginLocalizationStatus,
+  pluginManualRetryKind,
   PLUGIN_LOCALIZATION_STATUS_FILTERS,
+  type PluginManualRetryKind,
   type PluginLocalizationStatusKind,
 } from "./plugin-localization-status";
+import {
+  renderPluginPickerCatalogMismatchDetails,
+  renderPluginPickerCoverageDetails,
+} from "./plugin-picker-status-details";
 import {
   TARGET_LOCALE_OPTIONS,
   TRANS_HUB_OBSIDIAN_ECOSYSTEM_URL,
@@ -37,12 +42,12 @@ import {
   TRANS_HUB_WEB_BASE_URL,
   parseTargetLocale,
 } from "./product-config";
-import { prepareUntranslatedFeedback } from "./untranslated-feedback";
 
 const ORIGINAL_PLUGIN_NAME_ATTRIBUTE = "data-trans-hub-official-plugin-name";
 
 type PluginSourceState = CommunityPluginSourceEligibility | { readonly kind: "pending" };
 type PluginPickerStatusKind = PluginLocalizationStatusKind | "unsupported" | "source-pending";
+type PluginPickerVisualKind = PluginPickerStatusKind | "localized-complete" | "localized-partial";
 type InstalledPluginWithSource = InstalledObsidianPlugin & { readonly source: PluginSourceState };
 
 export class TransHubSettingTab extends PluginSettingTab {
@@ -481,6 +486,9 @@ export class TransHubSettingTab extends PluginSettingTab {
           )
           : plugin.description;
         const statusLabel = sourceStatus?.label ?? localizationStatus.label;
+        const hideArtifactMismatchLabel = sourceStatus === null
+          && localizationStatus.label === translate("本地插件文件与官方版本不一致");
+        const renderCoverageDetails = sourceStatus === null && localizationStatus.coverage !== undefined;
         const row = new Setting(list)
           .setName(displayName)
           .setDesc("");
@@ -492,7 +500,14 @@ export class TransHubSettingTab extends PluginSettingTab {
           text: `${plugin.id} · v${plugin.version}`,
           cls: "trans-hub-plugin-picker__metadata",
         });
-        descriptionEl.createDiv({ text: statusLabel, cls: "trans-hub-plugin-picker__provenance" });
+        if (!hideArtifactMismatchLabel && !renderCoverageDetails) {
+          descriptionEl.createDiv({ text: statusLabel, cls: "trans-hub-plugin-picker__provenance" });
+        }
+        if (sourceStatus === null && localizationStatus.catalogMismatch !== undefined) {
+          renderPluginPickerCatalogMismatchDetails(descriptionEl, localizationStatus.catalogMismatch);
+        } else if (renderCoverageDetails) {
+          renderPluginPickerCoverageDetails(descriptionEl, localizationStatus.coverage);
+        }
         row.addToggle((toggle) => {
           const selectable = plugin.source.kind === "supported";
           toggle.setValue(selectable && !excluded.has(plugin.id)).setDisabled(!selectable);
@@ -509,19 +524,42 @@ export class TransHubSettingTab extends PluginSettingTab {
             });
           }
         });
-        const visualKind = sourceStatus?.kind ?? localizationStatus.kind;
+        const visualKind: PluginPickerVisualKind = sourceStatus?.kind
+          ?? (localizationStatus.kind !== "localized" || localizationStatus.coverage === undefined
+            ? localizationStatus.kind
+            : localizationStatus.coverage.complete ? "localized-complete" : "localized-partial");
         row.settingEl.addClass(`trans-hub-plugin-picker__item--${visualKind}`);
         if (plugin.source.kind !== "supported") row.settingEl.addClass("is-disabled");
-        if (plugin.source.kind === "supported" && localizationStatus.kind === "failed") {
-          row.addButton((button) => button.setButtonText(translate("重新处理")).setTooltip(translate("仅重新处理此插件")).onClick(async () => {
-            await this.retrySinglePlugin(plugin.id);
-          }));
-        }
-        const catalog = pluginState.pluginCatalogs[plugin.id];
-        if (plugin.source.kind === "supported" && !excluded.has(plugin.id) && catalog !== undefined) {
-          row.addButton((button) => button.setButtonText(translate("报告问题")).setTooltip(translate("报告漏译或不准确的插件译文")).onClick(() => {
-            new UntranslatedFeedbackModal(this.app, this.plugin, catalog).open();
-          }));
+        const retryKind = pluginManualRetryKind({
+          submission: getPluginSubmissionForLocale(
+            pluginState,
+            plugin.id,
+            this.plugin.settings.targetLocale,
+          ),
+          translation: getPluginTranslation(
+            pluginState,
+            plugin.id,
+            this.plugin.settings.targetLocale,
+          ),
+          targetLocale: this.plugin.settings.targetLocale,
+        });
+        if (plugin.source.kind === "supported" && retryKind !== null) {
+          row.addButton((button) => {
+            button
+              .setButtonText(translate("重试此插件"))
+              .setTooltip(translate("重新检查并重试 {pluginName}，无需关闭本地化开关", {
+                pluginName: displayName,
+              }))
+              .setCta();
+            button.buttonEl.setAttr("aria-label", translate("重试 {pluginName} 本地化", {
+              pluginName: displayName,
+            }));
+            button.onClick(async () => {
+              button.buttonEl.disabled = true;
+              button.setButtonText(translate("正在重试…"));
+              await this.retrySinglePlugin(plugin.id, displayName, retryKind);
+            });
+          });
         }
         row.settingEl.setAttr("role", "listitem");
       }
@@ -531,13 +569,20 @@ export class TransHubSettingTab extends PluginSettingTab {
     renderRows();
   }
 
-  private async retrySinglePlugin(pluginId: string): Promise<void> {
+  private async retrySinglePlugin(
+    pluginId: string,
+    pluginName: string,
+    retryKind: PluginManualRetryKind,
+  ): Promise<void> {
     if (this.selectionProcessing !== null) await this.selectionProcessing;
-    this.selectionStatus = translate("正在重新处理 {pluginId}…", { pluginId });
+    this.selectionStatus = translate("正在重试 {pluginName}…", { pluginName });
     this.selectionStatusFailed = false;
     new Notice(this.selectionStatus);
     try {
-      const result = await this.plugin.processSinglePlugin(pluginId);
+      const result = await this.plugin.processSinglePlugin(
+        pluginId,
+        retryKind === "resubmit",
+      );
       this.selectionStatus = describePluginSelectionProcessing(result);
       new Notice(this.selectionStatus);
     } catch (error) {
@@ -649,75 +694,6 @@ export class TransHubSettingTab extends PluginSettingTab {
       href: TRANS_HUB_WEB_BASE_URL,
       attr: { target: "_blank", rel: "noopener noreferrer" },
     });
-  }
-}
-
-class UntranslatedFeedbackModal extends Modal {
-  private issueKind: "missing" | "inaccurate" = "missing";
-  private sourceText = "";
-  private currentTargetText = "";
-  private suggestedTargetText = "";
-
-  constructor(
-    app: App,
-    private readonly plugin: TransHubObsidianPlugin,
-    private readonly catalog: ReturnType<TransHubObsidianPlugin["getPluginState"]>["pluginCatalogs"][string],
-  ) { super(app); }
-
-  override onOpen(): void {
-    this.contentEl.createEl("h2", { text: translate("报告本地化问题") });
-    this.contentEl.createEl("p", {
-      text: translate("可报告 {pluginName} 的漏译或不准确译文。只会提交你确认的这一条内容，不会读取或上传笔记、文件路径或插件文件。", { pluginName: this.catalog.pluginName }),
-      cls: "setting-item-description",
-    });
-    let targetTextFields: HTMLDivElement | null = null;
-    new Setting(this.contentEl)
-      .setName(translate("问题类型"))
-      .addDropdown((dropdown) => dropdown
-        .addOptions({ missing: translate("缺少译文"), inaccurate: translate("译文不准确") })
-        .setValue(this.issueKind)
-        .onChange((value) => {
-          this.issueKind = value === "inaccurate" ? "inaccurate" : "missing";
-          targetTextFields?.toggle(this.issueKind === "inaccurate");
-        }));
-    new Setting(this.contentEl)
-      .setName(translate("对应的源文"))
-      .setDesc(translate("用于定位具体界面条目；链接、路径和非界面内容会被拒绝。"))
-      .addTextArea((text) => text
-        .setPlaceholder(translate("例如：Settings"))
-        .onChange((value) => { this.sourceText = value; }));
-    targetTextFields = this.contentEl.createDiv();
-    new Setting(targetTextFields)
-      .setName(translate("当前显示的译文"))
-      .addTextArea((text) => text.onChange((value) => { this.currentTargetText = value; }));
-    new Setting(targetTextFields)
-      .setName(translate("建议译文（可选）"))
-      .addTextArea((text) => text.onChange((value) => { this.suggestedTargetText = value; }));
-    targetTextFields.toggle(false);
-    new Setting(this.contentEl).addButton((button) => button.setButtonText(translate("提交报告")).setCta().onClick(async () => {
-      const draft = prepareUntranslatedFeedback({
-        catalog: this.catalog,
-        targetLocale: this.plugin.settings.targetLocale,
-        untranslatedSources: [this.sourceText],
-      });
-      const item = draft.items[0];
-      if (item === undefined) {
-        new Notice(translate("请输入一条安全的短插件界面原文。"), 8_000);
-        return;
-      }
-      try {
-        await this.plugin.reportPluginLocalizationIssue({
-          issueKind: this.issueKind,
-          pluginId: draft.pluginId,
-          pluginVersion: draft.pluginVersion,
-          sourceText: item.source,
-          currentTargetText: this.currentTargetText,
-          suggestedTargetText: this.suggestedTargetText,
-        });
-        new Notice(translate("本地化问题已提交，感谢反馈。"));
-        this.close();
-      } catch (error) { new Notice(translate("提交失败：{message}", { message: errorMessage(error) }), 10_000); }
-    }));
   }
 }
 

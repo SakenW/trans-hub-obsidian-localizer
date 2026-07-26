@@ -118,7 +118,7 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "failed",
-      label: "机器翻译失败，自动重试已停止。可单独重试此插件。",
+      label: "机器翻译失败，服务器已停止自动重试。点击右侧“重试此插件”。",
     });
   });
 
@@ -144,7 +144,7 @@ describe("describePluginLocalizationStatus", () => {
     expect(describePluginLocalizationStatus({
       submission: { ...baseSubmission, localizationContributionState: "rejected" },
       targetLocale: "zh-CN",
-    })).toEqual({ kind: "failed", label: "处理失败：需求未被接受" });
+    })).toEqual({ kind: "failed", label: "需求未被接受。点击右侧“重试此插件”。" });
   });
 
   it("显示当前目录的真实覆盖率，而不是仅显示缓存条目数", () => {
@@ -165,7 +165,38 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "catalog-mismatch",
-      label: "服务器正在更新目录身份；已安全应用 1 条精确命中译文",
+      label: "服务器正在更新目录身份",
+      catalogMismatch: { safelyAppliedCount: 1 },
+    });
+  });
+
+  it("将目录不一致状态与安全应用量、权威目录构成分开提供给列表呈现", () => {
+    expect(describePluginLocalizationStatus({
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.69",
+        sourceLocale: "en", digest: "new", artifactDigest: "new-artifact", scannedAt: "2026-07-18T00:00:00Z",
+        strings: [{ key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" }],
+      },
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
+        targetLocale: "zh-CN", sourceUnitCount: 79, upstreamNativeCount: 12,
+        publishedUnitCount: 64, missingUnitCount: 3,
+        entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
+        pulledAt: "2026-07-18T00:00:00Z",
+      },
+      targetLocale: "zh-CN",
+    })).toEqual({
+      kind: "catalog-mismatch",
+      label: "服务器正在更新目录身份",
+      catalogMismatch: {
+        safelyAppliedCount: 1,
+        authorityCatalog: {
+          totalCount: 79,
+          upstreamNativeCount: 12,
+          publishedCount: 64,
+          missingCount: 3,
+        },
+      },
     });
   });
 
@@ -192,6 +223,69 @@ describe("describePluginLocalizationStatus", () => {
     });
   });
 
+  it("本地逐键识别的原生语言不受旧权威目录总数影响", () => {
+    const catalog = {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+      sourceLocale: "en", digest: exactIdentity.digest,
+      artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
+      scannedAt: "2026-07-18T00:00:00Z",
+      strings: [
+        {
+          key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "",
+          nativeTarget: "设置（插件自带）", nativeTargetLocale: "zh-CN",
+        },
+        { key: "two", source: "New option", origins: ["ui-call" as const], placeholderSignature: "" },
+      ],
+    };
+    const status = describePluginLocalizationStatus({
+      catalog,
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
+        artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
+        targetLocale: "zh-CN", sourceUnitCount: 79, upstreamNativeCount: 12,
+        entries: [
+          { pluginId: "dataview", source: "Settings", target: "设置（语枢机翻）", provenanceKind: "th-automatic" as const },
+          { pluginId: "dataview", source: "New option", target: "新选项", provenanceKind: "th-automatic" as const },
+        ],
+        pulledAt: "2026-07-18T00:00:00Z",
+      },
+      targetLocale: "zh-CN",
+    });
+
+    expect(status.label).toContain("插件自带 1");
+    expect(status.label).toContain("语枢机翻 1（未经人工校对）");
+  });
+
+  it("不把超过当前目录规模的原生汇总显示为当前插件来源", () => {
+    const catalog = {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+      sourceLocale: "en", digest: exactIdentity.digest,
+      artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
+      scannedAt: "2026-07-18T00:00:00Z",
+      strings: [
+        { key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" },
+        { key: "two", source: "New option", origins: ["ui-call" as const], placeholderSignature: "" },
+      ],
+    };
+    const status = describePluginLocalizationStatus({
+      catalog,
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
+        artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
+        targetLocale: "zh-CN", sourceUnitCount: 2, upstreamNativeCount: 856,
+        entries: [{ pluginId: "dataview", source: "Settings", target: "设置", provenanceKind: "th-automatic" as const }],
+        pulledAt: "2026-07-18T00:00:00Z",
+      },
+      targetLocale: "zh-CN",
+    });
+
+    expect(status.label).toContain("已发布 1/2 条（50%），1 条尚未发布");
+    expect(status.label).not.toContain("插件自带");
+    expect(status.coverage?.sourceMetrics).toEqual([
+      { label: "语枢机翻 1（未经人工校对）", tone: "automatic" },
+    ]);
+  });
+
   it("仅在权威需求仍处理中时把精确目录缺口称为等待发布", () => {
     const catalog = {
       pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
@@ -213,6 +307,12 @@ describe("describePluginLocalizationStatus", () => {
     expect(describePluginLocalizationStatus({ catalog, translation, targetLocale: "zh-CN" })).toEqual({
       kind: "localized",
       label: "已发布 1/2 条（50%），1 条尚未发布；插件界面 1/2",
+      coverage: {
+        headline: "已发布 1/2 条（50%），1 条尚未发布",
+        complete: false,
+        scopeMetrics: ["插件界面 1/2"],
+        sourceMetrics: [],
+      },
     });
     expect(describePluginLocalizationStatus({
       catalog,
@@ -232,6 +332,12 @@ describe("describePluginLocalizationStatus", () => {
     })).toEqual({
       kind: "localized",
       label: "已发布 1/2 条（50%），1 条尚未发布；插件界面 1/2",
+      coverage: {
+        headline: "已发布 1/2 条（50%），1 条尚未发布",
+        complete: false,
+        scopeMetrics: ["插件界面 1/2"],
+        sourceMetrics: [],
+      },
     });
     expect(describePluginLocalizationStatus({
       catalog,
@@ -251,6 +357,12 @@ describe("describePluginLocalizationStatus", () => {
     })).toEqual({
       kind: "waiting",
       label: "已本地化 1/2 条（50%），1 条等待发布；插件界面 1/2",
+      coverage: {
+        headline: "已本地化 1/2 条（50%），1 条等待发布",
+        complete: false,
+        scopeMetrics: ["插件界面 1/2"],
+        sourceMetrics: [],
+      },
     });
   });
 
@@ -277,11 +389,17 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "localized",
-      label: "已本地化 2/2 条（100%）；插件自带覆盖范围明细待服务端提供；插件自带 2",
+      label: "已本地化 2/2 条（100%）；插件自带 2 条（范围明细待同步）",
+      coverage: {
+        headline: "已本地化 2/2 条（100%）",
+        complete: true,
+        scopeMetrics: ["插件自带 2 条（范围明细待同步）"],
+        sourceMetrics: [],
+      },
     });
   });
 
-  it("目录作用域不一致时不把本地额外条目误报为等待翻译", () => {
+  it("制品相同但目录身份不同时只报告安全交集并等待权威目录更新", () => {
     expect(describePluginLocalizationStatus({
       catalog: {
         pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
@@ -312,7 +430,11 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "catalog-mismatch",
-      label: "服务器目录正在更新：插件界面；已安全应用 1 条精确命中译文",
+      label: "服务器目录正在更新：插件界面",
+      catalogMismatch: {
+        safelyAppliedCount: 1,
+        authorityCatalog: undefined,
+      },
     });
   });
 

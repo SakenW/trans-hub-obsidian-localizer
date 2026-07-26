@@ -30,4 +30,25 @@ describe("plugin README extraction", () => {
     expect(renderPluginReadmeSource("- Use **Markdown** with [reference][docs]."))
       .toBe("Use Markdown with {{th:expr:0}}.");
   });
+
+  it("keeps linked prose but excludes image-only sponsor badges and pure protected blocks", () => {
+    const markdown = [
+      "For more information on using formulas, visit the",
+      "[Help Docs](https://example.com/help).",
+      "",
+      "[![GitHub Sponsors](https://img.shields.io/sponsors)](https://github.com/sponsors/example)",
+      "[![Paypal](https://img.shields.io/paypal)](https://paypal.me/example)",
+      "[<img src=\"https://example.com/coffee.png\" alt=\"Coffee\">](https://example.com/coffee)",
+    ].join("\n");
+
+    expect(extractPluginReadmeStrings(markdown)).toEqual([
+      "For more information on using formulas, visit the {{th:expr:0}}.",
+      "Help Docs",
+    ]);
+    expect(renderPluginReadmeSource("[<img src=\"badge.png\">](https://example.com)"))
+      .toBeUndefined();
+    expect(renderPluginReadmeSource(
+      "Support via [![Sponsor](badge.svg)](https://example.com) today.",
+    )).toBe("Support via today.");
+  });
 });

@@ -655,4 +655,101 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       waitingCount: 1,
     }));
   });
+
+  it("re-submits a rejected source observation once with a new generation", async () => {
+    mocks.resolvePublished.mockReturnValue(undefined);
+    let state = retryablePluginState();
+    vi.mocked(submitObsidianPluginDiscovery).mockResolvedValue({
+      contributionId: "retry-discovery", state: "received",
+      recordedAt: "2026-07-23T00:00:00.000Z",
+    } as never);
+    vi.mocked(submitObsidianLocalizationObservation).mockResolvedValue({
+      contributionId: "retry-localization", state: "received",
+    } as never);
+    const activationStore = activationWithContributionState("rejected");
+
+    const summary = await synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN",
+      excludedPluginIds: [], activationStore, translationPackStore,
+      getState: () => state, replaceState: (next) => { state = next; },
+      save: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(submitObsidianPluginDiscovery).toHaveBeenCalledWith(expect.objectContaining({
+      observationGeneration: 1,
+    }));
+    expect(submitObsidianLocalizationObservation).toHaveBeenCalledWith(expect.objectContaining({
+      observationGeneration: 1,
+    }));
+    expect(state.pluginSubmissions.dataview).toEqual(expect.objectContaining({
+      contributionId: "retry-discovery",
+      localizationContributionId: "retry-localization",
+      observationGeneration: 1,
+    }));
+    expect(summary).toEqual(expect.objectContaining({ submittedCount: 1, requestedCount: 1 }));
+  });
+
+  it("manual resubmit creates a later generation after automatic recovery is exhausted", async () => {
+    mocks.resolvePublished.mockReturnValue(undefined);
+    let state = retryablePluginState({ observationGeneration: 1 });
+    vi.mocked(submitObsidianPluginDiscovery).mockResolvedValue({
+      contributionId: "manual-discovery", state: "received",
+      recordedAt: "2026-07-24T00:00:00.000Z",
+    } as never);
+    vi.mocked(submitObsidianLocalizationObservation).mockResolvedValue({
+      contributionId: "manual-localization", state: "received",
+    } as never);
+    const activationStore = activationWithContributionState("rejected");
+
+    await synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN",
+      excludedPluginIds: [], manualResubmitPluginIds: ["dataview"],
+      activationStore, translationPackStore, getState: () => state,
+      replaceState: (next) => { state = next; }, save: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(submitObsidianPluginDiscovery).toHaveBeenCalledWith(expect.objectContaining({
+      observationGeneration: 2,
+    }));
+    expect(submitObsidianLocalizationObservation).toHaveBeenCalledWith(expect.objectContaining({
+      observationGeneration: 2,
+    }));
+    expect(state.pluginSubmissions.dataview?.observationGeneration).toBe(2);
+  });
 });
+
+function retryablePluginState(
+  extra: Readonly<Record<string, unknown>> = {},
+): PluginState {
+  return {
+    ...EMPTY_PLUGIN_STATE,
+    pluginCatalogs: {
+      dataview: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+        sourceLocale: "en", digest: "catalog-digest", artifactDigest: "a".repeat(64),
+        scannedAt: "2026-07-18T00:00:00.000Z",
+        strings: [{ key: STRING_KEY, source: "Current source", origins: ["ui-call"], placeholderSignature: "" }],
+      },
+    },
+    pluginSubmissions: {
+      dataview: {
+        pluginId: "dataview", pluginVersion: "0.5.68", catalogDigest: "catalog-digest",
+        adapterProfileDigest: "117aade03541d1e4740eb0892fb9866be6ddc1973059453049a5a7e01fe8d518",
+        installationId: "installation", contributionId: "rejected-discovery",
+        contributionState: "received", repository: "blacksmithgu/obsidian-dataview",
+        submittedAt: "2026-07-18T00:00:00.000Z",
+        ...extra,
+      },
+    },
+  };
+}
+
+function activationWithContributionState(state: string): ActivationStore {
+  return {
+    client: vi.fn().mockResolvedValue({
+      client: { getContributionStatus: vi.fn().mockResolvedValue({ state }) },
+      bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+      authorityWorkspaceId: "workspace",
+    }),
+  } as unknown as ActivationStore;
+}

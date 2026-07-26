@@ -15,8 +15,15 @@ describe("Obsidian public client boundary", () => {
     expect(source.join("\n")).not.toContain("secure-client-core");
   });
 
+  it("requires a real translation-export trust root for production builds", async () => {
+    const source = await readFile(`${ROOT}/esbuild.config.mjs`, "utf8");
+    expect(source).not.toContain("obsidian-store-build-verification-placeholder");
+    expect(source).toContain('if (rawKeyId === undefined || rawKeyId.trim() === "") return undefined;');
+    expect(source).toContain('if (transferRoot === undefined) throw new Error("TRANS_HUB_TRANSFER_ROOT_KEY_ID 缺失或格式无效。");');
+  });
+
   it("pins the exact public observation adapter descriptor", async () => {
-    const artifact = await readFile(`${ROOT}/adapter/obsidian-plugin-ui-v12.json`);
+    const artifact = await readFile(`${ROOT}/adapter/obsidian-plugin-ui-v16.json`);
     expect(createHash("sha256").update(artifact).digest("hex"))
       .toBe(OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex);
   });

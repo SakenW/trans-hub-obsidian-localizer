@@ -45,11 +45,14 @@ export interface PluginSyncSummary {
   readonly demandStateCounts?: Readonly<Partial<Record<LocalizationDemandState, number>>>;
 }
 
+const MAX_AUTOMATIC_SOURCE_RESUBMISSIONS = 1;
+
 export async function synchronizeConfiguredPluginTranslations(input: {
   readonly apiBaseUrl: string;
   readonly targetLocale: TargetLocale;
   readonly excludedPluginIds: readonly string[];
   readonly onlyPluginIds?: readonly string[];
+  readonly manualResubmitPluginIds?: readonly string[];
   readonly activationStore: ActivationStore;
   readonly translationPackStore: ScopeAwarePackStore;
   readonly getState: () => PluginState;
@@ -61,6 +64,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   });
   const excluded = new Set(input.excludedPluginIds);
   const only = input.onlyPluginIds === undefined ? null : new Set(input.onlyPluginIds);
+  const manualResubmit = new Set(input.manualResubmitPluginIds ?? []);
   const transport = new ObsidianHttpTransport(input.apiBaseUrl);
   const publishedCatalog = await loadPublishedEcosystemCatalog(transport);
   let submittedCount = 0;
@@ -131,6 +135,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
         catalog.pluginId,
         catalog.pluginVersion,
       );
+      const manuallyResubmit = manualResubmit.has(catalog.pluginId);
       let submission = input.getState().pluginSubmissions[catalog.pluginId];
       if (
         submission?.installationId !== bootstrap.installationId
@@ -155,11 +160,52 @@ export async function synchronizeConfiguredPluginTranslations(input: {
         submittedCount += 1;
       } else {
         const receipt = await client.getContributionStatus(submission.contributionId);
-        submission = {
-          ...submission,
-          contributionState: receipt.state,
-        };
+        const observationGeneration = submission.observationGeneration ?? 0;
+        if (
+          receipt.state === "rejected"
+          && (
+            manuallyResubmit
+            || observationGeneration < MAX_AUTOMATIC_SOURCE_RESUBMISSIONS
+          )
+        ) {
+          const nextGeneration = observationGeneration + 1;
+          const retryReceipt = await submitObsidianPluginDiscovery({
+            client,
+            installationId: bootstrap.installationId,
+            catalog,
+            repository: identity.repository,
+            candidateLocators: identity.candidateLocators,
+            observationGeneration: nextGeneration,
+          });
+          submission = submissionFromReceipt(
+            catalog,
+            identity.repository,
+            bootstrap.installationId,
+            retryReceipt,
+            nextGeneration,
+          );
+          submittedCount += 1;
+        } else {
+          submission = manuallyResubmit
+            ? prepareManualLocalizationResubmission(
+                submission,
+                receipt.state,
+                observationGeneration + 1,
+              )
+            : {
+                ...submission,
+                contributionState: receipt.state,
+              };
+        }
         await saveSubmission(input, submission);
+        if (
+          submission.contributionState === "rejected"
+          && (submission.observationGeneration ?? 0)
+            >= MAX_AUTOMATIC_SOURCE_RESUBMISSIONS
+        ) {
+          failedPluginIds.push(catalog.pluginId);
+          continue;
+        }
       }
       if (
         submission.localizationTargetLocale !== input.targetLocale
@@ -171,6 +217,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           catalog,
           repository: identity.repository,
           targetLocale: input.targetLocale,
+          observationGeneration: submission.observationGeneration,
         });
         submission = {
           ...submission,
@@ -280,6 +327,31 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   };
 }
 
+function prepareManualLocalizationResubmission(
+  submission: PluginSubmissionState,
+  contributionState: string,
+  observationGeneration: number,
+): PluginSubmissionState {
+  const {
+    localizationTargetLocale: discardedTargetLocale,
+    localizationContributionId: discardedContributionId,
+    localizationContributionState: discardedContributionState,
+    localizationDemandStatus: discardedDemandStatus,
+    lastError: discardedLastError,
+    ...sourceSubmission
+  } = submission;
+  void discardedTargetLocale;
+  void discardedContributionId;
+  void discardedContributionState;
+  void discardedDemandStatus;
+  void discardedLastError;
+  return {
+    ...sourceSubmission,
+    contributionState,
+    observationGeneration,
+  };
+}
+
 async function pullPluginTranslation(input: {
   readonly input: Parameters<typeof synchronizeConfiguredPluginTranslations>[0];
   readonly transport: ObsidianHttpTransport;
@@ -367,7 +439,10 @@ async function saveNativeCoverage(
       ? {}
       : { catalogIdentity: published.catalogIdentity }),
     targetLocale: input.targetLocale,
+    sourceUnitCount: published.sourceUnitCount,
     upstreamNativeCount,
+    publishedUnitCount: published.publishedUnitCount,
+    missingUnitCount: published.missingUnitCount,
     entries: [],
     pulledAt: new Date().toISOString(),
   });
@@ -406,6 +481,7 @@ function submissionFromReceipt(
   repository: string,
   installationId: string,
   receipt: ContributionStateReceipt<"source_discovery">,
+  observationGeneration = 0,
 ): PluginSubmissionState {
   return {
     pluginId: catalog.pluginId,
@@ -415,6 +491,7 @@ function submissionFromReceipt(
     installationId,
     contributionId: receipt.contributionId,
     contributionState: receipt.state,
+    ...(observationGeneration === 0 ? {} : { observationGeneration }),
     repository,
     submittedAt: receipt.recordedAt,
   };
@@ -607,7 +684,10 @@ export function validatePluginTranslations(
       ? {}
       : { catalogIdentity: published.catalogIdentity }),
     targetLocale,
+    ...(published === undefined ? {} : { sourceUnitCount: published.sourceUnitCount }),
     upstreamNativeCount,
+    ...(published === undefined ? {} : { publishedUnitCount: published.publishedUnitCount }),
+    ...(published === undefined ? {} : { missingUnitCount: published.missingUnitCount }),
     entries,
     pulledAt: new Date().toISOString(),
   };

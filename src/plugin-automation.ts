@@ -97,6 +97,7 @@ export class PluginAutomationController {
         plugin,
         bundle,
         sourceLocale: OBSIDIAN_SOURCE_LOCALE,
+        targetLocale: settings.targetLocale,
         registryMetadata: {
           name: identity.officialName,
           description: identity.officialDescription,

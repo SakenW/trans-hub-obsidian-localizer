@@ -5,6 +5,8 @@ const INLINE_LINK = /(!?)\[([^\]]*)\]\((?:\\.|[^)])*\)/gu;
 const REFERENCE_LINK = /(!?)\[([^\]]*)\]\[[^\]]*\]/gu;
 const AUTOLINK = /<https?:\/\/[^>]+>/gu;
 const HTML_TAG = /<\/?[A-Za-z][^>]*>/gu;
+const DYNAMIC_TOKEN = /\{\{th:expr:\d+\}\}/gu;
+const LINKED_IMAGE = /\[\s*(?:!\[[^\]]*\]\((?:\\.|[^)])*\)|<img\b[^>]*>)\s*\]\((?:\\.|[^)])*\)/giu;
 const TABLE_ROW = /^\s*\|?.*\|.*\|?\s*$/u;
 const HORIZONTAL_RULE = /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/u;
 
@@ -26,6 +28,7 @@ export function renderPluginReadmeSource(value: string): string | undefined {
   const protect = (label: string): string => label.trim() === "" ? "" : "\uE000";
   let tokenIndex = 0;
   const rendered = value
+    .replace(LINKED_IMAGE, "")
     .replace(INLINE_CODE, (_match, _ticks: string, code: string) => protect(code))
     .replace(INLINE_LINK, (_match, image: string, label: string) => image === "!" ? "" : protect(label))
     .replace(REFERENCE_LINK, (_match, image: string, label: string) => image === "!" ? "" : protect(label))
@@ -45,17 +48,19 @@ export function renderPluginReadmeSource(value: string): string | undefined {
     .replace(/&#39;/gu, "'")
     .replace(/\s+/gu, " ")
     .trim();
-  return rendered === "" || !/[A-Za-z\p{L}]/u.test(rendered) ? undefined : rendered;
+  const semanticText = rendered.replace(DYNAMIC_TOKEN, "");
+  return rendered === "" || !/[A-Za-z\p{L}]/u.test(semanticText) ? undefined : rendered;
 }
 
 function addRendered(target: string[], value: string): void {
+  const visible = value.replace(LINKED_IMAGE, "");
   for (const pattern of [INLINE_LINK, REFERENCE_LINK]) {
-    for (const match of value.matchAll(pattern)) {
+    for (const match of visible.matchAll(pattern)) {
       if (match[1] === "!") continue;
       const label = renderPluginReadmeSource(match[2] ?? "");
       if (label !== undefined) target.push(label);
     }
   }
-  const rendered = renderPluginReadmeSource(value);
+  const rendered = renderPluginReadmeSource(visible);
   if (rendered !== undefined) target.push(rendered);
 }

@@ -100,6 +100,10 @@ export default class TransHubObsidianPlugin extends Plugin {
     this.register(() => this.pluginAutomation.stop());
     this.register(() => this.clearPendingTranslationRetry());
     this.pluginAutomation.start();
+    // Community-plugin reloads can occur after Obsidian has already emitted
+    // layout-ready, so do not leave the persisted catalog stale until the
+    // periodic pass runs.
+    void this.runAutomaticPluginTranslation();
     this.app.workspace.onLayoutReady(() => {
       void this.runAutomaticPluginTranslation();
     });
@@ -153,7 +157,7 @@ export default class TransHubObsidianPlugin extends Plugin {
       if (!this.activation.isConfigured() && targetLocale !== OBSIDIAN_SOURCE_LOCALE) {
         return null;
       }
-      const result = await this.processPluginsNow(undefined, targetLocale);
+      const result = await this.processPluginsNow(undefined, targetLocale, undefined);
       return revision === this.targetLocaleRevision ? result : null;
     });
   }
@@ -168,27 +172,43 @@ export default class TransHubObsidianPlugin extends Plugin {
     return this.processPlugins();
   }
 
-  processSinglePlugin(pluginId: string): Promise<PluginSelectionProcessingResult> {
-    return this.processPlugins([pluginId]);
+  processSinglePlugin(
+    pluginId: string,
+    resubmitObservation = false,
+  ): Promise<PluginSelectionProcessingResult> {
+    return this.processPlugins(
+      [pluginId],
+      resubmitObservation ? [pluginId] : undefined,
+    );
   }
 
   private async processPlugins(
     onlyPluginIds?: readonly string[],
+    manualResubmitPluginIds?: readonly string[],
   ): Promise<PluginSelectionProcessingResult> {
     const targetLocale = this.settings.targetLocale;
     return this.pluginProcessingQueue.run(
-      () => this.processPluginsNow(onlyPluginIds, targetLocale),
+      () => this.processPluginsNow(
+        onlyPluginIds,
+        targetLocale,
+        manualResubmitPluginIds,
+      ),
     );
   }
 
   private async processPluginsNow(
     onlyPluginIds: readonly string[] | undefined,
     targetLocale: TargetLocale,
+    manualResubmitPluginIds: readonly string[] | undefined,
   ): Promise<PluginSelectionProcessingResult> {
     const result = await processPluginSelection({
       scan: () => this.scanInstalledPluginStrings(onlyPluginIds),
       hasSession: () => targetLocale === OBSIDIAN_SOURCE_LOCALE || this.activation.isConfigured(),
-      synchronize: () => this.synchronizePluginTranslationsNow(onlyPluginIds, targetLocale),
+      synchronize: () => this.synchronizePluginTranslationsNow(
+        onlyPluginIds,
+        targetLocale,
+        manualResubmitPluginIds,
+      ),
       applyCached: () => { this.applyCachedPluginTranslations(); },
     });
     if (targetLocale === this.settings.targetLocale) this.schedulePendingTranslationRetry(result);
@@ -230,13 +250,14 @@ export default class TransHubObsidianPlugin extends Plugin {
   ): Promise<PluginSyncSummary> {
     const targetLocale = this.settings.targetLocale;
     return this.pluginProcessingQueue.run(
-      () => this.synchronizePluginTranslationsNow(onlyPluginIds, targetLocale),
+      () => this.synchronizePluginTranslationsNow(onlyPluginIds, targetLocale, undefined),
     );
   }
 
   private async synchronizePluginTranslationsNow(
     onlyPluginIds: readonly string[] | undefined,
     targetLocale: TargetLocale,
+    manualResubmitPluginIds: readonly string[] | undefined,
   ): Promise<PluginSyncSummary> {
     if (targetLocale === OBSIDIAN_SOURCE_LOCALE) {
       this.pluginAutomation.applyCachedTranslations();
@@ -247,6 +268,7 @@ export default class TransHubObsidianPlugin extends Plugin {
       targetLocale,
       excludedPluginIds: this.settings.excludedPluginIds,
       ...(onlyPluginIds === undefined ? {} : { onlyPluginIds }),
+      ...(manualResubmitPluginIds === undefined ? {} : { manualResubmitPluginIds }),
       activationStore: this.activation,
       translationPackStore: this.translationPackStore,
       getState: () => this.state,
