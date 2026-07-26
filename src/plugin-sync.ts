@@ -16,8 +16,16 @@ import {
   resolvePluginStringScopes,
   type PluginUiCatalog,
 } from "./plugin-string-scanner";
-import type { PluginState, PluginSubmissionState, PluginTranslationState } from "./plugin-state";
+import {
+  deletePluginTranslation,
+  getPluginTranslation,
+  setPluginTranslation,
+  type PluginState,
+  type PluginSubmissionState,
+  type PluginTranslationState,
+} from "./plugin-state";
 import type { PluginUiTranslation } from "./plugin-ui-runtime";
+import type { TargetLocale } from "./product-config";
 import {
   OBSIDIAN_PUBLIC_PROFILE,
   submitObsidianLocalizationObservation,
@@ -39,7 +47,7 @@ export interface PluginSyncSummary {
 
 export async function synchronizeConfiguredPluginTranslations(input: {
   readonly apiBaseUrl: string;
-  readonly targetLocale: string;
+  readonly targetLocale: TargetLocale;
   readonly excludedPluginIds: readonly string[];
   readonly onlyPluginIds?: readonly string[];
   readonly activationStore: ActivationStore;
@@ -317,20 +325,17 @@ async function pullPluginTranslation(input: {
   const dictionary = mergePublishedPluginTranslation(
     input.catalog,
     downloaded,
-    state.pluginTranslations[input.catalog.pluginId],
+    getPluginTranslation(state, input.catalog.pluginId, input.input.targetLocale),
   );
-  input.input.replaceState({
+  const nextState = setPluginTranslation({
     ...state,
     pluginSubmissions: clearedPluginSubmissions(state, input.catalog.pluginId),
-    pluginTranslations: {
-      ...state.pluginTranslations,
-      [input.catalog.pluginId]: dictionary,
-    },
     translationExportStates: {
       ...state.translationExportStates,
       [exportStateKey]: { etag: output.etag, manifest: output.manifest },
     },
-  });
+  }, input.catalog.pluginId, input.input.targetLocale, dictionary);
+  input.input.replaceState(nextState);
   await input.input.save();
   return dictionary.entries.length;
 }
@@ -346,30 +351,27 @@ async function saveNativeCoverage(
   const { [exportStateKey]: discardedExportState, ...remainingExportStates } =
     state.translationExportStates;
   void discardedExportState;
-  input.replaceState({
+  const nextState = setPluginTranslation({
     ...state,
     pluginSubmissions: clearedPluginSubmissions(state, catalog.pluginId),
-    pluginTranslations: {
-      ...state.pluginTranslations,
-      [catalog.pluginId]: {
-        pluginId: catalog.pluginId,
-        pluginVersion: catalog.pluginVersion,
-        sourceVersionId: published.sourceVersionId,
-        artifactDigest: published.artifactDigest,
-        ...(published.sourceSnapshotDigest === undefined
-          ? {}
-          : { sourceSnapshotDigest: published.sourceSnapshotDigest }),
-        ...(published.catalogIdentity === undefined
-          ? {}
-          : { catalogIdentity: published.catalogIdentity }),
-        targetLocale: input.targetLocale,
-        upstreamNativeCount,
-        entries: [],
-        pulledAt: new Date().toISOString(),
-      },
-    },
     translationExportStates: remainingExportStates,
+  }, catalog.pluginId, input.targetLocale, {
+    pluginId: catalog.pluginId,
+    pluginVersion: catalog.pluginVersion,
+    sourceVersionId: published.sourceVersionId,
+    artifactDigest: published.artifactDigest,
+    ...(published.sourceSnapshotDigest === undefined
+      ? {}
+      : { sourceSnapshotDigest: published.sourceSnapshotDigest }),
+    ...(published.catalogIdentity === undefined
+      ? {}
+      : { catalogIdentity: published.catalogIdentity }),
+    targetLocale: input.targetLocale,
+    upstreamNativeCount,
+    entries: [],
+    pulledAt: new Date().toISOString(),
   });
+  input.replaceState(nextState);
   await input.save();
 }
 
@@ -379,9 +381,11 @@ async function clearPluginDelivery(
   sourceVersionId: string | undefined,
 ): Promise<void> {
   const state = input.getState();
-  const { [pluginId]: discardedTranslation, ...remainingTranslations } =
-    state.pluginTranslations;
-  void discardedTranslation;
+  const stateWithoutTranslation = deletePluginTranslation(
+    state,
+    pluginId,
+    input.targetLocale,
+  );
   const exportStateKey = sourceVersionId === undefined
     ? undefined
     : translationExportStateKey(sourceVersionId, input.targetLocale);
@@ -391,8 +395,7 @@ async function clearPluginDelivery(
     ),
   );
   input.replaceState({
-    ...state,
-    pluginTranslations: remainingTranslations,
+    ...stateWithoutTranslation,
     translationExportStates: remainingExportStates,
   });
   await input.save();
@@ -435,7 +438,10 @@ async function saveSubmission(
 }
 
 async function saveSynchronizationError(
-  input: Pick<Parameters<typeof synchronizeConfiguredPluginTranslations>[0], "getState" | "replaceState" | "save">,
+  input: Pick<
+    Parameters<typeof synchronizeConfiguredPluginTranslations>[0],
+    "getState" | "replaceState" | "save" | "targetLocale"
+  >,
   pluginId: string,
   error: unknown,
 ): Promise<void> {
@@ -444,6 +450,7 @@ async function saveSynchronizationError(
   const errorRecord = {
     code: synchronizationErrorCode(error),
     message: synchronizationErrorMessage(error),
+    targetLocale: input.targetLocale,
     updatedAt: new Date().toISOString(),
   };
   if (submission === undefined) {
@@ -550,7 +557,7 @@ export function validatePluginTranslations(
     readonly nativeTarget?: string;
   }[],
   sourceVersionId: string,
-  targetLocale: string,
+  targetLocale: TargetLocale,
   upstreamNativeCount = 0,
   published?: PublishedPluginSource,
 ): PluginTranslationState {

@@ -26,9 +26,9 @@ describe("selectApplicablePluginTranslations", () => {
         }],
       }])),
       pluginTranslations: {
-        enabled: { pluginId: "enabled", pluginVersion: "1", sourceVersionId: "v", targetLocale: "zh-CN", entries: [entry("enabled")], pulledAt: "now" },
-        disabled: { pluginId: "disabled", pluginVersion: "1", sourceVersionId: "v", targetLocale: "zh-CN", entries: [entry("disabled")], pulledAt: "now" },
-        excluded: { pluginId: "excluded", pluginVersion: "1", sourceVersionId: "v", targetLocale: "zh-CN", entries: [entry("excluded")], pulledAt: "now" },
+        enabled: { "zh-CN": { pluginId: "enabled", pluginVersion: "1", sourceVersionId: "v", targetLocale: "zh-CN", entries: [entry("enabled")], pulledAt: "now" } },
+        disabled: { "zh-CN": { pluginId: "disabled", pluginVersion: "1", sourceVersionId: "v", targetLocale: "zh-CN", entries: [entry("disabled")], pulledAt: "now" } },
+        excluded: { "zh-CN": { pluginId: "excluded", pluginVersion: "1", sourceVersionId: "v", targetLocale: "zh-CN", entries: [entry("excluded")], pulledAt: "now" } },
       },
     };
 
@@ -39,18 +39,32 @@ describe("selectApplicablePluginTranslations", () => {
     })).toEqual([{ ...entry("enabled"), scopes: ["runtime-ui"] }]);
   });
 
-  it("does not apply cached translations for a previously selected target language", () => {
+  it("selects the current locale while preserving another cached locale", () => {
     const state = {
       ...EMPTY_PLUGIN_STATE,
       enabledPluginIds: ["enabled"],
+      pluginCatalogs: {
+        enabled: {
+          pluginId: "enabled", pluginName: "Enabled", pluginVersion: "1",
+          sourceLocale: "en", digest: "digest", artifactDigest: "artifact", scannedAt: "now",
+          strings: [{
+            key: "settings", source: "Settings", origins: ["ui-call" as const],
+            semanticRole: "runtime-ui" as const, placeholderSignature: "",
+          }],
+        },
+      },
       pluginTranslations: {
         enabled: {
-          pluginId: "enabled",
-          pluginVersion: "1",
-          sourceVersionId: "v",
-          targetLocale: "zh-CN",
-          entries: [{ pluginId: "enabled", source: "Settings", target: "设置" }],
-          pulledAt: "now",
+          "zh-CN": {
+            pluginId: "enabled", pluginVersion: "1", sourceVersionId: "v-zh",
+            targetLocale: "zh-CN", entries: [{ pluginId: "enabled", source: "Settings", target: "设置" }],
+            pulledAt: "now",
+          },
+          ja: {
+            pluginId: "enabled", pluginVersion: "1", sourceVersionId: "v-ja",
+            targetLocale: "ja", entries: [{ pluginId: "enabled", source: "Settings", target: "設定" }],
+            pulledAt: "now",
+          },
         },
       },
     };
@@ -59,7 +73,9 @@ describe("selectApplicablePluginTranslations", () => {
       excludedPluginIds: [],
       pluginMetadataTranslationEnabled: true,
       targetLocale: "ja",
-    })).toEqual([]);
+    })).toEqual([{
+      pluginId: "enabled", source: "Settings", target: "設定", scopes: ["runtime-ui"],
+    }]);
   });
 
   it("applies composite plugin names only while metadata translation is enabled", () => {
@@ -94,7 +110,7 @@ describe("selectApplicablePluginTranslations", () => {
         },
       },
       pluginTranslations: {
-        sample: {
+        sample: { "zh-CN": {
           pluginId: "sample",
           pluginVersion: "1",
           sourceVersionId: "v",
@@ -104,7 +120,7 @@ describe("selectApplicablePluginTranslations", () => {
             { pluginId: "sample", source: "Sample description", target: "示例说明" },
           ],
           pulledAt: "now",
-        },
+        } },
       },
     };
 

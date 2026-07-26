@@ -57,9 +57,11 @@ if (
 }
 
 export function parseTargetLocale(value: unknown, fallback: TargetLocale = "zh-CN"): TargetLocale {
-  return TARGET_LOCALE_OPTIONS.some((option) => option.value === value)
-    ? value as TargetLocale
-    : fallback;
+  return isTargetLocale(value) ? value : fallback;
+}
+
+export function isTargetLocale(value: unknown): value is TargetLocale {
+  return TARGET_LOCALE_OPTIONS.some((option) => option.value === value);
 }
 
 export function resolveObsidianTargetLocale(value: unknown): TargetLocale {

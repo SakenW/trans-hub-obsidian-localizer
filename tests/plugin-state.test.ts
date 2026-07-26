@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { parsePluginState } from "../src/plugin-state";
+import {
+  getPluginSubmissionForLocale,
+  getPluginTranslation,
+  parsePluginState,
+} from "../src/plugin-state";
 
 describe("parsePluginState", () => {
   it("preserves valid extraction evidence across plugin reloads", () => {
@@ -129,7 +133,7 @@ describe("parsePluginState", () => {
         },
       },
     });
-    expect(valid.pluginTranslations.dataview?.entries[0]?.scopes)
+    expect(getPluginTranslation(valid, "dataview", "zh-CN")?.entries[0]?.scopes)
       .toEqual(["runtime-ui", "metadata"]);
 
     const invalid = parsePluginState({
@@ -146,5 +150,68 @@ describe("parsePluginState", () => {
       },
     });
     expect(invalid.pluginTranslations).toEqual({});
+  });
+
+  it("迁移旧平面译文并逐槽隔离新格式中的坏值", () => {
+    const translation = (targetLocale: string, target: string) => ({
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      sourceVersionId: `source-${targetLocale}`,
+      targetLocale,
+      pulledAt: "2026-07-26T00:00:00.000Z",
+      entries: [{ pluginId: "dataview", source: "Settings", target }],
+    });
+
+    const legacy = parsePluginState({
+      pluginTranslations: { dataview: translation("ko", "설정") },
+    });
+    expect(getPluginTranslation(legacy, "dataview", "ko")?.entries[0]?.target).toBe("설정");
+
+    const nested = parsePluginState({
+      pluginTranslations: {
+        dataview: {
+          ko: translation("ko", "설정"),
+          "zh-CN": translation("zh-CN", "设置"),
+          ja: { ...translation("ko", "壊れた"), targetLocale: "ko" },
+          invalid: translation("invalid", "bad locale"),
+        },
+      },
+    });
+    expect(getPluginTranslation(nested, "dataview", "ko")?.entries[0]?.target).toBe("설정");
+    expect(getPluginTranslation(nested, "dataview", "zh-CN")?.entries[0]?.target).toBe("设置");
+    expect(nested.pluginTranslations.dataview?.ja).toBeUndefined();
+    expect(Object.keys(nested.pluginTranslations.dataview ?? {})).toEqual(["ko", "zh-CN"]);
+  });
+
+  it("不让旧语言的需求与错误状态冒充当前语言", () => {
+    const state = parsePluginState({
+      pluginSubmissions: {
+        dataview: {
+          pluginId: "dataview",
+          pluginVersion: "1",
+          catalogDigest: "catalog",
+          contributionId: "source",
+          contributionState: "accepted",
+          localizationTargetLocale: "ko",
+          localizationContributionId: "ko-demand",
+          localizationContributionState: "rejected",
+          sourceVersionId: "ko-source",
+          lastError: {
+            code: "plugin_sync_failed",
+            message: "ko failed",
+            targetLocale: "ko",
+            updatedAt: "2026-07-26T00:00:00.000Z",
+          },
+          submittedAt: "2026-07-26T00:00:00.000Z",
+        },
+      },
+    });
+
+    expect(getPluginSubmissionForLocale(state, "dataview", "zh-CN")).toEqual(
+      expect.objectContaining({ contributionId: "source" }),
+    );
+    expect(getPluginSubmissionForLocale(state, "dataview", "zh-CN")).not.toHaveProperty("lastError");
+    expect(getPluginSubmissionForLocale(state, "dataview", "zh-CN")).not.toHaveProperty("localizationContributionId");
+    expect(getPluginSubmissionForLocale(state, "dataview", "ko")?.lastError?.message).toBe("ko failed");
   });
 });

@@ -13,6 +13,7 @@ import { isClientDisplayName, localizedClientName, translate } from "./client-lo
 import type TransHubObsidianPlugin from "./main";
 import { localizedPluginDescription, localizedPluginDisplayName } from "./plugin-catalog-diff";
 import { discoverInstalledPlugins, type InstalledObsidianPlugin } from "./plugin-discovery";
+import { getPluginSubmissionForLocale, getPluginTranslation } from "./plugin-state";
 import {
   filterSelectablePlugins,
   selectedPluginCount,
@@ -123,12 +124,15 @@ export class TransHubSettingTab extends PluginSettingTab {
         dropdown.addOptions(Object.fromEntries(TARGET_LOCALE_OPTIONS.map((option) => [option.value, option.label])));
         dropdown.setValue(this.plugin.settings.targetLocale).setDisabled(!this.plugin.settings.pluginTranslationEnabled)
           .onChange(async (value) => {
-            this.plugin.settings.targetLocale = parseTargetLocale(value);
-            this.plugin.applyClientLocale(this.plugin.settings.targetLocale);
-            this.selectionStatus = translate("选择变化后会自动扫描并同步。");
+            const targetLocale = parseTargetLocale(value);
+            this.selectionStatus = translate("正在切换目标语言…");
             this.selectionStatusFailed = false;
-            await this.plugin.savePluginData();
-            this.plugin.refreshPluginTranslationRuntime();
+            const result = await this.plugin.changeTargetLocale(targetLocale);
+            if (result !== null && this.plugin.settings.targetLocale === targetLocale) {
+              this.selectionStatus = describePluginSelectionProcessing(result);
+            } else if (!this.plugin.hasUserSession()) {
+              this.selectionStatus = translate("已切换目标语言；登录语枢后会继续同步。");
+            }
             this.refreshSettings();
           });
       });
@@ -252,10 +256,12 @@ export class TransHubSettingTab extends PluginSettingTab {
         return;
       }
       let eligibility: ReadonlyMap<string, CommunityPluginSourceEligibility> | null = null;
-      try {
-        eligibility = await resolveCommunityPluginSourceEligibility(plugins.map((plugin) => plugin.id));
-      } catch {
-        // A temporary registry outage must not be presented as permanent lack of support.
+      if (this.plugin.hasUserSession()) {
+        try {
+          eligibility = await resolveCommunityPluginSourceEligibility(plugins.map((plugin) => plugin.id));
+        } catch {
+          // A temporary registry outage must not be presented as permanent lack of support.
+        }
       }
       if (renderVersion !== this.renderVersion) return;
       const pluginsWithSource: InstalledPluginWithSource[] = plugins.map((plugin) => ({
@@ -293,7 +299,7 @@ export class TransHubSettingTab extends PluginSettingTab {
       localizedPluginDisplayName(
         plugin.name,
         state.pluginCatalogs[plugin.id],
-        state.pluginTranslations[plugin.id],
+        getPluginTranslation(state, plugin.id, this.plugin.settings.targetLocale),
         this.plugin.settings.targetLocale,
       ),
     ]));
@@ -417,8 +423,16 @@ export class TransHubSettingTab extends PluginSettingTab {
         const sourceStatus = pluginSourceStatus(plugin.source);
         if (sourceStatus !== null) return statusFilter === "all" || sourceStatus.kind === statusFilter;
         const localizationStatus = describePluginLocalizationStatus({
-          submission: pluginState.pluginSubmissions[plugin.id],
-          translation: pluginState.pluginTranslations[plugin.id],
+          submission: getPluginSubmissionForLocale(
+            pluginState,
+            plugin.id,
+            this.plugin.settings.targetLocale,
+          ),
+          translation: getPluginTranslation(
+            pluginState,
+            plugin.id,
+            this.plugin.settings.targetLocale,
+          ),
           catalog: pluginState.pluginCatalogs[plugin.id],
           targetLocale: this.plugin.settings.targetLocale,
           hasSession: this.plugin.hasUserSession(),
@@ -436,8 +450,16 @@ export class TransHubSettingTab extends PluginSettingTab {
       for (const plugin of visiblePlugins) {
         const sourceStatus = pluginSourceStatus(plugin.source);
         const localizationStatus = describePluginLocalizationStatus({
-          submission: pluginState.pluginSubmissions[plugin.id],
-          translation: pluginState.pluginTranslations[plugin.id],
+          submission: getPluginSubmissionForLocale(
+            pluginState,
+            plugin.id,
+            this.plugin.settings.targetLocale,
+          ),
+          translation: getPluginTranslation(
+            pluginState,
+            plugin.id,
+            this.plugin.settings.targetLocale,
+          ),
           catalog: pluginState.pluginCatalogs[plugin.id],
           targetLocale: this.plugin.settings.targetLocale,
           hasSession: this.plugin.hasUserSession(),
@@ -446,7 +468,7 @@ export class TransHubSettingTab extends PluginSettingTab {
           ? localizedPluginDisplayName(
             plugin.name,
             pluginState.pluginCatalogs[plugin.id],
-            pluginState.pluginTranslations[plugin.id],
+            getPluginTranslation(pluginState, plugin.id, this.plugin.settings.targetLocale),
             this.plugin.settings.targetLocale,
           )
           : plugin.name;
@@ -454,7 +476,7 @@ export class TransHubSettingTab extends PluginSettingTab {
           ? localizedPluginDescription(
             plugin.description,
             pluginState.pluginCatalogs[plugin.id],
-            pluginState.pluginTranslations[plugin.id],
+            getPluginTranslation(pluginState, plugin.id, this.plugin.settings.targetLocale),
             this.plugin.settings.targetLocale,
           )
           : plugin.description;

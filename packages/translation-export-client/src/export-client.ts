@@ -12,7 +12,10 @@ import type {
   TranslationSyncState,
   VerifiedTranslationPack,
 } from "./contracts";
-import { parseTranslationExportManifest } from "./manifest";
+import {
+  parseStoredTranslationExportManifest,
+  parseTranslationExportManifest,
+} from "./manifest";
 import { assertSafeDownloadUrl } from "./fetch-downloader";
 
 type ManifestWireResponse = Record<string, unknown>;
@@ -49,13 +52,18 @@ export class TranslationExportClient {
 
   async sync(request: TranslationSyncRequest): Promise<TranslationSyncResult> {
     assertRequest(request);
-    const response = await this.fetchManifest(request);
+    const previous = await this.validPrevious(request.previous);
+    const normalizedRequest =
+      previous === undefined
+        ? { ...request, previous: undefined }
+        : { ...request, previous };
+    const response = await this.fetchManifest(normalizedRequest);
     if (response.status === 404 || response.status === 410) {
-      await this.removeUnavailablePacks(request.previous?.manifest);
+      await this.removeUnavailablePacks(previous?.manifest);
       throw new Error(`translation_manifest_unavailable:${response.status}`);
     }
-    const resolved = await this.resolveManifest(response, request.previous);
-    this.assertManifestRequest(resolved.manifest, request);
+    const resolved = await this.resolveManifest(response, previous);
+    this.assertManifestRequest(resolved.manifest, normalizedRequest);
 
     const scopeKey = scopeCacheKey(resolved.manifest.scope);
     const reusedPackIds: string[] = [];
@@ -130,6 +138,30 @@ export class TranslationExportClient {
     };
   }
 
+  private async validPrevious(
+    previous: TranslationSyncRequest["previous"],
+  ): Promise<TranslationSyncState | undefined> {
+    if (previous === undefined) return undefined;
+    try {
+      const etag = requiredString(
+        previous.etag,
+        "translation_manifest_etag_invalid",
+      );
+      const manifest = parseStoredTranslationExportManifest(previous.manifest);
+      if (manifest.revision !== this.options.endpoint.manifestRevision) {
+        return undefined;
+      }
+      if (etag !== manifestEtag(manifest)) return undefined;
+      await this.verifyManifest(manifest);
+      return { etag, manifest };
+    } catch {
+      // Persisted state is only a cache hint. Corrupt or obsolete state must not
+      // authorize conditional requests or pack reuse; a fresh manifest is the
+      // only safe recovery path.
+      return undefined;
+    }
+  }
+
   private async removeUnavailablePacks(
     manifest: TranslationExportManifest | undefined,
   ): Promise<void> {
@@ -180,6 +212,10 @@ export class TranslationExportClient {
     if (response.status === 304) {
       if (previous === undefined)
         throw new Error("translation_manifest_304_without_local_state");
+      const responseEtag = header(response.headers, "etag");
+      if (responseEtag !== previous.etag) {
+        throw new Error("translation_manifest_304_etag_mismatch");
+      }
       await this.verifyManifest(previous.manifest);
       return {
         status: "not_modified",
@@ -193,6 +229,9 @@ export class TranslationExportClient {
     if (etag === undefined || etag === "")
       throw new Error("translation_manifest_missing_etag");
     const manifest = parseTranslationExportManifest(response.body);
+    if (etag !== manifestEtag(manifest)) {
+      throw new Error("translation_manifest_etag_mismatch");
+    }
     if (manifest.revision !== this.options.endpoint.manifestRevision) {
       throw new Error("translation_manifest_revision_downgrade");
     }
@@ -317,6 +356,10 @@ export class TranslationExportClient {
       throw new Error("translation_pack_compressed_limit_exceeded");
     }
   }
+}
+
+function manifestEtag(manifest: TranslationExportManifest): string {
+  return `"${manifest.manifestDigest}"`;
 }
 
 function ticketFromWire(wire: TicketWire): DownloadTicket {

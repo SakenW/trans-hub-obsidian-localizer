@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ActivationStore } from "../src/activation";
 import { synchronizeConfiguredPluginTranslations } from "../src/plugin-sync";
-import { EMPTY_PLUGIN_STATE, type PluginState } from "../src/plugin-state";
+import { EMPTY_PLUGIN_STATE, getPluginTranslation, type PluginState } from "../src/plugin-state";
 import {
   submitObsidianLocalizationObservation,
   submitObsidianPluginDiscovery,
@@ -99,6 +99,15 @@ describe("synchronizeConfiguredPluginTranslations", () => {
           }],
         },
       },
+      pluginTranslations: {
+        dataview: {
+          ko: {
+            pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "ko-source",
+            targetLocale: "ko", entries: [{ pluginId: "dataview", source: "Current source", target: "현재 번역" }],
+            pulledAt: "2026-07-18T00:00:00.000Z",
+          },
+        },
+      },
       pluginSubmissions: {
         dataview: {
           pluginId: "dataview",
@@ -155,7 +164,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     }));
     expect(state.pluginSubmissions.dataview?.sourceVersionId).toBe("current-source");
     expect(state.pluginSubmissions.dataview?.lastError).toBeUndefined();
-    expect(state.pluginTranslations.dataview?.entries).toEqual([
+    expect(getPluginTranslation(state, "dataview", "zh-CN")?.entries).toEqual([
       {
         pluginId: "dataview",
         source: "Current source",
@@ -163,6 +172,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
         scopes: ["runtime-ui"],
       },
     ]);
+    expect(getPluginTranslation(state, "dataview", "ko")?.entries[0]?.target).toBe("현재 번역");
     expect(summary).toEqual({
       submittedCount: 0,
       requestedCount: 0,
@@ -189,13 +199,24 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       },
       pluginTranslations: {
         dataview: {
-          pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "current-source",
-          targetLocale: "zh-CN", entries: [{ pluginId: "dataview", source: "Current source", target: "旧译文" }],
-          pulledAt: "2026-07-18T00:00:00.000Z",
+          "zh-CN": {
+            pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "current-source",
+            targetLocale: "zh-CN", entries: [{ pluginId: "dataview", source: "Current source", target: "旧译文" }],
+            pulledAt: "2026-07-18T00:00:00.000Z",
+          },
+          ko: {
+            pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "current-source",
+            targetLocale: "ko", entries: [{ pluginId: "dataview", source: "Current source", target: "현재 번역" }],
+            pulledAt: "2026-07-18T00:00:00.000Z",
+          },
         },
       },
       translationExportStates: {
         "current-source:zh-CN:default": { etag: '"old"', manifest: exportManifest },
+        "current-source:ko:default": {
+          etag: '"ko"',
+          manifest: { ...exportManifest, targetLocale: "ko" },
+        },
       },
     };
     const activationStore = {
@@ -212,8 +233,9 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       replaceState: (next) => { state = next; }, save: vi.fn().mockResolvedValue(undefined),
     });
 
-    expect(state.pluginTranslations.dataview?.entries).toEqual([]);
-    expect(state.translationExportStates).toEqual({});
+    expect(getPluginTranslation(state, "dataview", "zh-CN")?.entries).toEqual([]);
+    expect(getPluginTranslation(state, "dataview", "ko")?.entries[0]?.target).toBe("현재 번역");
+    expect(Object.keys(state.translationExportStates)).toEqual(["current-source:ko:default"]);
     expect(summary.waitingPluginIds).toEqual(["dataview"]);
   });
 
@@ -315,6 +337,82 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       nextRetryAfterMs: 12_000,
       demandStateCounts: { mt_running: 1 },
     }));
+  });
+
+  it("失败需求只清理当前语言的译文与 export 状态", async () => {
+    mocks.resolvePublished.mockReturnValue(undefined);
+    const pluginTranslation = (targetLocale: "zh-CN" | "ko", target: string) => ({
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      sourceVersionId: "current-source",
+      targetLocale,
+      entries: [{ pluginId: "dataview", source: "Current source", target }],
+      pulledAt: "2026-07-18T00:00:00.000Z",
+    });
+    let state: PluginState = {
+      ...EMPTY_PLUGIN_STATE,
+      pluginCatalogs: {
+        dataview: {
+          pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+          sourceLocale: "en", digest: "catalog-digest", artifactDigest: "a".repeat(64),
+          scannedAt: "2026-07-18T00:00:00.000Z",
+          strings: [{ key: STRING_KEY, source: "Current source", origins: ["ui-call"], placeholderSignature: "" }],
+        },
+      },
+      pluginSubmissions: {
+        dataview: {
+          pluginId: "dataview", pluginVersion: "0.5.68", catalogDigest: "catalog-digest",
+          adapterProfileDigest: "117aade03541d1e4740eb0892fb9866be6ddc1973059453049a5a7e01fe8d518",
+          installationId: "installation", contributionId: "discovery", contributionState: "received",
+          localizationTargetLocale: "zh-CN", localizationContributionId: "localization",
+          localizationContributionState: "received", sourceVersionId: "current-source",
+          submittedAt: "2026-07-18T00:00:00.000Z",
+        },
+      },
+      pluginTranslations: {
+        dataview: {
+          "zh-CN": pluginTranslation("zh-CN", "当前译文"),
+          ko: pluginTranslation("ko", "현재 번역"),
+        },
+      },
+      translationExportStates: {
+        "current-source:zh-CN:default": { etag: '"zh"', manifest: exportManifest },
+        "current-source:ko:default": { etag: '"ko"', manifest: { ...exportManifest, targetLocale: "ko" } },
+      },
+    };
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: {
+          getContributionStatus: vi.fn().mockResolvedValue({ state: "received" }),
+          getLocalizationDemandStatus: vi.fn().mockResolvedValue({
+            state: "mt_failed",
+            retryAfterSeconds: 0,
+            coordinates: [{
+              state: "mt_failed", sourceVersionId: "current-source", targetLocale: "zh-CN",
+              targetVariant: "default", totalUnitCount: 1, workItemCount: 1,
+              nativeUnitCount: 0, queuedCount: 0, runningCount: 0, succeededCount: 0,
+              failedCount: 1, reviewedUnitCount: 0, publishedUnitCount: 0,
+              manifestId: null, generationNumber: 1, retryAfterSeconds: 0,
+              failureCode: "mt_failed", failureRetryable: false, failureAttemptNumber: 3,
+              updatedAt: "2026-07-26T00:00:00.000Z",
+            }],
+          }),
+        },
+        bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+
+    const summary = await synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "http://127.0.0.1:8000", targetLocale: "zh-CN", excludedPluginIds: [],
+      activationStore, translationPackStore, getState: () => state,
+      replaceState: (next) => { state = next; }, save: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(getPluginTranslation(state, "dataview", "zh-CN")).toBeUndefined();
+    expect(getPluginTranslation(state, "dataview", "ko")?.entries[0]?.target).toBe("현재 번역");
+    expect(Object.keys(state.translationExportStates)).toEqual(["current-source:ko:default"]);
+    expect(summary.failedPluginIds).toEqual(["dataview"]);
   });
 
   it("isolates an exhausted plugin retry budget and continues processing the remaining plugins", async () => {

@@ -6,14 +6,19 @@ import {
   resolveCommunityPluginIdentity,
   resolveCommunityPluginSourceEligibility,
 } from "./plugin-registry";
-import type { PluginState, PluginTranslationState } from "./plugin-state";
+import {
+  getPluginTranslation,
+  setPluginTranslation,
+  type PluginState,
+  type PluginTranslationState,
+} from "./plugin-state";
 import { scanPluginUiStrings } from "./plugin-string-scanner";
 import { PluginUiTranslationRuntime, type PluginUiTranslation } from "./plugin-ui-runtime";
 import type { PluginSyncSummary } from "./plugin-sync";
-import { OBSIDIAN_SOURCE_LOCALE } from "./product-config";
+import { isTargetLocale, OBSIDIAN_SOURCE_LOCALE, type TargetLocale } from "./product-config";
 
 export interface PluginAutomationSettings {
-  readonly targetLocale: string;
+  readonly targetLocale: TargetLocale;
   readonly pluginTranslationEnabled: boolean;
   readonly pluginMetadataTranslationEnabled: boolean;
   readonly excludedPluginIds: readonly string[];
@@ -124,11 +129,16 @@ export class PluginAutomationController {
 
   async importTranslationDictionary(raw: string): Promise<PluginTranslationState> {
     const imported = parseTranslationDictionary(raw);
+    if (!isTargetLocale(imported.targetLocale)) {
+      throw new Error("插件译文字典目标语言不受支持。");
+    }
     const state = this.input.state();
-    this.input.replaceState({
-      ...state,
-      pluginTranslations: { ...state.pluginTranslations, [imported.pluginId]: imported },
-    });
+    this.input.replaceState(setPluginTranslation(
+      state,
+      imported.pluginId,
+      imported.targetLocale,
+      imported,
+    ));
     await this.input.save();
     this.runtime.update(this.allTranslations());
     return imported;
@@ -136,11 +146,15 @@ export class PluginAutomationController {
 
   summary(): PluginAutomationSummary {
     const state = this.input.state();
+    const targetLocale = this.input.settings().targetLocale;
+    const translations = Object.keys(state.pluginTranslations)
+      .map((pluginId) => getPluginTranslation(state, pluginId, targetLocale))
+      .filter((translation): translation is PluginTranslationState => translation !== undefined);
     return {
       catalogCount: Object.keys(state.pluginCatalogs).length,
       sourceStringCount: Object.values(state.pluginCatalogs).reduce((sum, catalog) => sum + catalog.strings.length, 0),
-      translatedPluginCount: Object.keys(state.pluginTranslations).length,
-      translationCount: Object.values(state.pluginTranslations).reduce((sum, dictionary) => sum + dictionary.entries.length, 0),
+      translatedPluginCount: translations.length,
+      translationCount: translations.reduce((sum, dictionary) => sum + dictionary.entries.length, 0),
     };
   }
 
@@ -158,10 +172,10 @@ export function selectApplicablePluginTranslations(
 ): PluginUiTranslation[] {
   const excluded = new Set(settings.excludedPluginIds);
   const enabled = new Set(state.enabledPluginIds);
-  return Object.values(state.pluginTranslations)
-    .filter((dictionary) => dictionary.targetLocale === settings.targetLocale
-      && enabled.has(dictionary.pluginId)
-      && !excluded.has(dictionary.pluginId))
+  return [...enabled]
+    .filter((pluginId) => !excluded.has(pluginId))
+    .map((pluginId) => getPluginTranslation(state, pluginId, settings.targetLocale))
+    .filter((dictionary): dictionary is PluginTranslationState => dictionary !== undefined)
     .flatMap((dictionary) => selectCurrentCatalogTranslations(
       state.pluginCatalogs[dictionary.pluginId],
       dictionary,
@@ -202,10 +216,15 @@ function parseTranslationDictionary(raw: string): PluginTranslationState {
     pluginId,
     pluginVersion: requiredString(value.pluginVersion),
     sourceVersionId: typeof value.sourceVersionId === "string" ? value.sourceVersionId : "manual-import",
-    targetLocale: requiredString(value.targetLocale),
+    targetLocale: requiredTargetLocale(value.targetLocale),
     entries,
     pulledAt: new Date().toISOString(),
   };
+}
+
+function requiredTargetLocale(value: unknown): TargetLocale {
+  if (!isTargetLocale(value)) throw new Error("插件译文字典目标语言不受支持。");
+  return value;
 }
 
 function optionalProvenanceKind(value: unknown): PluginUiTranslation["provenanceKind"] {

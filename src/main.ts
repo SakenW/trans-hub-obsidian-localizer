@@ -27,6 +27,7 @@ import {
   TRANS_HUB_API_BASE_URL,
   TRANS_HUB_WEB_BASE_URL,
   resolveObsidianTargetLocale,
+  type TargetLocale,
 } from "./product-config";
 import { TransHubSettingTab } from "./settings";
 import { DEFAULT_SETTINGS, loadSettings, type TransHubPluginSettings } from "./settings-data";
@@ -54,6 +55,7 @@ export default class TransHubObsidianPlugin extends Plugin {
   private pendingRetryAttempt = 0;
   private readonly pendingRetryPluginIds = new Set<string>();
   private readonly pluginProcessingQueue = new PluginProcessingQueue();
+  private targetLocaleRevision = 0;
 
   override async onload(): Promise<void> {
     this.loadPluginData(await this.loadData(), resolveObsidianTargetLocale(getLanguage()));
@@ -137,6 +139,25 @@ export default class TransHubObsidianPlugin extends Plugin {
     this.manifest.name = localizedClientName();
   }
 
+  async changeTargetLocale(
+    targetLocale: TargetLocale,
+  ): Promise<PluginSelectionProcessingResult | null> {
+    const revision = ++this.targetLocaleRevision;
+    this.settings.targetLocale = targetLocale;
+    this.applyClientLocale(targetLocale);
+    return this.pluginProcessingQueue.run(async () => {
+      if (revision !== this.targetLocaleRevision) return null;
+      await this.savePluginData();
+      if (revision !== this.targetLocaleRevision) return null;
+      this.refreshPluginTranslationRuntime();
+      if (!this.activation.isConfigured() && targetLocale !== OBSIDIAN_SOURCE_LOCALE) {
+        return null;
+      }
+      const result = await this.processPluginsNow(undefined, targetLocale);
+      return revision === this.targetLocaleRevision ? result : null;
+    });
+  }
+
   scanInstalledPluginStrings(onlyPluginIds?: readonly string[]): Promise<PluginScanResult> {
     return this.pluginAutomation.scanInstalledPlugins(onlyPluginIds);
   }
@@ -154,16 +175,24 @@ export default class TransHubObsidianPlugin extends Plugin {
   private async processPlugins(
     onlyPluginIds?: readonly string[],
   ): Promise<PluginSelectionProcessingResult> {
-    return this.pluginProcessingQueue.run(async () => {
-      const result = await processPluginSelection({
-        scan: () => this.scanInstalledPluginStrings(onlyPluginIds),
-        hasSession: () => this.activation.isConfigured(),
-        synchronize: () => this.syncInstalledPluginTranslations(onlyPluginIds),
-        applyCached: () => { this.applyCachedPluginTranslations(); },
-      });
-      this.schedulePendingTranslationRetry(result);
-      return result;
+    const targetLocale = this.settings.targetLocale;
+    return this.pluginProcessingQueue.run(
+      () => this.processPluginsNow(onlyPluginIds, targetLocale),
+    );
+  }
+
+  private async processPluginsNow(
+    onlyPluginIds: readonly string[] | undefined,
+    targetLocale: TargetLocale,
+  ): Promise<PluginSelectionProcessingResult> {
+    const result = await processPluginSelection({
+      scan: () => this.scanInstalledPluginStrings(onlyPluginIds),
+      hasSession: () => targetLocale === OBSIDIAN_SOURCE_LOCALE || this.activation.isConfigured(),
+      synchronize: () => this.synchronizePluginTranslationsNow(onlyPluginIds, targetLocale),
+      applyCached: () => { this.applyCachedPluginTranslations(); },
     });
+    if (targetLocale === this.settings.targetLocale) this.schedulePendingTranslationRetry(result);
+    return result;
   }
 
   async reportPluginLocalizationIssue(input: {
@@ -196,14 +225,26 @@ export default class TransHubObsidianPlugin extends Plugin {
     });
   }
 
-  async syncInstalledPluginTranslations(onlyPluginIds?: readonly string[]): Promise<PluginSyncSummary> {
-    if (this.settings.targetLocale === OBSIDIAN_SOURCE_LOCALE) {
+  async syncInstalledPluginTranslations(
+    onlyPluginIds?: readonly string[],
+  ): Promise<PluginSyncSummary> {
+    const targetLocale = this.settings.targetLocale;
+    return this.pluginProcessingQueue.run(
+      () => this.synchronizePluginTranslationsNow(onlyPluginIds, targetLocale),
+    );
+  }
+
+  private async synchronizePluginTranslationsNow(
+    onlyPluginIds: readonly string[] | undefined,
+    targetLocale: TargetLocale,
+  ): Promise<PluginSyncSummary> {
+    if (targetLocale === OBSIDIAN_SOURCE_LOCALE) {
       this.pluginAutomation.applyCachedTranslations();
       return emptyPluginSyncSummary();
     }
     const result = await synchronizeConfiguredPluginTranslations({
       apiBaseUrl: TRANS_HUB_API_BASE_URL,
-      targetLocale: this.settings.targetLocale,
+      targetLocale,
       excludedPluginIds: this.settings.excludedPluginIds,
       ...(onlyPluginIds === undefined ? {} : { onlyPluginIds }),
       activationStore: this.activation,

@@ -4,6 +4,8 @@ import {
   type SourceCatalogIdentity,
 } from "@trans-hub/client-protocol";
 
+import { isTargetLocale, type TargetLocale } from "./product-config";
+
 export interface NoteSubmissionState {
   readonly noteId: string;
   readonly filePath: string;
@@ -90,8 +92,13 @@ export interface PluginLocalizationDemandStatusState {
 export interface PluginSynchronizationErrorState {
   readonly code: string;
   readonly message: string;
+  readonly targetLocale?: TargetLocale;
   readonly updatedAt: string;
 }
+
+export type PluginTranslationsByLocale = Readonly<
+  Record<string, Readonly<Partial<Record<TargetLocale, PluginTranslationState>>>>
+>;
 
 export interface PluginState {
   readonly notes: Readonly<Record<string, NoteSubmissionState>>;
@@ -100,7 +107,7 @@ export interface PluginState {
   readonly enabledPluginIds: readonly string[];
   readonly pluginCatalogs: Readonly<Record<string, PluginUiCatalog>>;
   readonly pluginSubmissions: Readonly<Record<string, PluginSubmissionState>>;
-  readonly pluginTranslations: Readonly<Record<string, PluginTranslationState>>;
+  readonly pluginTranslations: PluginTranslationsByLocale;
   readonly translationExportStates: Readonly<Record<string, TranslationSyncState>>;
 }
 
@@ -136,13 +143,126 @@ export function parsePluginState(value: unknown): PluginState {
     pluginSubmissions: isRecord(value.pluginSubmissions)
       ? parseRecord(value.pluginSubmissions, parsePluginSubmission)
       : {},
-    pluginTranslations: isRecord(value.pluginTranslations)
-      ? parseRecord(value.pluginTranslations, parsePluginTranslation)
-      : {},
+    pluginTranslations: parsePluginTranslations(value.pluginTranslations),
     translationExportStates: isRecord(value.translationExportStates)
       ? parseRecord(value.translationExportStates, parseTranslationExportState)
       : {},
   };
+}
+
+export function getPluginTranslation(
+  state: Pick<PluginState, "pluginTranslations">,
+  pluginId: string,
+  targetLocale: TargetLocale,
+): PluginTranslationState | undefined {
+  const translation = state.pluginTranslations[pluginId]?.[targetLocale];
+  return translation?.pluginId === pluginId && translation.targetLocale === targetLocale
+    ? translation
+    : undefined;
+}
+
+export function setPluginTranslation(
+  state: PluginState,
+  pluginId: string,
+  targetLocale: TargetLocale,
+  translation: PluginTranslationState,
+): PluginState {
+  if (translation.pluginId !== pluginId || translation.targetLocale !== targetLocale) {
+    throw new Error("Plugin translation storage key does not match its content.");
+  }
+  return {
+    ...state,
+    pluginTranslations: {
+      ...state.pluginTranslations,
+      [pluginId]: {
+        ...state.pluginTranslations[pluginId],
+        [targetLocale]: translation,
+      },
+    },
+  };
+}
+
+export function deletePluginTranslation(
+  state: PluginState,
+  pluginId: string,
+  targetLocale: TargetLocale,
+): PluginState {
+  const translationsByLocale = state.pluginTranslations[pluginId];
+  if (translationsByLocale === undefined || translationsByLocale[targetLocale] === undefined) {
+    return state;
+  }
+  const { [targetLocale]: discardedTranslation, ...remainingByLocale } = translationsByLocale;
+  void discardedTranslation;
+  if (Object.keys(remainingByLocale).length === 0) {
+    const { [pluginId]: discardedPlugin, ...remainingPlugins } = state.pluginTranslations;
+    void discardedPlugin;
+    return { ...state, pluginTranslations: remainingPlugins };
+  }
+  return {
+    ...state,
+    pluginTranslations: {
+      ...state.pluginTranslations,
+      [pluginId]: remainingByLocale,
+    },
+  };
+}
+
+export function getPluginSubmissionForLocale(
+  state: Pick<PluginState, "pluginSubmissions">,
+  pluginId: string,
+  targetLocale: TargetLocale,
+): PluginSubmissionState | undefined {
+  const submission = state.pluginSubmissions[pluginId];
+  if (submission === undefined) return undefined;
+  const {
+    localizationTargetLocale,
+    localizationContributionId,
+    localizationContributionState,
+    localizationDemandStatus,
+    sourceVersionId,
+    lastError,
+    ...sourceSubmission
+  } = submission;
+  if (localizationTargetLocale !== targetLocale) {
+    return {
+      ...sourceSubmission,
+      ...(lastError?.targetLocale === targetLocale ? { lastError } : {}),
+    };
+  }
+  return {
+    ...sourceSubmission,
+    localizationTargetLocale,
+    ...(localizationContributionId === undefined ? {} : { localizationContributionId }),
+    ...(localizationContributionState === undefined ? {} : { localizationContributionState }),
+    ...(localizationDemandStatus?.targetLocale === targetLocale ? { localizationDemandStatus } : {}),
+    ...(sourceVersionId === undefined ? {} : { sourceVersionId }),
+    ...(lastError?.targetLocale === targetLocale ? { lastError } : {}),
+  };
+}
+
+function parsePluginTranslations(value: unknown): PluginTranslationsByLocale {
+  if (!isRecord(value)) return {};
+  const parsed: Record<string, Partial<Record<TargetLocale, PluginTranslationState>>> = {};
+  for (const [pluginId, rawPluginTranslations] of Object.entries(value)) {
+    const legacy = parsePluginTranslation(rawPluginTranslations);
+    if (legacy !== null && legacy.pluginId === pluginId) {
+      parsed[pluginId] = { [legacy.targetLocale]: legacy };
+      continue;
+    }
+    if (!isRecord(rawPluginTranslations)) continue;
+    for (const [locale, rawTranslation] of Object.entries(rawPluginTranslations)) {
+      if (!isTargetLocale(locale)) continue;
+      const translation = parsePluginTranslation(rawTranslation);
+      if (
+        translation === null
+        || translation.pluginId !== pluginId
+        || translation.targetLocale !== locale
+      ) continue;
+      (parsed[pluginId] ??= {})[locale] = translation;
+    }
+    if (Object.keys(parsed[pluginId] ?? {}).length === 0) delete parsed[pluginId];
+  }
+  return parsed;
 }
 
 function parseTranslationExportState(value: unknown): TranslationSyncState | null {
@@ -309,7 +429,12 @@ function parsePluginSynchronizationError(
   const updatedAt = stringValue(value.updatedAt);
   return code === null || message === null || updatedAt === null
     ? null
-    : { code, message, updatedAt };
+    : {
+        code,
+        message,
+        ...(isTargetLocale(value.targetLocale) ? { targetLocale: value.targetLocale } : {}),
+        updatedAt,
+      };
 }
 
 function isLocalizationDemandState(value: unknown): value is LocalizationDemandState {
@@ -340,7 +465,7 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
   const pluginId = stringValue(value.pluginId);
   const pluginVersion = stringValue(value.pluginVersion);
   const sourceVersionId = stringValue(value.sourceVersionId);
-  const targetLocale = stringValue(value.targetLocale);
+  const targetLocale = isTargetLocale(value.targetLocale) ? value.targetLocale : null;
   const pulledAt = stringValue(value.pulledAt);
   const upstreamNativeCount = typeof value.upstreamNativeCount === "number"
     && Number.isInteger(value.upstreamNativeCount) && value.upstreamNativeCount >= 0

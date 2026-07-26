@@ -29,10 +29,13 @@ export function workspaceTranslationExportEndpoint(
     input.workspaceId,
     "translation_workspace_invalid",
   );
-  const headers = authorizationHeaders(input.bearerCredential);
+  const headers = Object.freeze({
+    ...authorizationHeaders(input.bearerCredential),
+    "Trans-Hub-Translation-Export-Revision": "2",
+  });
   const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/translation-exports`;
   return {
-    manifestRevision: 1,
+    manifestRevision: 2,
     manifestPath: (request) => `${base}/current?${query(request)}`,
     downloadTicketsPath: () => `${base}/download-tickets`,
     authorizationHeaders: () => headers,
