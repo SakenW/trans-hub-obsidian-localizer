@@ -32,11 +32,6 @@
     "@trans-hub/translation-export-client": "link:packages/translation-export-client",
     "@trans-hub/uida": "link:packages/uida"
   },
-  "pnpm": {
-    "overrides": {
-      "fast-uri@<3.1.4": "3.1.4"
-    }
-  },
   "scripts": {
     "build": "node esbuild.config.mjs",
     "package": "node scripts/package.mjs",

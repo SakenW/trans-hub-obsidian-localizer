@@ -5,17 +5,21 @@ import esbuild from "esbuild";
 
 const externalBuiltins = [...builtinModules, ...builtinModules.map((name) => `node:${name}`)];
 const manifest = JSON.parse(await readFile(new URL("./manifest.json", import.meta.url), "utf8"));
-function resolveTrustRoot(envPrefix) {
+const DEFAULT_TRANSFER_ROOT = {
+  keyId: "client-transfer-root-1",
+  keyVersion: 1,
+  publicKeyBase64Url: "jaDlCqNcXw6UBT8A2oXvfF0pyz1j94Yrdqyr1YDgCh4",
+};
+function resolveTrustRoot(envPrefix, fallback) {
   const rawKeyId = process.env[`${envPrefix}_KEY_ID`];
-  if (rawKeyId === undefined || rawKeyId.trim() === "") return undefined;
+  if (rawKeyId === undefined || rawKeyId.trim() === "") return fallback;
   return {
     keyId: required(`${envPrefix}_KEY_ID`, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u),
     keyVersion: Number(required(`${envPrefix}_KEY_VERSION`, /^[1-9][0-9]*$/u)),
     publicKeyBase64Url: required(`${envPrefix}_PUBLIC_KEY_B64`, /^[A-Za-z0-9_-]{43}$/u),
   };
 }
-const transferRoot = resolveTrustRoot("TRANS_HUB_TRANSFER_ROOT");
-if (transferRoot === undefined) throw new Error("TRANS_HUB_TRANSFER_ROOT_KEY_ID 缺失或格式无效。");
+const transferRoot = resolveTrustRoot("TRANS_HUB_TRANSFER_ROOT", DEFAULT_TRANSFER_ROOT);
 const transferTrustRoots = [transferRoot];
 const nextRoot = optionalTrustRoot();
 if (nextRoot !== undefined) {

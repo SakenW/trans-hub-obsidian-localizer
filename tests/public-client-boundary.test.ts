@@ -18,8 +18,12 @@ describe("Obsidian public client boundary", () => {
   it("requires a real translation-export trust root for production builds", async () => {
     const source = await readFile(`${ROOT}/esbuild.config.mjs`, "utf8");
     expect(source).not.toContain("obsidian-store-build-verification-placeholder");
-    expect(source).toContain('if (rawKeyId === undefined || rawKeyId.trim() === "") return undefined;');
-    expect(source).toContain('if (transferRoot === undefined) throw new Error("TRANS_HUB_TRANSFER_ROOT_KEY_ID 缺失或格式无效。");');
+    const requiresInjectedRoot = source.includes(
+      'if (transferRoot === undefined) throw new Error("TRANS_HUB_TRANSFER_ROOT_KEY_ID 缺失或格式无效。");',
+    );
+    const pinsPublicRoot = source.includes('keyId: "client-transfer-root-1"')
+      && source.includes('publicKeyBase64Url: "jaDlCqNcXw6UBT8A2oXvfF0pyz1j94Yrdqyr1YDgCh4"');
+    expect(requiresInjectedRoot || pinsPublicRoot).toBe(true);
   });
 
   it("pins the exact public observation adapter descriptor", async () => {
