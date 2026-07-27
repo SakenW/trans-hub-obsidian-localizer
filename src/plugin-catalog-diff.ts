@@ -1,5 +1,6 @@
 import type { PluginUiCatalog } from "./plugin-string-scanner";
 import {
+  isCanonicalPluginCatalogString,
   placeholderSignature,
   resolvePluginStringScopes,
   resolvePluginStringSemanticRole,
@@ -97,13 +98,15 @@ export function calculatePluginTranslationCoverage(
 ): PluginTranslationCoverage | undefined {
   if (catalog === undefined || translation?.targetLocale !== targetLocale) return undefined;
   const effectiveTranslation = mergeCatalogNativeTranslations(catalog, translation);
-  const currentSources = new Map(catalog.strings.map((item) => [item.source, item.placeholderSignature]));
+  const canonicalStrings = catalog.strings.filter(isCanonicalPluginCatalogString);
+  const currentSources = new Map(canonicalStrings.map((item) => [item.source, item.placeholderSignature]));
+  const allCatalogSources = new Set(catalog.strings.map((item) => item.source));
   const translatedSources = new Set(effectiveTranslation.entries
     .filter((entry) => isCompatibleEntry(entry, currentSources))
     .map((entry) => entry.source));
   const staleCount = new Set(effectiveTranslation.entries
     .map((entry) => entry.source)
-    .filter((source) => !currentSources.has(source))).size;
+    .filter((source) => !allCatalogSources.has(source))).size;
   const correctionCount = effectiveTranslation.entries.filter(
     (entry) => entry.provenanceKind === "th-reviewed-correction"
       && translatedSources.has(entry.source),
@@ -125,7 +128,7 @@ export function calculatePluginTranslationCoverage(
   const translatedCount = Math.min(currentSources.size, translatedSources.size + unattributedNativeCount);
   const totalCount = currentSources.size;
   const scopes = (["runtime-ui", "metadata", "readme"] as const).flatMap((scope) => {
-    const sources = new Set(catalog.strings
+    const sources = new Set(canonicalStrings
       .filter((item) => resolvePluginStringScopes(item.origins).includes(scope))
       .map((item) => item.source));
     if (sources.size === 0) return [];

@@ -17,6 +17,14 @@ export type PluginStringOrigin =
   | "ui-property";
 export type PluginStringExtractionStrategy = "manifest" | "registry" | "markdown" | "structured" | "regex-fallback";
 export type PluginStringSemanticRole = "official-name" | "description" | "readme" | "runtime-ui";
+
+export function isCanonicalPluginCatalogString(
+  item: Pick<PluginUiString, "origins">,
+): boolean {
+  return item.origins.some(
+    (origin) => origin !== "registry.name" && origin !== "registry.description",
+  );
+}
 export type PluginContentScope = "runtime-ui" | "metadata" | "readme";
 
 export interface PluginStringEvidence {
@@ -167,8 +175,7 @@ export async function scanPluginUiStrings(input: {
       evidence: [...aggregate.evidence.values()].sort(compareEvidence),
     })));
   const artifactDigest = await sha256Hex(normalizeCommunityInstalledBundle(input.bundle));
-  const canonicalStrings = strings.filter((item) =>
-    item.origins.some((origin) => origin !== "registry.name" && origin !== "registry.description"));
+  const canonicalStrings = strings.filter(isCanonicalPluginCatalogString);
   const canonicalUnits = canonicalStrings.map((item) => ({
     item,
     sourceKey: resolvePluginStringSourceKey(item.origins),

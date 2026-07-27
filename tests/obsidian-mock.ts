@@ -1,5 +1,21 @@
 type RequestUrlHandler = (input: unknown) => Promise<unknown>;
 
+export class App {}
+
+export class PluginSettingTab {
+  containerEl = { querySelector: () => null } as unknown as HTMLElement;
+
+  constructor(_app: App, _plugin: unknown) {}
+
+  getSettingDefinitions(): unknown[] {
+    return [];
+  }
+
+  display(): void {}
+}
+
+export class Setting {}
+
 let requestUrlHandler: RequestUrlHandler = () =>
   Promise.reject(new Error("requestUrl is not available in unit tests"));
 

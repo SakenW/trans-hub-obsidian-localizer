@@ -45,15 +45,15 @@ describe("plugin catalog version carry-over", () => {
       { pluginId: "sample", source: "Settings", target: "设置", scopes: ["runtime-ui", "readme"] },
     ]);
     expect(calculatePluginTranslationCoverage(catalog, previous, "zh-CN")).toEqual({
-      totalCount: 5,
+      totalCount: 4,
       translatedCount: 1,
-      missingCount: 4,
+      missingCount: 3,
       staleCount: 1,
-      percent: 20,
+      percent: 25,
       exactPluginVersion: false,
       scopes: [
         { scope: "runtime-ui", totalCount: 2, translatedCount: 1, missingCount: 1, percent: 50 },
-        { scope: "metadata", totalCount: 3, translatedCount: 0, missingCount: 3, percent: 0 },
+        { scope: "metadata", totalCount: 2, translatedCount: 0, missingCount: 2, percent: 0 },
         { scope: "readme", totalCount: 1, translatedCount: 1, missingCount: 0, percent: 100 },
       ],
       unattributedNativeCount: 0,
@@ -76,15 +76,15 @@ describe("plugin catalog version carry-over", () => {
     };
 
     expect(calculatePluginTranslationCoverage(catalog, translation, "zh-CN")).toEqual({
-      totalCount: 5,
-      translatedCount: 5,
+      totalCount: 4,
+      translatedCount: 4,
       missingCount: 0,
       staleCount: 0,
       percent: 100,
       exactPluginVersion: true,
       scopes: [
         { scope: "runtime-ui", totalCount: 2, translatedCount: 2, missingCount: 0, percent: 100 },
-        { scope: "metadata", totalCount: 3, translatedCount: 0, missingCount: 3, percent: 0 },
+        { scope: "metadata", totalCount: 2, translatedCount: 0, missingCount: 2, percent: 0 },
         { scope: "readme", totalCount: 1, translatedCount: 1, missingCount: 0, percent: 100 },
       ],
       unattributedNativeCount: 3,
@@ -107,9 +107,34 @@ describe("plugin catalog version carry-over", () => {
     expect(calculatePluginTranslationCoverage(catalog, translation, "zh-CN"))
       .toEqual(expect.objectContaining({
         translatedCount: 1,
-        missingCount: 4,
+        missingCount: 3,
         unattributedNativeCount: 0,
       }));
+  });
+
+  it("registry-only 观察可继续用于本地元数据呈现，但不制造覆盖缺口或陈旧译文", () => {
+    const translation = {
+      ...previous,
+      pluginVersion: "2.0.0",
+      entries: [
+        { pluginId: "sample", source: "Settings", target: "设置" },
+        { pluginId: "sample", source: "Find sample workflows.", target: "查找示例工作流。" },
+      ],
+    };
+
+    expect(calculatePluginTranslationCoverage(catalog, translation, "zh-CN"))
+      .toEqual(expect.objectContaining({
+        totalCount: 4,
+        translatedCount: 1,
+        missingCount: 3,
+        staleCount: 0,
+      }));
+    expect(selectCurrentCatalogTranslations(catalog, translation)).toContainEqual({
+      pluginId: "sample",
+      source: "Find sample workflows.",
+      target: "查找示例工作流。",
+      scopes: ["metadata"],
+    });
   });
 
   it("忽略来自不同或不可能权威目录规模的插件自带汇总，避免膨胀当前覆盖率", () => {
@@ -129,7 +154,7 @@ describe("plugin catalog version carry-over", () => {
     expect(calculatePluginTranslationCoverage(catalog, translation, "zh-CN"))
       .toEqual(expect.objectContaining({
         translatedCount: 1,
-        missingCount: 4,
+        missingCount: 3,
         unattributedNativeCount: 0,
       }));
 
@@ -138,7 +163,7 @@ describe("plugin catalog version carry-over", () => {
       sourceUnitCount: 5,
     }, "zh-CN")).toEqual(expect.objectContaining({
       translatedCount: 1,
-      missingCount: 4,
+      missingCount: 3,
       unattributedNativeCount: 0,
     }));
   });
@@ -174,7 +199,7 @@ describe("plugin catalog version carry-over", () => {
     ]));
     expect(calculatePluginTranslationCoverage(nativeCatalog, translation, "zh-CN")).toEqual(expect.objectContaining({
       translatedCount: 2,
-      missingCount: 3,
+      missingCount: 2,
       unattributedNativeCount: 0,
     }));
   });

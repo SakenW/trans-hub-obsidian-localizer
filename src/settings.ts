@@ -25,6 +25,10 @@ import {
 } from "./plugin-registry";
 import { describePluginSelectionProcessing } from "./plugin-selection-processing";
 import {
+  capturePluginListScrollTop,
+  restorePluginListScrollTop,
+} from "./plugin-picker-scroll";
+import {
   describePluginLocalizationStatus,
   pluginManualRetryKind,
   PLUGIN_LOCALIZATION_STATUS_FILTERS,
@@ -56,6 +60,10 @@ export class TransHubSettingTab extends PluginSettingTab {
   private selectionProcessing: Promise<void> | null = null;
   private selectionStatus = translate("选择变化后会自动扫描并同步。");
   private selectionStatusFailed = false;
+  private pluginListScrollTop = 0;
+  private pluginSearchQuery = "";
+  private pluginStatusFilter: PluginPickerStatusKind | "all" = "all";
+  private renderedContainerEl: HTMLElement | null = null;
 
   constructor(app: App, private readonly plugin: TransHubObsidianPlugin) {
     super(app, plugin);
@@ -87,6 +95,7 @@ export class TransHubSettingTab extends PluginSettingTab {
   }
 
   private renderSettings(containerEl: HTMLElement): void {
+    this.renderedContainerEl = containerEl;
     const renderVersion = ++this.renderVersion;
     containerEl.empty();
     containerEl.addClass("trans-hub-settings");
@@ -337,8 +346,8 @@ export class TransHubSettingTab extends PluginSettingTab {
   private renderPluginPickerContents(container: HTMLElement, plugins: readonly InstalledPluginWithSource[]): void {
     const eligiblePluginIds = plugins.filter((plugin) => plugin.source.kind === "supported")
       .map((plugin) => plugin.id);
-    let query = "";
-    let statusFilter: PluginPickerStatusKind | "all" = "all";
+    let query = this.pluginSearchQuery;
+    let statusFilter = this.pluginStatusFilter;
     let selectAllButton: ButtonComponent;
     let clearButton: ButtonComponent;
 
@@ -358,8 +367,10 @@ export class TransHubSettingTab extends PluginSettingTab {
     const searchSetting = new Setting(controls)
       .addText((text) => {
         text.inputEl.setAttr("aria-label", translate("搜索插件"));
-        text.setPlaceholder(translate("搜索插件名称或 ID")).onChange((value) => {
+        text.setPlaceholder(translate("搜索插件名称或 ID")).setValue(query).onChange((value) => {
           query = value;
+          this.pluginSearchQuery = value;
+          this.pluginListScrollTop = 0;
           renderRows();
         });
       });
@@ -378,6 +389,8 @@ export class TransHubSettingTab extends PluginSettingTab {
         ));
         dropdown.setValue(statusFilter).onChange((value) => {
           statusFilter = value as PluginPickerStatusKind | "all";
+          this.pluginStatusFilter = statusFilter;
+          this.pluginListScrollTop = 0;
           renderRows();
         });
       })
@@ -567,6 +580,7 @@ export class TransHubSettingTab extends PluginSettingTab {
 
     updateSummary();
     renderRows();
+    restorePluginListScrollTop(list, this.pluginListScrollTop);
   }
 
   private async retrySinglePlugin(
@@ -630,6 +644,10 @@ export class TransHubSettingTab extends PluginSettingTab {
   }
 
   private refreshSettings(): void {
+    this.pluginListScrollTop = capturePluginListScrollTop(
+      this.renderedContainerEl ?? this.containerEl,
+      this.pluginListScrollTop,
+    );
     const update = (this as { update?: () => void }).update;
     if (typeof update === "function") {
       update.call(this);
