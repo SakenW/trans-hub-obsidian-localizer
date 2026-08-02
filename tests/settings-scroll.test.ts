@@ -27,6 +27,27 @@ describe("plugin picker scroll state", () => {
     expect(capturePluginListScrollTop(container, 128)).toBe(128);
   });
 
+  it("restores the currently mounted list after Obsidian replaces the original node", () => {
+    const frames: FrameRequestCallback[] = [];
+    const remountedList = { scrollTop: 0 } as HTMLElement;
+    const document = {
+      querySelector: () => remountedList,
+      defaultView: {
+        requestAnimationFrame: (callback: FrameRequestCallback) => {
+          frames.push(callback);
+          return frames.length;
+        },
+      },
+    } as unknown as Document;
+    const originalList = { scrollTop: 0, ownerDocument: document } as HTMLElement;
+
+    restorePluginListScrollTop(originalList, 316);
+    frames.shift()?.(0);
+    frames.shift()?.(0);
+
+    expect(remountedList.scrollTop).toBe(316);
+  });
+
   it("captures the active 1.13 render container and falls back to the 1.12 tab container", () => {
     const activeList = { scrollTop: 420 } as HTMLElement;
     const legacyList = { scrollTop: 180 } as HTMLElement;
@@ -62,5 +83,29 @@ describe("plugin picker scroll state", () => {
     state.renderedContainerEl = null;
     state.refreshSettings();
     expect(state.pluginListScrollTop).toBe(180);
+  });
+
+  it("uses the action list as the scroll source before a synchronous settings rebuild", () => {
+    const staleList = { scrollTop: 0 } as HTMLElement;
+    const actionList = { scrollTop: 516, isConnected: true } as HTMLElement;
+    const container = {
+      querySelector: () => staleList,
+    } as unknown as HTMLElement;
+    const tab = new TransHubSettingTab(new App(), {} as never);
+    const state = tab as unknown as {
+      containerEl: HTMLElement;
+      renderedContainerEl: HTMLElement | null;
+      pluginListScrollTop: number;
+      update: () => void;
+      refreshSettings: (scrollSource?: HTMLElement) => void;
+    };
+    state.containerEl = container;
+    state.renderedContainerEl = container;
+    state.update = vi.fn();
+
+    state.refreshSettings(actionList);
+
+    expect(state.pluginListScrollTop).toBe(516);
+    expect(state.update).toHaveBeenCalledOnce();
   });
 });

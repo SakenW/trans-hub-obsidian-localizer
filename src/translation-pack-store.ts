@@ -44,6 +44,12 @@ export class ObsidianTranslationPackStore implements ScopeAwarePackStore {
     if (await this.vault.adapter.exists(path)) await this.vault.adapter.remove(path);
   }
 
+  async clearAll(): Promise<void> {
+    if (await this.vault.adapter.exists(this.#cacheDirectory)) {
+      await this.vault.adapter.rmdir(this.#cacheDirectory, true);
+    }
+  }
+
   async #path(key: LocalPackKey): Promise<string> {
     const digest = await sha256Hex([
       key.scopeKey,

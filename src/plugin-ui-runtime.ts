@@ -24,7 +24,16 @@ const EXCLUDED_SELECTOR = ".markdown-source-view, .markdown-preview-view, .cm-ed
 const SEARCH_HIGHLIGHT_SELECTOR = ".suggestion-highlight";
 const COMMUNITY_FIELD_SELECTOR = ".community-item-name, .community-item-desc";
 const COMMUNITY_FIELD_BADGE_SELECTOR = ".flair";
-const METADATA_TEXT_SELECTOR = ".vertical-tab-nav-item-title, .installed-plugins-container .setting-item-name, .installed-plugins-container .setting-item-description";
+// Obsidian 1.13 can flatten an installed-plugin row into a generic setting
+// item, so its old name/description descendants are not a durable boundary.
+// The installed-plugin list container and the newer settings modal are both
+// metadata-only surfaces. The metadata plan remains exact-match only, so
+// version/author text without a metadata entry stays unchanged.
+const METADATA_TEXT_SELECTOR = [
+  ".vertical-tab-nav-item-title",
+  ".installed-plugins-container",
+  ".modal.mod-settings",
+].join(", ");
 const README_CONTAINER_SELECTOR = ".community-modal-readme.markdown-rendered";
 const README_BLOCK_SELECTOR = "h1, h2, h3, h4, h5, h6, p, li, blockquote, th, td";
 const README_PROTECTED_SELECTOR = "a, code, kbd, samp, var";
@@ -126,6 +135,10 @@ export function shouldTranslatePluginUiElement(element: Pick<Element, "closest">
     && element.closest(README_CONTAINER_SELECTOR) === null;
 }
 
+export function shouldUsePluginMetadataPlan(element: Pick<Element, "closest">): boolean {
+  return element.closest(METADATA_TEXT_SELECTOR) !== null;
+}
+
 export function translatePluginUiFieldParts(
   parts: readonly string[],
   plan: RuntimeTranslationPlan,
@@ -155,6 +168,18 @@ function emptyPlan(): RuntimeTranslationPlan {
   return { exact: new Map(), templates: [], nativeTargetTemplates: [] };
 }
 
+function isTextNode(node: Node): node is Text {
+  return node.nodeType === 3;
+}
+
+function isElementNode(node: Node): node is Element {
+  return node.nodeType === 1;
+}
+
+function isDocumentFragmentNode(node: Node): node is DocumentFragment {
+  return node.nodeType === 11;
+}
+
 export function filterTranslationScope(
   translations: readonly PluginUiTranslation[],
   scope: PluginTranslationScope,
@@ -168,6 +193,7 @@ export class PluginUiTranslationRuntime {
   private metadataPlan: RuntimeTranslationPlan = emptyPlan();
   private readmePlan: RuntimeTranslationPlan = emptyPlan();
   private observer: MutationObserver | null = null;
+  private observedRoot: HTMLElement | null = null;
   private readonly restoredText = new Map<Text, { original: string; translated: string }>();
   private readonly restoredAttributes = new Map<Element, Map<string, { original: string; translated: string }>>();
   private readonly restoredReadmeBlocks = new Map<Element, {
@@ -180,22 +206,24 @@ export class PluginUiTranslationRuntime {
     this.runtimePlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "runtime-ui"));
     this.metadataPlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "metadata"));
     this.readmePlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "readme"));
-    if (this.observer !== null && document.body !== null) this.translateTree(document.body);
+    if (this.observedRoot !== null) this.translateTree(this.observedRoot);
   }
 
   start(root: HTMLElement = document.body): void {
     if (this.observer !== null) return;
+    this.observedRoot = root;
     this.translateTree(root);
-    this.observer = new MutationObserver((mutations) => {
+    const Observer = root.ownerDocument.defaultView?.MutationObserver ?? MutationObserver;
+    this.observer = new Observer((mutations) => {
       for (const mutation of mutations) {
-        if (mutation.type === "characterData" && mutation.target.instanceOf(Text)) {
+        if (mutation.type === "characterData" && isTextNode(mutation.target)) {
           this.translateText(mutation.target);
         }
-        if (mutation.type === "childList" && mutation.target.instanceOf(Element)) {
+        if (mutation.type === "childList" && isElementNode(mutation.target)) {
           const field = mutation.target.closest(COMMUNITY_FIELD_SELECTOR);
           if (field !== null) this.translateCommunityField(field);
         }
-        if (mutation.type === "attributes" && mutation.target.instanceOf(Element)) {
+        if (mutation.type === "attributes" && isElementNode(mutation.target)) {
           this.translateAttributes(mutation.target);
         }
         for (const node of Array.from(mutation.addedNodes)) this.translateTree(node);
@@ -213,21 +241,22 @@ export class PluginUiTranslationRuntime {
   stop(): void {
     this.observer?.disconnect();
     this.observer = null;
+    this.observedRoot = null;
     this.restore();
   }
 
   private translateTree(root: Node): void {
-    if (root.instanceOf(Text)) { this.translateText(root); return; }
-    if (!root.instanceOf(Element) && !root.instanceOf(DocumentFragment)) return;
-    if (root.instanceOf(Element)) {
+    if (isTextNode(root)) { this.translateText(root); return; }
+    if (!isElementNode(root) && !isDocumentFragmentNode(root)) return;
+    if (isElementNode(root)) {
       this.translateAttributes(root);
       this.translateReadmeBlock(root);
     }
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
     let current = walker.nextNode();
     while (current !== null) {
-      if (current.instanceOf(Text)) this.translateText(current);
-      else if (current.instanceOf(Element)) {
+      if (isTextNode(current)) this.translateText(current);
+      else if (isElementNode(current)) {
         this.translateAttributes(current);
         this.translateReadmeBlock(current);
       }
@@ -250,9 +279,9 @@ export class PluginUiTranslationRuntime {
       return;
     }
     const raw = node.data;
-    const plan = parent.closest(METADATA_TEXT_SELECTOR) === null
-      ? this.runtimePlan
-      : this.metadataPlan;
+    const plan = shouldUsePluginMetadataPlan(parent)
+      ? this.metadataPlan
+      : this.runtimePlan;
     const translated = translatePluginUiValue(raw, plan);
     if (translated === undefined) return;
     if (!this.restoredText.has(node)) this.restoredText.set(node, { original: raw, translated });
@@ -337,11 +366,11 @@ function serializeReadmeBlock(block: Element): SerializedReadmeBlock | undefined
   const protectedNodes: Element[] = [];
   const parts: string[] = [];
   const visit = (node: Node): void => {
-    if (node.instanceOf(Text)) {
+    if (isTextNode(node)) {
       parts.push(node.data);
       return;
     }
-    if (!node.instanceOf(Element)) return;
+    if (!isElementNode(node)) return;
     if (node.matches(README_PROTECTED_SELECTOR)) {
       if ((node.textContent ?? "").trim() !== "") {
         parts.push(`{{th:expr:${protectedNodes.length}}}`);
@@ -424,12 +453,12 @@ function escapeRegExp(value: string): string {
 }
 
 function communityFieldTextNodes(field: Element): Text[] {
-  const walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT);
+  const walker = field.ownerDocument.createTreeWalker(field, NodeFilter.SHOW_TEXT);
   const nodes: Text[] = [];
   let current = walker.nextNode();
   while (current !== null) {
     if (
-      current.instanceOf(Text)
+      isTextNode(current)
       && current.parentElement?.closest(COMMUNITY_FIELD_BADGE_SELECTOR) === null
     ) {
       nodes.push(current);

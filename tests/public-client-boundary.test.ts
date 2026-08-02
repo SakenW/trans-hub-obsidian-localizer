@@ -15,19 +15,18 @@ describe("Obsidian public client boundary", () => {
     expect(source.join("\n")).not.toContain("secure-client-core");
   });
 
-  it("requires a real translation-export trust root for production builds", async () => {
+  it("pins the audited public translation-export root for clean production builds", async () => {
     const source = await readFile(`${ROOT}/esbuild.config.mjs`, "utf8");
     expect(source).not.toContain("obsidian-store-build-verification-placeholder");
-    const requiresInjectedRoot = source.includes(
-      'if (transferRoot === undefined) throw new Error("TRANS_HUB_TRANSFER_ROOT_KEY_ID 缺失或格式无效。");',
-    );
     const pinsPublicRoot = source.includes('keyId: "client-transfer-root-1"')
       && source.includes('publicKeyBase64Url: "jaDlCqNcXw6UBT8A2oXvfF0pyz1j94Yrdqyr1YDgCh4"');
-    expect(requiresInjectedRoot || pinsPublicRoot).toBe(true);
+    expect(pinsPublicRoot).toBe(true);
+    expect(source).toContain('resolveTrustRoot("TRANS_HUB_TRANSFER_ROOT", DEFAULT_TRANSFER_ROOT)');
+    expect(source).toContain('if (values.some((value) => value === ""))');
   });
 
   it("pins the exact public observation adapter descriptor", async () => {
-    const artifact = await readFile(`${ROOT}/adapter/obsidian-plugin-ui-v16.json`);
+    const artifact = await readFile(`${ROOT}/adapter/obsidian-plugin-ui-v17.json`);
     expect(createHash("sha256").update(artifact).digest("hex"))
       .toBe(OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex);
   });

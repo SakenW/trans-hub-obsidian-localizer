@@ -102,6 +102,7 @@ const UI_PROPERTY = new RegExp(String.raw`(?:name|description|text|placeholder|l
 // Obsidian's community installer may append this source-map suppression comment
 // after downloading a release asset. It is not part of the publisher's artifact.
 const COMMUNITY_INSTALLER_NO_SOURCEMAP_SUFFIX = "\n/* nosourcemap */";
+const MAX_EMBEDDED_LOCALE_CATALOG_ENTRIES = 10_000;
 
 export async function scanPluginUiStrings(input: {
   readonly plugin: InstalledObsidianPlugin;
@@ -116,24 +117,28 @@ export async function scanPluginUiStrings(input: {
   readonly targetLocale?: string;
   readonly now?: () => Date;
 }): Promise<PluginUiCatalog> {
+  const sourceLocale = canonicalLocale(input.sourceLocale);
+  const targetLocale = input.targetLocale === undefined
+    ? undefined
+    : canonicalLocale(input.targetLocale);
   const collected = new Map<string, CandidateAggregate>();
-  addCandidate(collected, input.plugin.name, "manifest.name", input.sourceLocale, {
+  addCandidate(collected, input.plugin.name, "manifest.name", sourceLocale, {
     origin: "manifest.name", strategy: "manifest", symbol: "manifest.name", offset: null, line: null, column: null,
   });
-  addCandidate(collected, input.plugin.description, "manifest.description", input.sourceLocale, {
+  addCandidate(collected, input.plugin.description, "manifest.description", sourceLocale, {
     origin: "manifest.description", strategy: "manifest", symbol: "manifest.description", offset: null, line: null, column: null,
   });
   if (input.registryMetadata !== undefined) {
-    addCandidate(collected, input.registryMetadata.name, "registry.name", input.sourceLocale, {
+    addCandidate(collected, input.registryMetadata.name, "registry.name", sourceLocale, {
       origin: "registry.name", strategy: "registry", symbol: "community-plugins.name", offset: null, line: null, column: null,
     });
-    addCandidate(collected, input.registryMetadata.description, "registry.description", input.sourceLocale, {
+    addCandidate(collected, input.registryMetadata.description, "registry.description", sourceLocale, {
       origin: "registry.description", strategy: "registry", symbol: "community-plugins.description", offset: null, line: null, column: null,
     });
   }
   if (input.readmeMarkdown !== undefined) {
     for (const source of extractPluginReadmeStrings(input.readmeMarkdown)) {
-      addCandidate(collected, source, "readme", input.sourceLocale, {
+      addCandidate(collected, source, "readme", sourceLocale, {
         origin: "readme", strategy: "markdown", symbol: "README.md", offset: null, line: null, column: null,
       });
     }
@@ -141,20 +146,20 @@ export async function scanPluginUiStrings(input: {
   const detectedNativeTargets = await collectEmbeddedEnglishCatalog(
     input.bundle,
     collected,
-    input.sourceLocale,
-    input.targetLocale,
+    sourceLocale,
+    targetLocale,
   );
   if (detectedNativeTargets === null) {
     const BUNDLE_STRUCTURED_SCAN_BYTE_LIMIT = 1_048_576;
     if (input.bundle.length <= BUNDLE_STRUCTURED_SCAN_BYTE_LIMIT) {
-      if (!collectStructuredMatches(input.bundle, collected, input.sourceLocale)) {
-        collectRegexMatches(input.bundle, UI_CALL, "ui-call", "ui-call", collected, input.sourceLocale);
-        collectRegexMatches(input.bundle, OPTION_CALL, "ui-call", "addOption", collected, input.sourceLocale, 2);
-        collectRegexMatches(input.bundle, UI_PROPERTY, "ui-property", "ui-property", collected, input.sourceLocale);
+      if (!collectStructuredMatches(input.bundle, collected, sourceLocale)) {
+        collectRegexMatches(input.bundle, UI_CALL, "ui-call", "ui-call", collected, sourceLocale);
+        collectRegexMatches(input.bundle, OPTION_CALL, "ui-call", "addOption", collected, sourceLocale, 2);
+        collectRegexMatches(input.bundle, UI_PROPERTY, "ui-property", "ui-property", collected, sourceLocale);
       }
     } else {
-      collectRegexMatches(input.bundle, UI_CALL, "ui-call", "ui-call", collected, input.sourceLocale);
-      collectRegexMatches(input.bundle, OPTION_CALL, "ui-call", "addOption", collected, input.sourceLocale, 2);
+      collectRegexMatches(input.bundle, UI_CALL, "ui-call", "ui-call", collected, sourceLocale);
+      collectRegexMatches(input.bundle, OPTION_CALL, "ui-call", "addOption", collected, sourceLocale, 2);
     }
   }
   const nativeTargets = detectedNativeTargets ?? new Map<string, string>();
@@ -166,11 +171,11 @@ export async function scanPluginUiStrings(input: {
       origins: [...aggregate.origins].sort(),
       semanticRole: resolvePluginStringSemanticRole(aggregate.origins),
       placeholderSignature: placeholderSignature(source),
-      ...(input.targetLocale === undefined || nativeTargets.get(source.normalize("NFC")) === undefined
+      ...(targetLocale === undefined || nativeTargets.get(source.normalize("NFC")) === undefined
         ? {}
         : {
             nativeTarget: nativeTargets.get(source.normalize("NFC")),
-            nativeTargetLocale: input.targetLocale,
+            nativeTargetLocale: targetLocale,
           }),
       evidence: [...aggregate.evidence.values()].sort(compareEvidence),
     })));
@@ -189,7 +194,7 @@ export async function scanPluginUiStrings(input: {
   const catalogIdentity = await computeSourceCatalogIdentity({
     resourceKey: input.plugin.id,
     resourceVersion: input.plugin.version,
-    sourceLocale: input.sourceLocale,
+    sourceLocale,
     artifactDigest,
     sources: sourceDefinitions.filter((source) => activeSourceKeys.has(source.key)),
     units: canonicalUnits.map(({ item, sourceKey }) => ({
@@ -205,7 +210,7 @@ export async function scanPluginUiStrings(input: {
     pluginId: input.plugin.id,
     pluginName: input.plugin.name,
     pluginVersion: input.plugin.version,
-    sourceLocale: input.sourceLocale,
+    sourceLocale,
     digest: catalogIdentity.digest,
     artifactDigest,
     catalogIdentity,
@@ -270,16 +275,18 @@ async function collectEmbeddedEnglishCatalog(
   }
   const packedEnglish = assignments.get("en");
   if (targetLocale !== undefined && packedEnglish !== undefined) {
-    const englishEntries = collectLocaleEntries(packedEnglish);
-    const nativeEntries = await collectNativeLocaleEntries(
-      assignments,
-      new Map(),
-      targetLocale,
-    );
-    const nativeTargets = mapNativeTargets(englishEntries, nativeEntries);
-    if (nativeTargets.size > 0) {
-      addLocaleEntries(target, englishEntries, sourceLocale);
-      return nativeTargets;
+    const englishEntries = collectBoundedLocaleEntries(packedEnglish);
+    if (englishEntries !== undefined) {
+      const nativeEntries = await collectNativeLocaleEntries(
+        assignments,
+        new Map(),
+        targetLocale,
+      );
+      const nativeTargets = mapNativeTargets(englishEntries, nativeEntries);
+      if (nativeTargets.size > 0) {
+        addLocaleEntries(target, englishEntries, sourceLocale);
+        return nativeTargets;
+      }
     }
   }
   for (const registry of assignments.values()) {
@@ -288,7 +295,8 @@ async function collectEmbeddedEnglishCatalog(
     const englishTarget = localeTargets.get("en");
     const english = englishTarget === undefined ? undefined : assignments.get(englishTarget);
     if (english === undefined) continue;
-    const englishEntries = collectLocaleEntries(english);
+    const englishEntries = collectBoundedLocaleEntries(english);
+    if (englishEntries === undefined) continue;
     addLocaleEntries(target, englishEntries, sourceLocale);
     if (targetLocale === undefined) return new Map();
     const nativeEntries = await collectNativeLocaleEntries(
@@ -298,7 +306,52 @@ async function collectEmbeddedEnglishCatalog(
     );
     return mapNativeTargets(englishEntries, nativeEntries);
   }
+  const exportedNative = collectExportedLocaleCatalog(tokens, targetLocale);
+  if (exportedNative !== undefined) {
+    addLocaleEntries(target, exportedNative.english, sourceLocale);
+    return exportedNative.nativeTargets;
+  }
   return null;
+}
+
+/**
+ * Matches the adapter's compiled-bundle locale export form:
+ * `STRINGS_EN: () => englishCatalog`.  Some plugins expose no runtime
+ * registration calls at all, so falling through to the large-bundle regex
+ * path would otherwise discard their canonical English UI catalog locally.
+ */
+function collectExportedLocaleCatalog(
+  tokens: readonly Token[],
+  targetLocale: string | undefined,
+): { readonly english: readonly LocaleEntry[]; readonly nativeTargets: ReadonlyMap<string, string> } | undefined {
+  const targets = new Map<string, string>();
+  for (let index = 0; index + 6 < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === undefined) continue;
+    const match = /^STRINGS_([A-Z]{2,3}(?:_[A-Z0-9]{2,8})*)$/u.exec(token.raw);
+    const target = tokens[index + 6];
+    if (match === null || target?.kind !== "identifier") continue;
+    const sequence = tokens.slice(index + 1, index + 6).map((entry) => entry?.raw);
+    if (sequence.join("\u0000") !== [":", "(", ")", "=", ">"].join("\u0000")) continue;
+    targets.set(target.raw, canonicalLocale(match[1]?.replaceAll("_", "-") ?? ""));
+  }
+  if (![...targets.values()].includes("en")) return undefined;
+
+  const catalogs = new Map<string, readonly LocaleEntry[]>();
+  for (let index = 0; index + 2 < tokens.length; index += 1) {
+    const locale = targets.get(tokens[index]?.raw ?? "");
+    if (locale === undefined || tokens[index + 1]?.raw !== "=" || tokens[index + 2]?.raw !== "{") continue;
+    const end = matchingTokenIndex(tokens, index + 2);
+    if (end === -1) continue;
+    const entries = collectBoundedLocaleEntries(tokens.slice(index + 2, end + 1));
+    if (entries !== undefined) catalogs.set(locale, entries);
+  }
+  const english = catalogs.get("en");
+  if (english === undefined) return undefined;
+  const native = targetLocale === undefined
+    ? []
+    : (catalogs.get(canonicalLocale(targetLocale)) ?? []);
+  return { english, nativeTargets: mapNativeTargets(english, native) };
 }
 
 async function collectStandalonePackedNativeCatalog(
@@ -327,8 +380,13 @@ async function collectStandalonePackedNativeCatalog(
   const native = nativeObject === undefined
     ? collectFlatLocaleEntries(unpacked)
     : collectLocaleEntries(nativeObject);
+  if (
+    english.length === 0
+    || english.length > MAX_EMBEDDED_LOCALE_CATALOG_ENTRIES
+    || native.length > MAX_EMBEDDED_LOCALE_CATALOG_ENTRIES
+  ) return undefined;
   const nativeTargets = mapNativeTargets(english, native);
-  return nativeTargets.size === 0 ? undefined : { english, nativeTargets };
+  return { english, nativeTargets };
 }
 
 function collectFlatLocaleEntries(source: string): readonly LocaleEntry[] {
@@ -426,12 +484,14 @@ function localeRegistryTargets(tokens: readonly Token[]): ReadonlyMap<string, st
 
 function canonicalLocale(value: string): string {
   const parts = value.split("-");
-  return parts.map((part, index) => {
+  const canonical = parts.map((part, index) => {
     if (index === 0) return part.toLowerCase();
     if (part.length === 4) return part[0]?.toUpperCase() + part.slice(1).toLowerCase();
     if (part.length === 2) return part.toUpperCase();
     return part.toLowerCase();
   }).join("-");
+  // Obsidian has historically used bare `zh` for Simplified Chinese.
+  return canonical === "zh" ? "zh-CN" : canonical;
 }
 
 interface LocaleEntry {
@@ -467,6 +527,13 @@ function collectLocaleEntries(
     : [{ path: path.join("\u0000"), symbol, value: rendered }];
 }
 
+function collectBoundedLocaleEntries(tokens: readonly Token[]): readonly LocaleEntry[] | undefined {
+  const entries = collectLocaleEntries(tokens);
+  return entries.length > 0 && entries.length <= MAX_EMBEDDED_LOCALE_CATALOG_ENTRIES
+    ? entries
+    : undefined;
+}
+
 async function collectNativeLocaleEntries(
   assignments: ReadonlyMap<string, readonly Token[]>,
   localeTargets: ReadonlyMap<string, string>,
@@ -475,7 +542,7 @@ async function collectNativeLocaleEntries(
   const target = localeTargets.get(canonicalLocale(targetLocale));
   if (target !== undefined) {
     const tokens = assignments.get(target);
-    if (tokens !== undefined) return collectLocaleEntries(tokens);
+    if (tokens !== undefined) return collectBoundedLocaleEntries(tokens) ?? [];
   }
   const packed = packedLocaleValue(assignments.get("PLUGIN_LANGUAGES"), targetLocale);
   if (packed === undefined) return [];
@@ -486,7 +553,7 @@ async function collectNativeLocaleEntries(
   for (let index = 0; index < tokens.length - 2; index += 1) {
     if (tokens[index]?.kind !== "identifier" || tokens[index + 1]?.raw !== "=" || tokens[index + 2]?.raw !== "{") continue;
     const end = matchingTokenIndex(tokens, index + 2);
-    if (end !== -1) return collectLocaleEntries(tokens.slice(index + 2, end + 1));
+    if (end !== -1) return collectBoundedLocaleEntries(tokens.slice(index + 2, end + 1)) ?? [];
   }
   return [];
 }
@@ -524,11 +591,30 @@ function mapNativeTargets(
 ): ReadonlyMap<string, string> {
   const nativeByPath = new Map(native.map((entry) => [entry.path, entry.value]));
   const targets = new Map<string, string>();
+  // string_key is derived from the normalized source, not the locale resource
+  // path. Any unsafe path therefore invalidates native coverage for that source.
+  const rejectedSources = new Set<string>();
   for (const source of english) {
     const target = nativeByPath.get(source.path);
     if (target === undefined || target.text.trim() === "") continue;
-    if (placeholderSignature(source.value.text) !== placeholderSignature(target.text)) continue;
-    targets.set(source.value.text.normalize("NFC"), target.text.normalize("NFC"));
+    const normalizedSource = source.value.text.normalize("NFC").trim();
+    const normalizedTarget = target.text.normalize("NFC").trim();
+    if (rejectedSources.has(normalizedSource)) continue;
+    if (
+      normalizedSource === normalizedTarget
+      || placeholderSignature(normalizedSource) !== placeholderSignature(normalizedTarget)
+    ) {
+      targets.delete(normalizedSource);
+      rejectedSources.add(normalizedSource);
+      continue;
+    }
+    const existing = targets.get(normalizedSource);
+    if (existing !== undefined && existing !== normalizedTarget) {
+      targets.delete(normalizedSource);
+      rejectedSources.add(normalizedSource);
+      continue;
+    }
+    targets.set(normalizedSource, normalizedTarget);
   }
   return targets;
 }
@@ -1015,7 +1101,38 @@ export function isTranslatableUiText(value: string): boolean {
   if (/^[a-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+$/u.test(value)) return false;
   if (/^[A-Z_][A-Z0-9_]+$/u.test(value)) return false;
   if (/^%[A-Za-z_][A-Za-z0-9_]*$/u.test(value)) return false;
+  if (isLanguageNeutralStructuredLiteral(value)) return false;
   return true;
+}
+
+function isLanguageNeutralStructuredLiteral(value: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== "object") return false;
+  return hasOnlyStructuredIdentifiers(parsed);
+}
+
+function hasOnlyStructuredIdentifiers(value: unknown): boolean {
+  if (typeof value === "string") {
+    return /^[A-Za-z_$][A-Za-z0-9_$.-]*$/u.test(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return true;
+  if (Array.isArray(value)) return value.every(hasOnlyStructuredIdentifiers);
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (!entries.every(([key]) => isStructuredMachineKey(key))) return false;
+  return entries.every(([, item]) => hasOnlyStructuredIdentifiers(item));
+}
+
+function isStructuredMachineKey(key: string): boolean {
+  return /^(?:kind|type|id|action|actions|mode|scope|scopes|status|variant|version|enabled|disabled)$/iu.test(key)
+    // Configuration examples such as {"folderSortOrder":"alpha-desc"} are
+    // machine-readable values, not UI copy. Keep this narrow so JSON with
+    // visible keys such as title and summary remains localizable.
+    || /^[a-z][A-Za-z0-9]*(?:mode|order|sort|variant|scope|status|id|type|version)$/iu.test(key);
 }
 
 export function placeholderSignature(value: string): string {

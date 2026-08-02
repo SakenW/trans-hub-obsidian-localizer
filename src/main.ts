@@ -2,12 +2,15 @@ import { getLanguage, Notice, Plugin } from "obsidian";
 
 import { ActivationStore } from "./activation";
 import { localizedClientName, setClientLocale, translate } from "./client-localization";
+import { retireExpiredDerivedCache } from "./derived-cache-migration";
 import { errorMessage } from "./error-message";
+import { openSystemBrowser } from "./external-browser";
 import { registerPluginTranslationCommands } from "./plugin-actions";
 import {
   PluginAutomationController,
   type PluginScanResult,
 } from "./plugin-automation";
+import type { PluginSourceSnapshot } from "./plugin-picker-source";
 import { synchronizeConfiguredPluginTranslations, type PluginSyncSummary } from "./plugin-sync";
 import {
   describePluginSelectionProcessing,
@@ -19,12 +22,20 @@ import {
   type PluginSelectionProcessingResult,
 } from "./plugin-selection-processing";
 import { resolveCommunityPluginIdentity } from "./plugin-registry";
-import { EMPTY_PLUGIN_STATE, parsePluginState, type PluginState } from "./plugin-state";
+import {
+  EMPTY_PLUGIN_STATE,
+  isPluginLocalizationDerivedCacheCurrent,
+  parsePluginState,
+  PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION,
+  resetPluginLocalizationDerivedState,
+  type PluginState,
+} from "./plugin-state";
 import {
   OBSIDIAN_AUTH_CALLBACK_ACTION,
   OBSIDIAN_ECOSYSTEM_SLUG,
   OBSIDIAN_SOURCE_LOCALE,
   TRANS_HUB_API_BASE_URL,
+  TRANS_HUB_REGISTRATION_URL,
   TRANS_HUB_WEB_BASE_URL,
   resolveObsidianTargetLocale,
   type TargetLocale,
@@ -40,6 +51,7 @@ import {
 const AUTOMATION_INTERVAL_MS = 15 * 60 * 1000;
 
 interface StoredPluginData {
+  readonly pluginLocalizationDerivedCacheRevision?: unknown;
   readonly settings?: unknown;
   readonly state?: unknown;
 }
@@ -56,6 +68,7 @@ export default class TransHubObsidianPlugin extends Plugin {
   private readonly pendingRetryPluginIds = new Set<string>();
   private readonly pluginProcessingQueue = new PluginProcessingQueue();
   private targetLocaleRevision = 0;
+  private resetPluginLocalizationDerivedCache = false;
 
   override async onload(): Promise<void> {
     this.loadPluginData(await this.loadData(), resolveObsidianTargetLocale(getLanguage()));
@@ -65,6 +78,21 @@ export default class TransHubObsidianPlugin extends Plugin {
       this.app.vault,
       this.manifest.id,
     );
+    if (this.resetPluginLocalizationDerivedCache) {
+      const retired = await retireExpiredDerivedCache({
+        clearAll: () => this.translationPackStore.clearAll(),
+        persistCurrentRevision: async () => {
+          this.resetPluginLocalizationDerivedCache = false;
+          await this.savePluginData();
+        },
+        reportFailure: (error) => console.warn(
+          "[Trans-Hub] failed to retire an expired localization cache; "
+            + "the client will retry on next load",
+          error,
+        ),
+      });
+      this.resetPluginLocalizationDerivedCache = !retired;
+    }
     this.registerObsidianProtocolHandler(
       OBSIDIAN_AUTH_CALLBACK_ACTION,
       async (parameters) => {
@@ -93,7 +121,7 @@ export default class TransHubObsidianPlugin extends Plugin {
       state: () => this.state,
       replaceState: (state) => { this.state = state; },
       save: () => this.savePluginData(),
-      synchronize: () => this.autoSyncInstalledPluginTranslations(),
+      synchronize: (sourceSelectablePluginIds) => this.autoSyncInstalledPluginTranslations(sourceSelectablePluginIds),
     });
     this.settingTab = new TransHubSettingTab(this.app, this);
     this.addSettingTab(this.settingTab);
@@ -117,7 +145,14 @@ export default class TransHubObsidianPlugin extends Plugin {
   }
 
   async savePluginData(): Promise<void> {
-    await this.saveData({ settings: this.settings, state: this.state });
+    await this.saveData({
+      pluginLocalizationDerivedCacheRevision:
+        this.resetPluginLocalizationDerivedCache
+          ? undefined
+          : PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION,
+      settings: this.settings,
+      state: this.state,
+    });
   }
 
   async connect(): Promise<void> {
@@ -126,7 +161,11 @@ export default class TransHubObsidianPlugin extends Plugin {
       ecosystemSlug: OBSIDIAN_ECOSYSTEM_SLUG,
       callbackAction: OBSIDIAN_AUTH_CALLBACK_ACTION,
     });
-    window.open(url, "_blank", "noopener,noreferrer");
+    await openSystemBrowser(url);
+  }
+
+  openRegistration(): Promise<void> {
+    return openSystemBrowser(TRANS_HUB_REGISTRATION_URL);
   }
 
   disconnect(): void {
@@ -137,6 +176,7 @@ export default class TransHubObsidianPlugin extends Plugin {
   hasUserSession(): boolean { return this.activation.isConfigured(); }
   requiresReconnect(): boolean { return this.activation.requiresReconnect(); }
   getPluginState(): PluginState { return this.state; }
+  getPluginSourceSnapshot(): PluginSourceSnapshot { return this.pluginAutomation.getSourceSnapshot(); }
 
   applyClientLocale(locale: TransHubPluginSettings["targetLocale"]): void {
     setClientLocale(locale);
@@ -172,6 +212,10 @@ export default class TransHubObsidianPlugin extends Plugin {
     return this.processPlugins();
   }
 
+  processPluginIds(pluginIds: readonly string[]): Promise<PluginSelectionProcessingResult> {
+    return this.processPlugins(pluginIds);
+  }
+
   processSinglePlugin(
     pluginId: string,
     resubmitObservation = false,
@@ -201,13 +245,19 @@ export default class TransHubObsidianPlugin extends Plugin {
     targetLocale: TargetLocale,
     manualResubmitPluginIds: readonly string[] | undefined,
   ): Promise<PluginSelectionProcessingResult> {
+    let selectablePluginIds = this.state.enabledPluginIds;
     const result = await processPluginSelection({
-      scan: () => this.scanInstalledPluginStrings(onlyPluginIds),
+      scan: async () => {
+        const scan = await this.scanInstalledPluginStrings(onlyPluginIds);
+        selectablePluginIds = scan.selectablePluginIds;
+        return scan;
+      },
       hasSession: () => targetLocale === OBSIDIAN_SOURCE_LOCALE || this.activation.isConfigured(),
       synchronize: () => this.synchronizePluginTranslationsNow(
         onlyPluginIds,
         targetLocale,
         manualResubmitPluginIds,
+        selectablePluginIds,
       ),
       applyCached: () => { this.applyCachedPluginTranslations(); },
     });
@@ -247,17 +297,26 @@ export default class TransHubObsidianPlugin extends Plugin {
 
   async syncInstalledPluginTranslations(
     onlyPluginIds?: readonly string[],
+    sourceSelectablePluginIds?: readonly string[],
   ): Promise<PluginSyncSummary> {
     const targetLocale = this.settings.targetLocale;
-    return this.pluginProcessingQueue.run(
-      () => this.synchronizePluginTranslationsNow(onlyPluginIds, targetLocale, undefined),
-    );
+    return this.pluginProcessingQueue.run(async () => {
+      const selectablePluginIds = sourceSelectablePluginIds
+        ?? (await this.scanInstalledPluginStrings(onlyPluginIds)).selectablePluginIds;
+      return this.synchronizePluginTranslationsNow(
+        onlyPluginIds,
+        targetLocale,
+        undefined,
+        selectablePluginIds,
+      );
+    });
   }
 
   private async synchronizePluginTranslationsNow(
     onlyPluginIds: readonly string[] | undefined,
     targetLocale: TargetLocale,
     manualResubmitPluginIds: readonly string[] | undefined,
+    sourceSelectablePluginIds: readonly string[] = this.state.enabledPluginIds,
   ): Promise<PluginSyncSummary> {
     if (targetLocale === OBSIDIAN_SOURCE_LOCALE) {
       this.pluginAutomation.applyCachedTranslations();
@@ -269,6 +328,7 @@ export default class TransHubObsidianPlugin extends Plugin {
       excludedPluginIds: this.settings.excludedPluginIds,
       ...(onlyPluginIds === undefined ? {} : { onlyPluginIds }),
       ...(manualResubmitPluginIds === undefined ? {} : { manualResubmitPluginIds }),
+      sourceSelectablePluginIds,
       activationStore: this.activation,
       translationPackStore: this.translationPackStore,
       getState: () => this.state,
@@ -283,7 +343,13 @@ export default class TransHubObsidianPlugin extends Plugin {
     const stored = isRecord(value) ? value as StoredPluginData : {};
     const legacySettings = isRecord(value) && "apiBaseUrl" in value ? value : stored.settings;
     this.settings = loadSettings(legacySettings, defaultTargetLocale);
-    this.state = parsePluginState(stored.state);
+    const parsedState = parsePluginState(stored.state);
+    this.resetPluginLocalizationDerivedCache = !isPluginLocalizationDerivedCacheCurrent(
+      stored.pluginLocalizationDerivedCacheRevision,
+    );
+    this.state = this.resetPluginLocalizationDerivedCache
+      ? resetPluginLocalizationDerivedState(parsedState)
+      : parsedState;
   }
 
   private async runAutomaticPluginTranslation(): Promise<void> {
@@ -298,11 +364,13 @@ export default class TransHubObsidianPlugin extends Plugin {
     }
   }
 
-  private async autoSyncInstalledPluginTranslations(): Promise<PluginSyncSummary> {
+  private async autoSyncInstalledPluginTranslations(
+    sourceSelectablePluginIds?: readonly string[],
+  ): Promise<PluginSyncSummary> {
     if (!this.activation.isConfigured()) {
       return { submittedCount: 0, requestedCount: 0, pulledCount: 0, waitingCount: 0, translationCount: 0 };
     }
-    return this.syncInstalledPluginTranslations();
+    return this.syncInstalledPluginTranslations(undefined, sourceSelectablePluginIds);
   }
 
   private schedulePendingTranslationRetry(

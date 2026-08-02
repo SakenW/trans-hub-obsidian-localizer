@@ -4,6 +4,7 @@ import {
   buildConflictSafeDictionary,
   buildRuntimeTranslationPlan,
   filterTranslationScope,
+  shouldUsePluginMetadataPlan,
   shouldTranslatePluginUiElement,
   translatePluginReadmeTemplate,
   translatePluginUiFieldParts,
@@ -96,6 +97,22 @@ describe("runtime DOM boundary", () => {
 
     expect(shouldTranslatePluginUiElement(highlighted)).toBe(false);
     expect(shouldTranslatePluginUiElement(ordinary)).toBe(true);
+  });
+
+  it("uses the metadata plan for both supported native installed-plugin layouts", () => {
+    const currentObsidianSetting = {
+      closest: (selector: string): Element | null => selector.includes(".modal.mod-settings") ? {} as Element : null,
+    };
+    const flattenedInstalledPluginRow = {
+      closest: (selector: string): Element | null => selector.includes(".installed-plugins-container")
+        ? {} as Element
+        : null,
+    };
+    const regularRuntimeSurface = { closest: (): Element | null => null };
+
+    expect(shouldUsePluginMetadataPlan(currentObsidianSetting)).toBe(true);
+    expect(shouldUsePluginMetadataPlan(flattenedInstalledPluginRow)).toBe(true);
+    expect(shouldUsePluginMetadataPlan(regularRuntimeSurface)).toBe(false);
   });
 
   it("translates a complete fragmented field and never a keyword fragment", () => {

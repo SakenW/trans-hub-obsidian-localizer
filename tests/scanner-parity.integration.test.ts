@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,17 @@ const ADVANCED_URI_FIXTURE = process.env.OBSIDIAN_ADVANCED_URI_FIXTURE;
 const ADVANCED_URI_BUNDLE_DIGEST = "4281675a5c562362d827bf330f7af7d928276151714ae9ede18cf12d70556faf";
 const ADVANCED_URI_MANIFEST_DIGEST = "0f3d3bbffac719288ceb446e0e40b9e0ecf3859b9a4a96106d72ef6ed86acc6f";
 const ADVANCED_URI_REGISTRY_DESCRIPTION = "Control everything with URI.";
+const BETTER_MANAGER_FIXTURE = process.env.OBSIDIAN_BETTER_MANAGER_FIXTURE;
+const BETTER_MANAGER_BUNDLE_DIGEST = "84c74dca1c8bafa0459186ebead3618ddd63a2aa7d6669f514aa000036d67888";
+const BETTER_MANAGER_MANIFEST_DIGEST = "05a3b2d2ea90a8b64fc729dae09fea5d2dd4092593c81affadbee6cab8e391e3";
+const BETTER_MANAGER_README_DIGEST = "634dd277c5ca7adf2a92177e791f052329ed9cf519ee86000048c1b9d0a3f13d";
+const BETTER_MANAGER_ENGLISH_LOCALE_DIGEST = "bf5430df677c3fc9c5a927ea32fd23c1e3fd3fa6f21e3aafa41834f587c72eee";
+const BETTER_MANAGER_SPANISH_LOCALE_DIGEST = "390b954acce97fd163f3dfe4e1939921b7a0a200579b0834d966caf961438a5e";
+const BETTER_MANAGER_FRENCH_LOCALE_DIGEST = "db661ad0f6e4151b4d4a2992df0f820a605623cb363cadff98f656310ee1969c";
+const BETTER_MANAGER_JAPANESE_LOCALE_DIGEST = "43ac97dedc745fe71f833113b40000593c782e4f323f688da339cc26b9087695";
+const BETTER_MANAGER_KOREAN_LOCALE_DIGEST = "688f2f536d43fc8e4162a6a0777a53bb58b143606b573009e1b45e2b248eb144";
+const BETTER_MANAGER_RUSSIAN_LOCALE_DIGEST = "74a2f829b53bd6a1c1bdc6d320627e44533a16a10fc458e0b7cc040b19dadb4b";
+const BETTER_MANAGER_CHINESE_LOCALE_DIGEST = "943bcc371155b971b93e22fa5dcd7b60545b18d831aa2b9b8ba525255fecc561";
 const ADVANCED_TABLES_FALSE_POSITIVES = [
   "Attribute", "AttributeValue", "Attributes", "CharClass", "CharCode", "CharCodeRange",
   "CharRange", "Comment", "Link", "PrimaryPreDecoration", "RULE_Char", "Url", "wrapper",
@@ -30,13 +41,27 @@ const ADVANCED_TABLES_FALSE_POSITIVES = [
 
 const PYTHON_SNAPSHOT = String.raw`
 import importlib.util, json, pathlib, sys
-adapter_path, manifest_path, bundle_path, readme_path = map(pathlib.Path, sys.argv[1:])
+adapter_path, manifest_path, bundle_path, readme_path = map(pathlib.Path, sys.argv[1:5])
 spec = importlib.util.spec_from_file_location("trans_hub_obsidian_adapter", adapter_path)
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 readme = readme_path.read_bytes() if readme_path.is_file() else None
-sys.stdout.buffer.write(module.build_snapshot(manifest_path.read_bytes(), bundle_path.read_bytes(), readme_content=readme))
+locale_components = None
+if len(sys.argv) == 6:
+    locale_root = pathlib.Path(sys.argv[5])
+    locale_components = {
+        locale: [("official", filename, (locale_root / filename).read_bytes())]
+        for locale, filename in {
+            "en": "en.ts", "es": "es.ts", "fr": "fr.ts", "ja": "ja.ts",
+            "ko": "ko.ts", "ru": "ru.ts", "zh": "zh_cn.ts",
+        }.items()
+        if (locale_root / filename).is_file()
+    }
+sys.stdout.buffer.write(module.build_snapshot(
+    manifest_path.read_bytes(), bundle_path.read_bytes(), readme_content=readme,
+    native_locale_components=locale_components,
+))
 `;
 
 describe.skipIf(!existsSync(ADAPTER_PATH))(
@@ -56,6 +81,11 @@ describe.skipIf(!existsSync(ADAPTER_PATH))(
       }));
       await writeFile(bundlePath, [
         'setting.setName("Open settings");',
+        'setting.setDesc(`Rows: ${pageCount}`);',
+        'setting.setDesc(\'{"kind":"panel","actions":["open","sync"]}\');',
+        'setting.setDesc(\'{"title":"Sync your vault","actions":["open","sync"]}\');',
+        'setting.setDesc(\'{"title":"Settings"}\');',
+        'setting.setDesc(\'{"summary":"Settings"}\');',
         'const grammar={name:"Attribute",bnf:[]};',
         'const model={name:"Anthropic Claude Opus 4.6",description:"Internal model metadata"};',
         'plugin.addCommand({id:"transpose",name:"Transpose",editorCheckCallback:run});',
@@ -68,15 +98,46 @@ describe.skipIf(!existsSync(ADAPTER_PATH))(
         "[<img src=\"coffee.png\">](https://example.com/coffee)",
       ].join("\n"));
 
+      const localeRoot = join(root, "locale");
+      await mkdir(localeRoot);
+      await writeFile(join(localeRoot, "en.ts"), "export default {settings: {title: 'Open settings'}};");
+      await writeFile(join(localeRoot, "es.ts"), "export default {settings: {title: 'Abrir ajustes'}};");
+      await writeFile(join(localeRoot, "fr.ts"), "export default {settings: {title: 'Ouvrir les reglages'}};");
+      await writeFile(join(localeRoot, "ja.ts"), "export default {settings: {title: '設定を開く'}};");
+      await writeFile(join(localeRoot, "ko.ts"), "export default {settings: {title: '설정 열기'}};");
+      await writeFile(join(localeRoot, "ru.ts"), "export default {settings: {title: 'Открыть настройки'}};");
+      await writeFile(join(localeRoot, "zh_cn.ts"), "export default {settings: {title: '打开设置'}};");
+
       const client = await scanFixture(manifestPath, bundlePath);
-      const authority = scanAuthority(manifestPath, bundlePath);
+      const installedClient = await scanFixture(
+        manifestPath,
+        bundlePath,
+        undefined,
+        "\n/* nosourcemap */",
+      );
+      const authority = scanAuthority(manifestPath, bundlePath, localeRoot);
       expect(normalizeClient(client)).toEqual(normalizeAuthority(authority));
+      expect(client.artifactDigest).toBe(authority.artifact_digest);
+      expect(installedClient.artifactDigest).toBe(authority.artifact_digest);
+      expect(client.catalogIdentity?.scopes.some((scope) => scope.scope === "readme")).toBe(true);
       expect(client.strings.map((item) => item.source)).not.toContain("Attribute");
       expect(client.strings.map((item) => item.source)).not.toContain("Anthropic Claude Opus 4.6");
       expect(client.strings.map((item) => item.source)).not.toContain("Internal model metadata");
       expect(client.strings.map((item) => item.source)).toContain(
         "For more information, visit the {{th:expr:0}}.",
       );
+      expect(client.strings.map((item) => item.source)).not.toContain(
+        '{"kind":"panel","actions":["open","sync"]}',
+      );
+      expect(client.strings.map((item) => item.source)).toContain(
+        '{"title":"Sync your vault","actions":["open","sync"]}',
+      );
+      expect(client.strings.map((item) => item.source)).toContain('{"title":"Settings"}');
+      expect(client.strings.map((item) => item.source)).toContain('{"summary":"Settings"}');
+      expect(authority.native_locale_coverage.map((item) => item.locale)).toEqual([
+        "es", "fr", "ja", "ko", "ru", "zh-CN",
+      ]);
+      expect(JSON.stringify(authority.native_locale_coverage)).not.toContain("打开设置");
       expect(client.strings.map((item) => item.source)).toContain("Support via today.");
       expect(client.strings.map((item) => item.source)).not.toContain("{{th:expr:0}}");
     } finally {
@@ -116,6 +177,81 @@ describe.skipIf(!existsSync(ADAPTER_PATH))(
         .toEqual(expect.objectContaining({ origins: ["registry.description"] }));
       expect(client.catalogIdentity).toEqual(clientWithoutRegistry.catalogIdentity);
       expect(client.digest).toBe(clientWithoutRegistry.digest);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps compiled STRINGS_EN catalogs in parity for bundles above the regex threshold", async () => {
+    const root = await mkdtemp(join(tmpdir(), "trans-hub-obsidian-exported-locale-"));
+    try {
+      const manifestPath = join(root, "manifest.json");
+      const bundlePath = join(root, "main.js");
+      await writeFile(manifestPath, JSON.stringify({
+        id: "exported-locale-plugin",
+        name: "Exported locale plugin",
+        version: "1.0.0",
+        description: "Uses compiled locale exports.",
+      }));
+      await writeFile(bundlePath, [
+        "var localeExports={};register(localeExports,{STRINGS_EN:()=>english,STRINGS_ZH:()=>chinese});",
+        "var english,chinese;boot(()=>{english={common:{title:'Settings',description:'Open settings'}};chinese={common:{title:'设置',description:'打开设置'}};});",
+        "/* padding to exercise the large-bundle path */".repeat(25_000),
+      ].join("\n"));
+
+      const client = await scanFixture(manifestPath, bundlePath, undefined, "", "zh");
+      const authority = scanAuthority(manifestPath, bundlePath);
+
+      expect(normalizeClient(client)).toEqual(normalizeAuthority(authority));
+      expect(client.catalogIdentity?.unitCount).toBe(authority.source_catalog.units.length);
+      expect(client.strings.find((item) => item.source === "Settings")).toEqual(
+        expect.objectContaining({ nativeTarget: "设置", nativeTargetLocale: "zh-CN" }),
+      );
+      expect(authority.native_locale_coverage.map((item) => item.locale)).toEqual(["zh-CN"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed by source for conflicting and untranslated native paths", async () => {
+    const root = await mkdtemp(join(tmpdir(), "trans-hub-obsidian-native-conflict-"));
+    try {
+      const manifestPath = join(root, "manifest.json");
+      const bundlePath = join(root, "main.js");
+      await writeFile(manifestPath, JSON.stringify({
+        id: "native-conflict-plugin",
+        name: "Native conflict plugin",
+        version: "1.0.0",
+        description: "Exercises native locale conflicts.",
+      }));
+      await writeFile(bundlePath, [
+        'var en={actions:{savePrimary:"Save",saveSecondary:"Save",openPrimary:"Open",openSecondary:"Open",rowsPrimary:"Rows: "+count,rowsSecondary:"Rows: "+total,cancel:"Cancel"}};',
+        'var zh={actions:{savePrimary:"保存",saveSecondary:"储存",openPrimary:"打开",openSecondary:"Open",rowsPrimary:"行数: "+count,rowsSecondary:"行数",cancel:"取消"}};',
+        'var de={actions:{savePrimary:"Speichern",saveSecondary:"Speichern",openPrimary:"Öffnen",openSecondary:"Öffnen",rowsPrimary:"Zeilen: "+count,rowsSecondary:"Zeilen: "+total,cancel:"Abbrechen"}};',
+        "var locales={de:de,en:en,'zh-CN':zh};",
+      ].join(""));
+
+      const client = await scanFixture(manifestPath, bundlePath, undefined, "", "zh-CN");
+      const authority = scanAuthority(manifestPath, bundlePath);
+      const chineseCoverage = authority.native_locale_coverage.find(
+        (row) => row.locale === "zh-CN",
+      );
+      const cancel = client.strings.find((item) => item.source === "Cancel");
+
+      expect(client.strings.find((item) => item.source === "Save"))
+        .not.toHaveProperty("nativeTarget");
+      expect(client.strings.find((item) => item.source === "Open"))
+        .not.toHaveProperty("nativeTarget");
+      expect(client.strings.find((item) => item.source === "Rows: {{th:expr:0}}"))
+        .not.toHaveProperty("nativeTarget");
+      expect(cancel).toEqual(expect.objectContaining({
+        nativeTarget: "取消",
+        nativeTargetLocale: "zh-CN",
+      }));
+      expect(chineseCoverage?.covered_entries.map((entry) => entry.string_key))
+        .toEqual([cancel?.key]);
+      expect(new Set(chineseCoverage?.covered_entries.map((entry) => entry.string_key)).size)
+        .toBe(chineseCoverage?.covered_entries.length);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -193,6 +329,58 @@ describe.skipIf(!existsSync(ADAPTER_PATH))(
       expect(client.digest).toBe(clientWithoutRegistry.digest);
     },
   );
+
+  it.skipIf(BETTER_MANAGER_FIXTURE === undefined)(
+    "keeps Better Plugins Manager 1.0.14 locale files as coverage-only evidence",
+    async () => {
+      const fixtureRoot = BETTER_MANAGER_FIXTURE ?? "";
+      const manifestPath = join(fixtureRoot, "manifest.json");
+      const bundlePath = join(fixtureRoot, "main.js");
+      const readmePath = join(fixtureRoot, "README.md");
+      const localeRoot = join(fixtureRoot, "locale");
+      const [manifestBytes, bundleBytes, readmeBytes, ...localeBytes] = await Promise.all([
+        readFile(manifestPath),
+        readFile(bundlePath),
+        readFile(readmePath),
+        readFile(join(localeRoot, "en.ts")),
+        readFile(join(localeRoot, "es.ts")),
+        readFile(join(localeRoot, "fr.ts")),
+        readFile(join(localeRoot, "ja.ts")),
+        readFile(join(localeRoot, "ko.ts")),
+        readFile(join(localeRoot, "ru.ts")),
+        readFile(join(localeRoot, "zh_cn.ts")),
+      ]);
+      expect(sha256(manifestBytes)).toBe(BETTER_MANAGER_MANIFEST_DIGEST);
+      expect(sha256(bundleBytes)).toBe(BETTER_MANAGER_BUNDLE_DIGEST);
+      expect(sha256(readmeBytes)).toBe(BETTER_MANAGER_README_DIGEST);
+      expect(localeBytes.map(sha256)).toEqual([
+        BETTER_MANAGER_ENGLISH_LOCALE_DIGEST,
+        BETTER_MANAGER_SPANISH_LOCALE_DIGEST,
+        BETTER_MANAGER_FRENCH_LOCALE_DIGEST,
+        BETTER_MANAGER_JAPANESE_LOCALE_DIGEST,
+        BETTER_MANAGER_KOREAN_LOCALE_DIGEST,
+        BETTER_MANAGER_RUSSIAN_LOCALE_DIGEST,
+        BETTER_MANAGER_CHINESE_LOCALE_DIGEST,
+      ]);
+
+      const client = await scanFixture(manifestPath, bundlePath);
+      const authority = scanAuthority(manifestPath, bundlePath, localeRoot);
+      expect(client.catalogIdentity?.unitCount).toBe(130);
+      expect(authority.source_catalog.units).toHaveLength(130);
+      expect(authority.native_locale_coverage.map((row) => row.locale)).toEqual([
+        "es", "fr", "ja", "ko", "ru", "zh-CN",
+      ]);
+      const chineseCoverage = authority.native_locale_coverage.find(
+        (row) => row.locale === "zh-CN",
+      );
+      expect(chineseCoverage?.covered_entries).toHaveLength(45);
+      const rolesByKey = new Map(authority.strings.map((row) => [row.key, row.semantic_role]));
+      expect(chineseCoverage?.covered_entries.every(
+        (entry) => rolesByKey.get(entry.string_key) === "runtime-ui",
+      )).toBe(true);
+      expect(normalizeCanonicalClient(client)).toEqual(normalizeAuthority(authority));
+    },
+  );
   },
 );
 
@@ -200,6 +388,8 @@ async function scanFixture(
   manifestPath: string,
   bundlePath: string,
   registryMetadata?: { readonly name: string; readonly description: string },
+  bundleSuffix = "",
+  targetLocale?: string,
 ): Promise<PluginUiCatalog> {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
     id: string;
@@ -213,12 +403,13 @@ async function scanFixture(
       dir: dirname(manifestPath),
       enabled: true,
     },
-    bundle: await readFile(bundlePath, "utf8"),
+    bundle: `${await readFile(bundlePath, "utf8")}${bundleSuffix}`,
     ...(registryMetadata === undefined ? {} : { registryMetadata }),
     ...(existsSync(join(dirname(manifestPath), "README.md"))
       ? { readmeMarkdown: await readFile(join(dirname(manifestPath), "README.md"), "utf8") }
       : {}),
     sourceLocale: "en",
+    ...(targetLocale === undefined ? {} : { targetLocale }),
     now: () => new Date("2026-07-23T00:00:00.000Z"),
   });
 }
@@ -238,16 +429,23 @@ function normalizeCanonicalClient(catalog: PluginUiCatalog): readonly Normalized
   });
 }
 
-function scanAuthority(manifestPath: string, bundlePath: string): AuthoritySnapshot {
-  const result = spawnSync("python3", [
+function scanAuthority(
+  manifestPath: string,
+  bundlePath: string,
+  localeRoot?: string,
+): AuthoritySnapshot {
+  const args = [
     "-c",
     PYTHON_SNAPSHOT,
     ADAPTER_PATH,
     manifestPath,
     bundlePath,
     join(dirname(manifestPath), "README.md"),
-  ], {
+    ...(localeRoot === undefined ? [] : [localeRoot]),
+  ];
+  const result = spawnSync("python3", args, {
     encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
   });
   if (result.status !== 0) throw new Error(result.stderr || "authority_adapter_scan_failed");
   return JSON.parse(result.stdout) as AuthoritySnapshot;
@@ -293,6 +491,7 @@ interface NormalizedRow {
 }
 
 interface AuthoritySnapshot {
+  readonly artifact_digest: string;
   readonly strings: readonly {
     readonly key: string;
     readonly source: string;
@@ -306,4 +505,8 @@ interface AuthoritySnapshot {
       readonly context: { readonly content_scopes: readonly string[] };
     }[];
   };
+  readonly native_locale_coverage: readonly {
+    readonly locale: string;
+    readonly covered_entries: readonly { readonly string_key: string }[];
+  }[];
 }

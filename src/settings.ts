@@ -20,9 +20,12 @@ import {
   setPluginSelected,
 } from "./plugin-selection";
 import {
-  resolveCommunityPluginSourceEligibility,
-  type CommunityPluginSourceEligibility,
-} from "./plugin-registry";
+  isPluginSourceSelectable,
+  resolveInstalledPluginSources,
+  trustedPublishedPluginVersions,
+  type InstalledPluginWithSource,
+  type PluginSourceState,
+} from "./plugin-picker-source";
 import { describePluginSelectionProcessing } from "./plugin-selection-processing";
 import {
   capturePluginListScrollTop,
@@ -30,8 +33,8 @@ import {
 } from "./plugin-picker-scroll";
 import {
   describePluginLocalizationStatus,
-  pluginManualRetryKind,
   PLUGIN_LOCALIZATION_STATUS_FILTERS,
+  visiblePluginManualRetryKind,
   type PluginManualRetryKind,
   type PluginLocalizationStatusKind,
 } from "./plugin-localization-status";
@@ -42,17 +45,14 @@ import {
 import {
   TARGET_LOCALE_OPTIONS,
   TRANS_HUB_OBSIDIAN_ECOSYSTEM_URL,
-  TRANS_HUB_REGISTRATION_URL,
   TRANS_HUB_WEB_BASE_URL,
   parseTargetLocale,
 } from "./product-config";
 
 const ORIGINAL_PLUGIN_NAME_ATTRIBUTE = "data-trans-hub-official-plugin-name";
 
-type PluginSourceState = CommunityPluginSourceEligibility | { readonly kind: "pending" };
 type PluginPickerStatusKind = PluginLocalizationStatusKind | "unsupported" | "source-pending";
 type PluginPickerVisualKind = PluginPickerStatusKind | "localized-complete" | "localized-partial";
-type InstalledPluginWithSource = InstalledObsidianPlugin & { readonly source: PluginSourceState };
 
 export class TransHubSettingTab extends PluginSettingTab {
   private renderVersion = 0;
@@ -60,6 +60,8 @@ export class TransHubSettingTab extends PluginSettingTab {
   private selectionProcessing: Promise<void> | null = null;
   private selectionStatus = translate("选择变化后会自动扫描并同步。");
   private selectionStatusFailed = false;
+  private readonly selectionProcessingPluginIds = new Set<string>();
+  private readonly pendingSelectionPluginIds = new Set<string>();
   private pluginListScrollTop = 0;
   private pluginSearchQuery = "";
   private pluginStatusFilter: PluginPickerStatusKind | "all" = "all";
@@ -85,7 +87,14 @@ export class TransHubSettingTab extends PluginSettingTab {
         translate("翻译为"),
         translate("选择插件"),
       ],
-      render: (setting) => this.renderSettings(setting.settingEl),
+      render: (setting) => {
+        // Obsidian 1.13 renders custom definitions inside a native
+        // `.setting-item`, whose flex layout must not become the page layout.
+        setting.settingEl.empty();
+        setting.settingEl.removeClass("trans-hub-settings");
+        setting.settingEl.addClass("trans-hub-settings-host");
+        this.renderSettings(setting.settingEl.createDiv());
+      },
     }];
   }
 
@@ -217,7 +226,7 @@ export class TransHubSettingTab extends PluginSettingTab {
         ? translate("此设备会在重启 Obsidian 后自动恢复连接；离线时继续使用已缓存的已发布译文。")
         : reconnectRequired
           ? translate("此设备的授权已过期或被撤销。重新连接后会继续同步；已缓存译文仍可离线使用。")
-          : translate("将在系统浏览器中登录并授权此设备；注册目前为邀请制。插件不会接触或保存账号密码。"));
+          : translate("将在系统默认浏览器中登录并授权此设备；Obsidian 内置浏览器无法完成回调。注册目前为邀请制，插件不会接触或保存账号密码。"));
     connection.settingEl.addClass("trans-hub-settings__card", "trans-hub-settings__connection");
     if (connected) {
       connection
@@ -245,12 +254,12 @@ export class TransHubSettingTab extends PluginSettingTab {
         button
           .setButtonText(translate("注册"))
           .setTooltip(translate("打开邀请制注册页面"))
-          .onClick(() => {
-            button.buttonEl.win.open(
-              TRANS_HUB_REGISTRATION_URL,
-              "_blank",
-              "noopener,noreferrer",
-            );
+          .onClick(async () => {
+            try {
+              await this.plugin.openRegistration();
+            } catch (error) {
+              new Notice(errorMessage(error), 10_000);
+            }
           });
       });
   }
@@ -269,19 +278,13 @@ export class TransHubSettingTab extends PluginSettingTab {
         });
         return;
       }
-      let eligibility: ReadonlyMap<string, CommunityPluginSourceEligibility> | null = null;
-      if (this.plugin.hasUserSession()) {
-        try {
-          eligibility = await resolveCommunityPluginSourceEligibility(plugins.map((plugin) => plugin.id));
-        } catch {
-          // A temporary registry outage must not be presented as permanent lack of support.
-        }
-      }
+      const pluginsWithSource = await resolveInstalledPluginSources(
+        plugins,
+        undefined,
+        trustedPublishedPluginVersions(this.plugin.getPluginState()),
+        this.plugin.getPluginSourceSnapshot(),
+      );
       if (renderVersion !== this.renderVersion) return;
-      const pluginsWithSource: InstalledPluginWithSource[] = plugins.map((plugin) => ({
-        ...plugin,
-        source: eligibility?.get(plugin.id) ?? { kind: "pending" },
-      }));
       this.updateObsidianPluginNavigationNames(plugins);
       this.renderPluginPickerContents(container, pluginsWithSource);
     } catch (error) {
@@ -344,12 +347,13 @@ export class TransHubSettingTab extends PluginSettingTab {
   }
 
   private renderPluginPickerContents(container: HTMLElement, plugins: readonly InstalledPluginWithSource[]): void {
-    const eligiblePluginIds = plugins.filter((plugin) => plugin.source.kind === "supported")
+    const eligiblePluginIds = plugins.filter((plugin) => isPluginSourceSelectable(plugin.source))
       .map((plugin) => plugin.id);
     let query = this.pluginSearchQuery;
     let statusFilter = this.pluginStatusFilter;
     let selectAllButton: ButtonComponent;
     let clearButton: ButtonComponent;
+    let refreshButton: ButtonComponent;
 
     const header = container.createDiv({ cls: "trans-hub-plugin-picker__header" });
     const summary = header.createDiv({ cls: "trans-hub-plugin-picker__summary" });
@@ -395,6 +399,12 @@ export class TransHubSettingTab extends PluginSettingTab {
         });
       })
       .addButton((button) => {
+        refreshButton = button
+          .setButtonText(translate("立即刷新"))
+          .setTooltip(translate("重新检查所选插件的收录、来源与译文状态"))
+          .onClick(async () => { await this.refreshSelectedPlugins(list); });
+      })
+      .addButton((button) => {
         selectAllButton = button.setButtonText(translate("全选")).onClick(async () => {
           await persistSelection(setAllPluginsSelected(this.plugin.settings.excludedPluginIds, eligiblePluginIds, true));
           renderRows();
@@ -420,6 +430,7 @@ export class TransHubSettingTab extends PluginSettingTab {
       }));
       selectAllButton.setDisabled(selected === eligiblePluginIds.length);
       clearButton.setDisabled(selected === 0);
+      refreshButton.setDisabled(selected === 0 || !this.plugin.hasUserSession());
     };
 
     const persistSelection = async (excludedPluginIds: string[], pluginId?: string, selected?: boolean): Promise<void> => {
@@ -428,15 +439,17 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.plugin.refreshPluginTranslationRuntime();
       updateSummary();
       if (selected === true && pluginId !== undefined) {
-        this.queueSelectionProcessing(status);
+        this.queueSelectionProcessing(status, pluginId);
       } else {
-        this.refreshSettings();
+        this.refreshSettings(list);
       }
     };
 
     const renderRows = (): void => {
       list.empty();
       const pluginState = this.plugin.getPluginState();
+      const hasSession = this.plugin.hasUserSession();
+      const requiresReconnect = this.plugin.requiresReconnect();
       const visiblePlugins = filterSelectablePlugins(plugins, query).filter((plugin) => {
         const sourceStatus = pluginSourceStatus(plugin.source);
         if (sourceStatus !== null) return statusFilter === "all" || sourceStatus.kind === statusFilter;
@@ -453,7 +466,8 @@ export class TransHubSettingTab extends PluginSettingTab {
           ),
           catalog: pluginState.pluginCatalogs[plugin.id],
           targetLocale: this.plugin.settings.targetLocale,
-          hasSession: this.plugin.hasUserSession(),
+          hasSession,
+          requiresReconnect,
         });
         return statusFilter === "all" || localizationStatus.kind === statusFilter;
       });
@@ -480,7 +494,8 @@ export class TransHubSettingTab extends PluginSettingTab {
           ),
           catalog: pluginState.pluginCatalogs[plugin.id],
           targetLocale: this.plugin.settings.targetLocale,
-          hasSession: this.plugin.hasUserSession(),
+          hasSession,
+          requiresReconnect,
         });
         const displayName = this.plugin.settings.pluginMetadataTranslationEnabled
           ? localizedPluginDisplayName(
@@ -498,9 +513,18 @@ export class TransHubSettingTab extends PluginSettingTab {
             this.plugin.settings.targetLocale,
           )
           : plugin.description;
-        const statusLabel = sourceStatus?.label ?? localizationStatus.label;
-        const hideArtifactMismatchLabel = sourceStatus === null
-          && localizationStatus.label === translate("本地插件文件与官方版本不一致");
+        const selectable = isPluginSourceSelectable(plugin.source);
+        const selected = selectable && !excluded.has(plugin.id);
+        const initialCataloging = selected
+          && localizationStatus.kind === "unrecorded"
+          && this.selectionProcessingPluginIds.has(plugin.id);
+        const statusLabel = sourceStatus?.label ?? (
+          !selected && localizationStatus.kind === "unrecorded"
+            ? translate("未启用本地化")
+            : initialCataloging
+              ? translate("正在首次自动收录…")
+              : localizationStatus.label
+        );
         const renderCoverageDetails = sourceStatus === null && localizationStatus.coverage !== undefined;
         const row = new Setting(list)
           .setName(displayName)
@@ -513,7 +537,7 @@ export class TransHubSettingTab extends PluginSettingTab {
           text: `${plugin.id} · v${plugin.version}`,
           cls: "trans-hub-plugin-picker__metadata",
         });
-        if (!hideArtifactMismatchLabel && !renderCoverageDetails) {
+        if (!renderCoverageDetails) {
           descriptionEl.createDiv({ text: statusLabel, cls: "trans-hub-plugin-picker__provenance" });
         }
         if (sourceStatus === null && localizationStatus.catalogMismatch !== undefined) {
@@ -522,7 +546,6 @@ export class TransHubSettingTab extends PluginSettingTab {
           renderPluginPickerCoverageDetails(descriptionEl, localizationStatus.coverage);
         }
         row.addToggle((toggle) => {
-          const selectable = plugin.source.kind === "supported";
           toggle.setValue(selectable && !excluded.has(plugin.id)).setDisabled(!selectable);
           toggle.toggleEl.setAttr("aria-label", selectable
             ? translate("切换 {pluginName} 本地化", { pluginName: displayName })
@@ -543,20 +566,14 @@ export class TransHubSettingTab extends PluginSettingTab {
             : localizationStatus.coverage.complete ? "localized-complete" : "localized-partial");
         row.settingEl.addClass(`trans-hub-plugin-picker__item--${visualKind}`);
         if (plugin.source.kind !== "supported") row.settingEl.addClass("is-disabled");
-        const retryKind = pluginManualRetryKind({
-          submission: getPluginSubmissionForLocale(
-            pluginState,
-            plugin.id,
-            this.plugin.settings.targetLocale,
-          ),
-          translation: getPluginTranslation(
-            pluginState,
-            plugin.id,
-            this.plugin.settings.targetLocale,
-          ),
+        const retryKind = visiblePluginManualRetryKind({
+          state: pluginState,
+          pluginId: plugin.id,
           targetLocale: this.plugin.settings.targetLocale,
+          sourceSelectable: isPluginSourceSelectable(plugin.source),
+          hasSession,
         });
-        if (plugin.source.kind === "supported" && retryKind !== null) {
+        if (retryKind !== null) {
           row.addButton((button) => {
             button
               .setButtonText(translate("重试此插件"))
@@ -570,7 +587,7 @@ export class TransHubSettingTab extends PluginSettingTab {
             button.onClick(async () => {
               button.buttonEl.disabled = true;
               button.setButtonText(translate("正在重试…"));
-              await this.retrySinglePlugin(plugin.id, displayName, retryKind);
+              await this.retrySinglePlugin(plugin.id, displayName, retryKind, list);
             });
           });
         }
@@ -587,6 +604,7 @@ export class TransHubSettingTab extends PluginSettingTab {
     pluginId: string,
     pluginName: string,
     retryKind: PluginManualRetryKind,
+    scrollSource: HTMLElement,
   ): Promise<void> {
     if (this.selectionProcessing !== null) await this.selectionProcessing;
     this.selectionStatus = translate("正在重试 {pluginName}…", { pluginName });
@@ -603,32 +621,59 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.selectionStatus = translate("处理失败：{message}", { message: errorMessage(error) });
       this.selectionStatusFailed = true;
       new Notice(this.selectionStatus, 10_000);
-    } finally { this.refreshSettings(); }
+    } finally { this.refreshSettings(scrollSource); }
   }
 
-  private queueSelectionProcessing(status: HTMLElement): void {
+  private async refreshSelectedPlugins(scrollSource: HTMLElement): Promise<void> {
+    if (this.selectionProcessing !== null) await this.selectionProcessing;
+    this.selectionStatus = translate("正在刷新所选插件…");
+    this.selectionStatusFailed = false;
+    this.refreshSettings(scrollSource);
+    try {
+      const result = await this.plugin.processSelectedPlugins();
+      this.selectionStatus = describePluginSelectionProcessing(result);
+      new Notice(this.selectionStatus);
+    } catch (error) {
+      this.selectionStatus = translate("处理失败：{message}", { message: errorMessage(error) });
+      this.selectionStatusFailed = true;
+      new Notice(this.selectionStatus, 10_000);
+    } finally { this.refreshSettings(scrollSource); }
+  }
+
+  private queueSelectionProcessing(status: HTMLElement, pluginId: string): void {
     this.selectionRevision += 1;
-    this.setSelectionStatus(status, translate("正在扫描所选插件…"));
+    this.pendingSelectionPluginIds.add(pluginId);
+    this.selectionProcessingPluginIds.add(pluginId);
+    this.selectionStatus = translate("正在首次自动收录…");
+    this.selectionStatusFailed = false;
+    status.setText(this.selectionStatus);
+    status.removeClass("mod-warning");
     if (this.selectionProcessing !== null) return;
-    this.selectionProcessing = this.processLatestSelection(status).finally(() => {
+    this.selectionProcessing = this.processLatestSelection().finally(() => {
       this.selectionProcessing = null;
     });
   }
 
-  private async processLatestSelection(status: HTMLElement): Promise<void> {
+  private async processLatestSelection(): Promise<void> {
     let processedRevision = 0;
     while (processedRevision !== this.selectionRevision) {
       processedRevision = this.selectionRevision;
+      const pluginIds = [...this.pendingSelectionPluginIds];
+      this.pendingSelectionPluginIds.clear();
       try {
-        const result = await this.plugin.processSelectedPlugins();
+        const result = await this.plugin.processPluginIds(pluginIds);
+        for (const pluginId of pluginIds) this.selectionProcessingPluginIds.delete(pluginId);
         if (processedRevision === this.selectionRevision) {
-          this.setSelectionStatus(status, describePluginSelectionProcessing(result));
+          this.selectionStatus = describePluginSelectionProcessing(result);
+          this.selectionStatusFailed = false;
           this.refreshSettings();
         }
       } catch (error) {
+        for (const pluginId of pluginIds) this.selectionProcessingPluginIds.delete(pluginId);
         if (processedRevision === this.selectionRevision) {
           const message = translate("处理失败：{message}", { message: errorMessage(error) });
-          this.setSelectionStatus(status, message, true);
+          this.selectionStatus = message;
+          this.selectionStatusFailed = true;
           this.refreshSettings();
           new Notice(message, 10_000);
         }
@@ -636,18 +681,15 @@ export class TransHubSettingTab extends PluginSettingTab {
     }
   }
 
-  private setSelectionStatus(status: HTMLElement, message: string, failed = false): void {
-    this.selectionStatus = message;
-    this.selectionStatusFailed = failed;
-    status.setText(message);
-    status.toggleClass("mod-warning", failed);
-  }
-
-  private refreshSettings(): void {
-    this.pluginListScrollTop = capturePluginListScrollTop(
-      this.renderedContainerEl ?? this.containerEl,
-      this.pluginListScrollTop,
-    );
+  private refreshSettings(scrollSource?: HTMLElement): void {
+    if (scrollSource?.isConnected) {
+      this.pluginListScrollTop = scrollSource.scrollTop;
+    } else {
+      this.pluginListScrollTop = capturePluginListScrollTop(
+        this.renderedContainerEl ?? this.containerEl,
+        this.pluginListScrollTop,
+      );
+    }
     const update = (this as { update?: () => void }).update;
     if (typeof update === "function") {
       update.call(this);
@@ -734,7 +776,7 @@ function pluginSourceStatus(source: PluginSourceState): {
   readonly kind: "unsupported" | "source-pending";
   readonly label: string;
 } | null {
-  if (source.kind === "supported") return null;
+  if (isPluginSourceSelectable(source)) return null;
   return source.kind === "unsupported"
     ? { kind: "unsupported", label: translate("暂不支持：未找到可信 GitHub 来源") }
     : { kind: "source-pending", label: translate("来源待验证：暂时无法读取 Obsidian 官方目录") };

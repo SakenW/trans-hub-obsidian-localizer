@@ -6,7 +6,10 @@ import type {
 } from "@trans-hub/client-protocol";
 import { CURRENT_PROTOCOL_VERSION } from "@trans-hub/client-protocol";
 
-import { resolvePluginDemandStatus } from "../src/plugin-demand-status";
+import {
+  isUnprocessableMachineTranslationFailure,
+  resolvePluginDemandStatus,
+} from "../src/plugin-demand-status";
 
 const coordinate: LocalizationDemandCoordinateStatus = {
   state: "mt_running",
@@ -46,6 +49,13 @@ function status(
 }
 
 describe("resolvePluginDemandStatus", () => {
+  it("distinguishes a deterministic source-preserving terminal failure", () => {
+    expect(isUnprocessableMachineTranslationFailure(
+      "MachineTranslationUnsupportedComplexPlaceholder",
+    )).toBe(true);
+    expect(isUnprocessableMachineTranslationFailure("MachineTranslationRejected")).toBe(false);
+  });
+
   it("refuses to guess when one contribution resolves to multiple matching coordinates", () => {
     expect(() => resolvePluginDemandStatus(status([
       coordinate,
@@ -57,5 +67,23 @@ describe("resolvePluginDemandStatus", () => {
     expect(() => resolvePluginDemandStatus(status([
       { ...coordinate, targetLocale: "de-DE" },
     ]), "zh-CN")).toThrow("本地化需求状态缺少当前语言坐标。");
+  });
+
+  it("treats distribution policy denial as terminal without retry", () => {
+    const blocked = status([{
+      ...coordinate,
+      state: "distribution_blocked",
+      runningCount: 0,
+      retryAfterSeconds: 0,
+      failureCode: "PublicDistributionPolicyUnavailable",
+    }]);
+    expect(resolvePluginDemandStatus({
+      ...blocked,
+      state: "distribution_blocked",
+      retryAfterSeconds: 0,
+    }, "zh-CN")).toMatchObject({
+      disposition: "blocked",
+      retryAfterMs: 0,
+    });
   });
 });

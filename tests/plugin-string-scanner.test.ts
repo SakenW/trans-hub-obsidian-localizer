@@ -197,6 +197,27 @@ describe("scanPluginUiStrings", () => {
     })]);
   });
 
+  it("excludes language-neutral JSON literals but preserves JSON with natural-language values", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: [
+        'setting.setDesc(\'{"kind":"panel","actions":["open","sync"]}\');',
+        'setting.setPlaceholder(`{\\n  "folderSortOrder": "alpha-desc"\\n}`);',
+        'setting.setDesc(\'{"title":"Sync your vault","actions":["open","sync"]}\');',
+        'setting.setDesc(\'{"title":"Settings"}\');',
+        'setting.setDesc(\'{"summary":"Settings"}\');',
+      ].join("\n"),
+    });
+
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).not.toContain('{"kind":"panel","actions":["open","sync"]}');
+    expect(sources).not.toContain('{\n  "folderSortOrder": "alpha-desc"\n}');
+    expect(sources).toContain('{"title":"Sync your vault","actions":["open","sync"]}');
+    expect(sources).toContain('{"title":"Settings"}');
+    expect(sources).toContain('{"summary":"Settings"}');
+  });
+
   it("uses the English source catalog from a minified locale registry", async () => {
     const catalog = await scanPluginUiStrings({
       plugin,
@@ -219,6 +240,62 @@ describe("scanPluginUiStrings", () => {
       "Arrays maskieren",
       "Internal worker",
     ]));
+  });
+
+  it("prefers the generic locale registry over STRINGS_* export aliases", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      targetLocale: "zh-CN",
+      bundle: [
+        'var genericEn={title:"Generic source"};',
+        'var genericZh={title:"通用译文"};',
+        'var genericDe={title:"Generische Quelle"};',
+        "var locales={de:genericDe,en:genericEn,'zh-CN':genericZh};",
+        'var exportedEn={title:"Fallback source"};',
+        'var exportedZh={title:"回退译文"};',
+        "var localeExports={};register(localeExports,{STRINGS_EN:()=>exportedEn,STRINGS_ZH_CN:()=>exportedZh});",
+      ].join(""),
+    });
+
+    expect(catalog.strings.find((item) => item.source === "Generic source")).toMatchObject({
+      nativeTarget: "通用译文",
+      nativeTargetLocale: "zh-CN",
+    });
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Fallback source");
+  });
+
+  it("fails closed for untranslated and conflicting native targets", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      targetLocale: "zh-CN",
+      bundle: [
+        'var en={first:"Save",second:"Save",identity:"Open"};',
+        'var zh={first:"保存",second:"储存",identity:"Open"};',
+        'var de={first:"Speichern",second:"Speichern",identity:"Offnen"};',
+        "var locales={de:de,en:en,'zh-CN':zh};",
+      ].join(""),
+    });
+
+    expect(catalog.strings.find((item) => item.source === "Save")).not.toHaveProperty("nativeTarget");
+    expect(catalog.strings.find((item) => item.source === "Open")).not.toHaveProperty("nativeTarget");
+  });
+
+  it("rejects an embedded locale catalog above the Adapter 10,000-entry limit", async () => {
+    const oversized = Array.from({ length: 10_001 }, (_, index) => `k${index}:"Message ${index}"`).join(",");
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: [
+        `var exportedEn={${oversized}};`,
+        "var localeExports={};register(localeExports,{STRINGS_EN:()=>exportedEn});",
+        'setting.setName("Fallback setting");',
+      ].join(""),
+    });
+
+    expect(catalog.strings.map((item) => item.source)).toContain("Fallback setting");
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Message 0");
   });
 
   it("maps a compressed embedded zh-CN language pack back to exact English source keys", async () => {

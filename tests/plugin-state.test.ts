@@ -3,10 +3,42 @@ import { describe, expect, it } from "vitest";
 import {
   getPluginSubmissionForLocale,
   getPluginTranslation,
+  isPluginLocalizationDerivedCacheCurrent,
   parsePluginState,
+  resetPluginLocalizationDerivedState,
 } from "../src/plugin-state";
 
 describe("parsePluginState", () => {
+  it("clears only derived localization caches when the persisted cache revision expires", () => {
+    expect(isPluginLocalizationDerivedCacheCurrent(undefined)).toBe(false);
+    expect(isPluginLocalizationDerivedCacheCurrent(1)).toBe(true);
+    const reset = resetPluginLocalizationDerivedState(parsePluginState({
+      enabledPluginIds: ["dataview"],
+      notes: { note: { noteId: "note" } },
+      pendingSubmissions: { pending: { clientSubmissionId: "pending" } },
+      generatedTargets: { target: { path: "target" } },
+      pluginCatalogs: {
+        dataview: {
+          pluginId: "dataview", pluginName: "Dataview", pluginVersion: "1",
+          sourceLocale: "en", digest: "catalog", artifactDigest: "a".repeat(64),
+          scannedAt: "2026-07-31T00:00:00.000Z", strings: [],
+        },
+      },
+      pluginSubmissions: { dataview: { pluginId: "dataview" } },
+      pluginTranslations: { dataview: {} },
+      translationExportStates: { export: { etag: '"old"' } },
+    }));
+
+    expect(reset.enabledPluginIds).toEqual(["dataview"]);
+    expect(reset.pluginCatalogs).toHaveProperty("dataview");
+    expect(reset.notes).toHaveProperty("note");
+    expect(reset.pendingSubmissions).toHaveProperty("pending");
+    expect(reset.generatedTargets).toHaveProperty("target");
+    expect(reset.pluginSubmissions).toEqual({});
+    expect(reset.pluginTranslations).toEqual({});
+    expect(reset.translationExportStates).toEqual({});
+  });
+
   it("preserves valid extraction evidence across plugin reloads", () => {
     const state = parsePluginState({
       pluginCatalogs: {
@@ -213,5 +245,72 @@ describe("parsePluginState", () => {
     expect(getPluginSubmissionForLocale(state, "dataview", "zh-CN")).not.toHaveProperty("lastError");
     expect(getPluginSubmissionForLocale(state, "dataview", "zh-CN")).not.toHaveProperty("localizationContributionId");
     expect(getPluginSubmissionForLocale(state, "dataview", "ko")?.lastError?.message).toBe("ko failed");
+  });
+
+  it("round-trips an authority-backed demand without a source contribution id", () => {
+    const persisted = JSON.parse(JSON.stringify({
+      pluginSubmissions: {
+        generic: {
+          pluginId: "generic",
+          pluginVersion: "2.0.0",
+          catalogDigest: "catalog",
+          adapterProfileDigest: "profile",
+          registryPolicyRevision: 24,
+          sourceDiscoveryEpoch: 21,
+          installationId: "installation",
+          sourceAuthority: "published",
+          contributionState: "source_attested",
+          repository: "owner/generic",
+          localizationTargetLocale: "zh-CN",
+          localizationContributionId: "localization",
+          localizationContributionState: "received",
+          localizationDemandStatus: {
+            state: "distribution_blocked",
+            sourceVersionId: "source-version",
+            targetLocale: "zh-CN",
+            targetVariant: "default",
+            totalUnitCount: 2,
+            workItemCount: 2,
+            nativeUnitCount: 0,
+            queuedCount: 0,
+            runningCount: 0,
+            succeededCount: 2,
+            failedCount: 0,
+            reviewedUnitCount: 0,
+            publishedUnitCount: 0,
+            retryAfterSeconds: 0,
+            failureCode: "PublicDistributionPolicyUnavailable",
+            failureRetryable: false,
+            updatedAt: "2026-07-29T00:00:00.000Z",
+          },
+          sourceVersionId: "source-version",
+          submittedAt: "2026-07-29T00:00:00.000Z",
+        },
+      },
+    })) as unknown;
+
+    const submission = parsePluginState(persisted).pluginSubmissions.generic;
+    const { localizationDemandStatus, ...sourceAndDemand } = submission ?? {};
+    expect(sourceAndDemand).toEqual({
+      pluginId: "generic",
+      pluginVersion: "2.0.0",
+      catalogDigest: "catalog",
+      adapterProfileDigest: "profile",
+      registryPolicyRevision: 24,
+      sourceDiscoveryEpoch: 21,
+      installationId: "installation",
+      sourceAuthority: "published",
+      contributionState: "source_attested",
+      repository: "owner/generic",
+      localizationTargetLocale: "zh-CN",
+      localizationContributionId: "localization",
+      localizationContributionState: "received",
+      sourceVersionId: "source-version",
+      submittedAt: "2026-07-29T00:00:00.000Z",
+    });
+    expect(localizationDemandStatus).toEqual(expect.objectContaining({
+        state: "distribution_blocked",
+        failureCode: "PublicDistributionPolicyUnavailable",
+      }));
   });
 });

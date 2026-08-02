@@ -63,11 +63,23 @@
   margin-inline: 0.5rem;
 }
 
+.trans-hub-settings-host {
+  align-items: stretch;
+  display: block;
+  flex: 1 1 100%;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
 .trans-hub-settings {
   box-sizing: border-box;
+  display: block;
   margin-inline: auto;
   max-width: 68rem;
+  min-width: 0;
   padding-bottom: 2rem;
+  width: 100%;
 }
 
 .trans-hub-settings__contribution {
@@ -222,10 +234,33 @@
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   box-sizing: border-box;
-  max-height: min(45vh, 26rem);
-  overflow-y: auto;
+  height: clamp(22rem, 58vh, 38rem);
+  max-height: min(74vh, 48rem);
+  min-height: 14rem;
+  overflow: auto;
   padding: 0.65rem 0.75rem 0.65rem 0.65rem;
+  position: relative;
+  resize: vertical;
   scrollbar-gutter: stable;
+}
+
+.trans-hub-plugin-picker__list::after {
+  background: linear-gradient(
+    135deg,
+    transparent 0 42%,
+    var(--text-faint) 42% 50%,
+    transparent 50% 61%,
+    var(--text-faint) 61% 69%,
+    transparent 69%
+  );
+  bottom: 0.35rem;
+  content: "";
+  height: 0.8rem;
+  inset-inline-end: 0.35rem;
+  opacity: 0.65;
+  pointer-events: none;
+  position: absolute;
+  width: 0.8rem;
 }
 
 .trans-hub-plugin-picker__list .setting-item {
@@ -249,6 +284,10 @@
   box-shadow: inset 3px 0 color-mix(in srgb, var(--color-green) 55%, transparent);
 }
 
+.trans-hub-plugin-picker__item--preserved-source {
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--color-green) 55%, transparent);
+}
+
 .trans-hub-plugin-picker__item--waiting {
   box-shadow: inset 3px 0 var(--color-yellow);
 }
@@ -257,8 +296,17 @@
   box-shadow: inset 3px 0 var(--color-yellow);
 }
 
+.trans-hub-plugin-picker__item--login-required {
+  box-shadow: inset 3px 0 var(--color-blue);
+}
+
 .trans-hub-plugin-picker__item--unrecorded {
   box-shadow: inset 3px 0 var(--text-muted);
+}
+
+.trans-hub-plugin-picker__item--blocked {
+  box-shadow: inset 3px 0 var(--color-orange);
+  background: color-mix(in srgb, var(--color-orange) 7%, transparent);
 }
 
 .trans-hub-plugin-picker__item--failed {
@@ -536,6 +584,9 @@
   }
 
   .trans-hub-plugin-picker__list {
+    height: min(58vh, 28rem);
+    max-height: 66vh;
+    min-height: 14rem;
     padding: 0.5rem 0.6rem 0.5rem 0.5rem;
   }
 

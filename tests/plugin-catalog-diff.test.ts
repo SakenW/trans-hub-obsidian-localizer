@@ -40,6 +40,40 @@ const previous = {
 } as const;
 
 describe("plugin catalog version carry-over", () => {
+  it("keeps a README-only translation in the selected runtime application contract", () => {
+    const readmeOnlyCatalog = {
+      ...catalog,
+      strings: [
+        ...catalog.strings,
+        {
+          key: "readme-only",
+          source: "Read the complete guide.",
+          origins: ["readme" as const],
+          semanticRole: "readme" as const,
+          placeholderSignature: "",
+        },
+      ],
+    };
+    const translation = {
+      ...previous,
+      pluginVersion: "2.0.0",
+      entries: [{
+        pluginId: "sample",
+        source: "Read the complete guide.",
+        target: "阅读完整指南。",
+      }],
+    };
+
+    expect(selectCurrentCatalogTranslations(readmeOnlyCatalog, translation)).toEqual([
+      {
+        pluginId: "sample",
+        source: "Read the complete guide.",
+        target: "阅读完整指南。",
+        scopes: ["readme"],
+      },
+    ]);
+  });
+
   it("只复用当前版本仍存在且占位符安全的译文，并给出真实覆盖率", () => {
     expect(selectCurrentCatalogTranslations(catalog, previous)).toEqual([
       { pluginId: "sample", source: "Settings", target: "设置", scopes: ["runtime-ui", "readme"] },
@@ -112,6 +146,30 @@ describe("plugin catalog version carry-over", () => {
       }));
   });
 
+  it("按服务端通用范围事实归因插件自带覆盖，不再显示范围待同步", () => {
+    const translation = {
+      ...previous,
+      pluginVersion: "2.0.0",
+      sourceUnitCount: 4,
+      upstreamNativeCount: 2,
+      upstreamScopedNativeCount: 2,
+      upstreamScopeCoverage: { "runtime-ui": 1, metadata: 1 },
+      entries: [],
+    };
+
+    expect(calculatePluginTranslationCoverage(catalog, translation, "zh-CN"))
+      .toEqual(expect.objectContaining({
+        translatedCount: 2,
+        missingCount: 2,
+        unattributedNativeCount: 0,
+        scopes: [
+          { scope: "runtime-ui", totalCount: 2, translatedCount: 1, missingCount: 1, percent: 50 },
+          { scope: "metadata", totalCount: 2, translatedCount: 1, missingCount: 1, percent: 50 },
+          { scope: "readme", totalCount: 1, translatedCount: 0, missingCount: 1, percent: 0 },
+        ],
+      }));
+  });
+
   it("registry-only 观察可继续用于本地元数据呈现，但不制造覆盖缺口或陈旧译文", () => {
     const translation = {
       ...previous,
@@ -168,6 +226,105 @@ describe("plugin catalog version carry-over", () => {
     }));
   });
 
+  it("本地简化扫描与权威目录属于同一精确制品时保留权威覆盖统计", () => {
+    const metadataOnlyCatalog = {
+      ...catalog,
+      strings: catalog.strings.slice(0, 2),
+      catalogIdentity: {
+        protocol: "trans-hub.source-catalog-identity" as const,
+        revision: 2 as const,
+        resourceKey: "sample",
+        resourceVersion: "2.0.0",
+        sourceLocale: "en",
+        artifactDigest: "artifact",
+        unitCount: 2,
+        digest: "metadata-only",
+        scopes: [{ scope: "metadata", unitCount: 2, digest: "metadata" }],
+      },
+    };
+    const translation = {
+      ...previous,
+      pluginVersion: "2.0.0",
+      artifactDigest: "artifact",
+      sourceUnitCount: 1683,
+      upstreamNativeCount: 1350,
+      upstreamScopedNativeCount: 1350,
+      upstreamScopeCoverage: { "runtime-ui": 1350 },
+      catalogIdentity: {
+        protocol: "trans-hub.source-catalog-identity" as const,
+        revision: 2 as const,
+        resourceKey: "sample",
+        resourceVersion: "2.0.0",
+        sourceLocale: "en",
+        artifactDigest: "artifact",
+        unitCount: 1683,
+        digest: "authority",
+        scopes: [
+          { scope: "metadata", unitCount: 2, digest: "authority-metadata" },
+          { scope: "readme", unitCount: 290, digest: "authority-readme" },
+          { scope: "runtime-ui", unitCount: 1402, digest: "authority-runtime" },
+        ],
+      },
+      entries: [],
+    };
+
+    expect(calculatePluginTranslationCoverage(metadataOnlyCatalog, translation, "zh-CN"))
+      .toEqual(expect.objectContaining({
+        totalCount: 1683,
+        translatedCount: 1350,
+        missingCount: 333,
+        percent: 80,
+        unattributedNativeCount: 0,
+        scopes: [
+          { scope: "runtime-ui", totalCount: 1402, translatedCount: 1350, missingCount: 52, percent: 96 },
+          { scope: "metadata", totalCount: 2, translatedCount: 0, missingCount: 2, percent: 0 },
+          { scope: "readme", totalCount: 290, translatedCount: 0, missingCount: 290, percent: 0 },
+        ],
+      }));
+    expect(selectCurrentCatalogTranslations(metadataOnlyCatalog, translation)).toEqual([]);
+  });
+
+  it("制品摘要不一致时不采用更大权威目录的汇总", () => {
+    const localCatalog = {
+      ...catalog,
+      artifactDigest: "local-artifact",
+      strings: catalog.strings.slice(0, 2),
+      catalogIdentity: {
+        protocol: "trans-hub.source-catalog-identity" as const,
+        revision: 2 as const,
+        resourceKey: "sample",
+        resourceVersion: "2.0.0",
+        sourceLocale: "en",
+        artifactDigest: "local-artifact",
+        unitCount: 2,
+        digest: "metadata-only",
+        scopes: [{ scope: "metadata", unitCount: 2, digest: "metadata" }],
+      },
+    };
+    const translation = {
+      ...previous,
+      pluginVersion: "2.0.0",
+      artifactDigest: "authority-artifact",
+      sourceUnitCount: 1683,
+      upstreamNativeCount: 1350,
+      catalogIdentity: {
+        protocol: "trans-hub.source-catalog-identity" as const,
+        revision: 2 as const,
+        resourceKey: "sample",
+        resourceVersion: "2.0.0",
+        sourceLocale: "en",
+        artifactDigest: "authority-artifact",
+        unitCount: 1683,
+        digest: "authority",
+        scopes: [{ scope: "runtime-ui", unitCount: 1402, digest: "authority-runtime" }],
+      },
+      entries: [],
+    };
+
+    expect(calculatePluginTranslationCoverage(localCatalog, translation, "zh-CN"))
+      .toEqual(expect.objectContaining({ totalCount: 2, translatedCount: 0, missingCount: 2 }));
+  });
+
   it("将本地安装包的原生目标语言逐条归因，并仅让已审核校订覆盖它", () => {
     const nativeCatalog = {
       ...catalog,
@@ -202,6 +359,35 @@ describe("plugin catalog version carry-over", () => {
       missingCount: 2,
       unattributedNativeCount: 0,
     }));
+  });
+
+  it("原生目标与原文相同或同源冲突时保留语枢自动译文", () => {
+    const unsafeNativeCatalog = {
+      ...catalog,
+      strings: [
+        {
+          ...catalog.strings[0], source: "Settings", nativeTarget: "Settings",
+          nativeTargetLocale: "zh-CN",
+        },
+        {
+          ...catalog.strings[0], source: "Save", nativeTarget: "保存",
+          nativeTargetLocale: "zh-CN",
+        },
+        {
+          ...catalog.strings[0], source: "Save", nativeTarget: "储存",
+          nativeTargetLocale: "zh-CN",
+        },
+      ],
+    };
+    const automatic = {
+      ...previous,
+      entries: [
+        { pluginId: "sample", source: "Settings", target: "设置", provenanceKind: "th-automatic" as const },
+        { pluginId: "sample", source: "Save", target: "存储", provenanceKind: "th-automatic" as const },
+      ],
+    };
+
+    expect(mergeCatalogNativeTranslations(unsafeNativeCatalog, automatic).entries).toEqual(automatic.entries);
   });
 
   it("不修改官方身份，并在开关开启时显示名称和说明译文", () => {

@@ -4,10 +4,18 @@ import type { ScopeAwarePackStore } from "@trans-hub/translation-export-client";
 import type { ActivationStore } from "./activation";
 import { ObsidianHttpTransport } from "./http-transport";
 import { mergePublishedPluginTranslation } from "./plugin-catalog-diff";
-import { resolvePluginDemandStatus } from "./plugin-demand-status";
-import { resolveCommunityPluginIdentity } from "./plugin-registry";
+import {
+  isUnprocessableMachineTranslationFailure,
+  resolvePluginDemandStatus,
+} from "./plugin-demand-status";
+import {
+  isCommunityPluginNotFoundError,
+  resolveCommunityPluginIdentity,
+} from "./plugin-registry";
 import {
   loadPublishedEcosystemCatalog,
+  normalizeGitHubRepository,
+  resolvePublishedPluginArtifactDigestFromCatalog,
   resolvePublishedPluginSourceFromCatalog,
   type PublishedPluginSource,
 } from "./plugin-source-resolution";
@@ -24,6 +32,7 @@ import {
   type PluginSubmissionState,
   type PluginTranslationState,
 } from "./plugin-state";
+import { visiblePluginManualRetryKind } from "./plugin-localization-status";
 import type { PluginUiTranslation } from "./plugin-ui-runtime";
 import type { TargetLocale } from "./product-config";
 import {
@@ -43,9 +52,20 @@ export interface PluginSyncSummary {
   readonly failedPluginIds?: readonly string[];
   readonly nextRetryAfterMs?: number;
   readonly demandStateCounts?: Readonly<Partial<Record<LocalizationDemandState, number>>>;
+  readonly authorityRefreshingCount?: number;
 }
 
 const MAX_AUTOMATIC_SOURCE_RESUBMISSIONS = 1;
+const SOURCE_ARTIFACT_MISMATCH_CODE = "source_artifact_mismatch";
+
+class SourceArtifactMismatchError extends Error {
+  readonly code = SOURCE_ARTIFACT_MISMATCH_CODE;
+
+  constructor() {
+    super("本地安装与权威目录的精确制品不一致，已暂停同步。");
+    this.name = "SourceArtifactMismatchError";
+  }
+}
 
 export async function synchronizeConfiguredPluginTranslations(input: {
   readonly apiBaseUrl: string;
@@ -53,6 +73,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   readonly excludedPluginIds: readonly string[];
   readonly onlyPluginIds?: readonly string[];
   readonly manualResubmitPluginIds?: readonly string[];
+  readonly sourceSelectablePluginIds?: readonly string[];
   readonly activationStore: ActivationStore;
   readonly translationPackStore: ScopeAwarePackStore;
   readonly getState: () => PluginState;
@@ -66,7 +87,21 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   const only = input.onlyPluginIds === undefined ? null : new Set(input.onlyPluginIds);
   const manualResubmit = new Set(input.manualResubmitPluginIds ?? []);
   const transport = new ObsidianHttpTransport(input.apiBaseUrl);
-  const publishedCatalog = await loadPublishedEcosystemCatalog(transport);
+  const catalogs = Object.values(input.getState().pluginCatalogs).filter(
+    (catalog) => !excluded.has(catalog.pluginId) && (only === null || only.has(catalog.pluginId)),
+  );
+  // The production caller supplies the exact eligibility snapshot obtained in
+  // the same scan.  Keep direct/library callers backward-compatible: they
+  // have no picker snapshot and historically treated this catalog batch as
+  // their selectable set.
+  const sourceSelectablePluginIds = new Set(
+    input.sourceSelectablePluginIds ?? catalogs.map((catalog) => catalog.pluginId),
+  );
+  const publishedCatalog = await loadPublishedCatalogForSynchronization(
+    transport,
+    catalogs,
+    input.targetLocale,
+  );
   let submittedCount = 0;
   let requestedCount = 0;
   let pulledCount = 0;
@@ -75,32 +110,41 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   const waitingPluginIds: string[] = [];
   const failedPluginIds: string[] = [];
   const demandStateCounts: Partial<Record<LocalizationDemandState, number>> = {};
+  let authorityRefreshingCount = 0;
   let nextRetryAfterMs: number | undefined;
-  for (const catalog of Object.values(input.getState().pluginCatalogs)) {
-    if (excluded.has(catalog.pluginId) || (only !== null && !only.has(catalog.pluginId))) continue;
+  for (const catalog of catalogs) {
     try {
-      const savedSubmission = input.getState().pluginSubmissions[catalog.pluginId];
-      const profileChanged = savedSubmission !== undefined
-        && savedSubmission.adapterProfileDigest !== OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex;
-      const published = profileChanged
+      const published = publishedCatalog === undefined
         ? undefined
-        : publishedCatalog === undefined
-          ? undefined
-          : resolvePublishedPluginSourceFromCatalog(publishedCatalog, {
-              pluginId: catalog.pluginId,
-              pluginVersion: catalog.pluginVersion,
-              targetLocale: input.targetLocale,
-              localCatalogIdentity: catalog.catalogIdentity,
-            });
+        : resolvePublishedPluginSourceFromCatalog(publishedCatalog, {
+            pluginId: catalog.pluginId,
+            pluginVersion: catalog.pluginVersion,
+            targetLocale: input.targetLocale,
+            localCatalogIdentity: catalog.catalogIdentity,
+          });
+      const authoritativeArtifactDigest = publishedCatalog === undefined
+        ? undefined
+        : resolvePublishedPluginArtifactDigestFromCatalog(publishedCatalog, {
+            pluginId: catalog.pluginId,
+            pluginVersion: catalog.pluginVersion,
+          });
+      const localArtifactVariant = authoritativeArtifactDigest !== undefined
+        && authoritativeArtifactDigest !== catalog.artifactDigest;
+      let publishedDeliverySynchronized = false;
       if (published !== undefined) {
+        // A local bundle can legitimately differ from the immutable upstream
+        // artifact while retaining the same plugin version.  That only limits
+        // what the client may apply (to the verified string intersection); it
+        // does not mean the authoritative source still needs a translation
+        // demand.  Keep the two facts independent so an already complete
+        // public source cannot leave the local client at export_pending forever.
+        const publishedTranslationCoverageIncomplete = Math.min(
+          published.sourceUnitCount,
+          published.upstreamNativeCount + published.publishedUnitCount,
+        ) < published.sourceUnitCount;
         const sourceVersionId = published.sourceVersionId;
         const existingSubmission = input.getState().pluginSubmissions[catalog.pluginId];
-        if (
-          existingSubmission !== undefined
-          && existingSubmission.sourceVersionId !== sourceVersionId
-        ) {
-          await saveSubmission(input, { ...existingSubmission, sourceVersionId });
-        }
+        let deliveryWaiting = false;
         try {
           const count = await pullPluginTranslation({
             input,
@@ -113,6 +157,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           });
           pulledCount += 1;
           translationCount += count;
+          publishedDeliverySynchronized = true;
         } catch (error) {
           if (!isPublishedExportPending(error)) throw error;
           await saveNativeCoverage(
@@ -121,27 +166,101 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             published,
             published.upstreamNativeCount,
           );
+          publishedDeliverySynchronized = true;
           const catalogUnitCount = new Set(catalog.strings.map((item) => item.source)).size;
           if (published.upstreamNativeCount >= catalogUnitCount) {
             pulledCount += 1;
           } else {
-            waitingCount += 1;
-            waitingPluginIds.push(catalog.pluginId);
+            deliveryWaiting = true;
           }
         }
+        if (!publishedTranslationCoverageIncomplete) {
+          if (deliveryWaiting) {
+            throw new Error("服务器公开目录与译文制品状态不一致，请稍后重试。");
+          }
+          if (existingSubmission !== undefined) {
+            await saveSubmission(
+              input,
+              submissionForCompletedAuthoritativeSource(existingSubmission, sourceVersionId),
+            );
+          }
+          continue;
+        }
+      }
+      if (published === undefined && localArtifactVariant) {
+        await saveSynchronizationError(
+          input,
+          catalog,
+          bootstrap.installationId,
+          new SourceArtifactMismatchError(),
+        );
         continue;
       }
-      const identity = await resolveCommunityPluginIdentity(
-        catalog.pluginId,
-        catalog.pluginVersion,
-      );
+      let identity: Pick<
+        Awaited<ReturnType<typeof resolveCommunityPluginIdentity>>,
+        "repository" | "candidateLocators"
+      >;
+      if (published !== undefined && published.repository !== undefined) {
+        identity = { repository: published.repository, candidateLocators: [] };
+      } else {
+        try {
+          identity = await resolveCommunityPluginIdentity(
+            catalog.pluginId,
+            catalog.pluginVersion,
+          );
+        } catch (error) {
+          if (published?.catalogIdentityExact === true && isCommunityPluginNotFoundError(error)) {
+            const repository = trustedStoredRepository(
+              input.getState().pluginSubmissions[catalog.pluginId],
+              catalog,
+              published.sourceVersionId,
+            );
+            if (repository === undefined) {
+              throw new Error("权威来源缺少可信 GitHub 仓库定位，无法建立本地化需求。");
+            }
+            identity = { repository, candidateLocators: [] };
+          } else if (published !== undefined && isCommunityPluginNotFoundError(error)) {
+            continue;
+          } else {
+            throw error;
+          }
+        }
+      }
       const manuallyResubmit = manualResubmit.has(catalog.pluginId);
       let submission = input.getState().pluginSubmissions[catalog.pluginId];
-      if (
+      if (published !== undefined) {
+        if (
+          submission !== undefined
+          && submission.registryPolicyRevision
+            !== OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision
+        ) {
+          await submitObsidianPluginDiscovery({
+            client,
+            installationId: bootstrap.installationId,
+            catalog,
+            repository: identity.repository,
+            candidateLocators: identity.candidateLocators,
+          });
+          submittedCount += 1;
+        }
+        submission = authoritativeLocalizationSubmission({
+          catalog,
+          existing: submission,
+          installationId: bootstrap.installationId,
+          manuallyResubmit,
+          repository: identity.repository,
+          sourceVersionId: published.sourceVersionId,
+          targetLocale: input.targetLocale,
+        });
+        await saveSubmission(input, submission);
+      } else if (
         submission?.installationId !== bootstrap.installationId
         || submission.catalogDigest !== catalog.digest
         || submission.pluginVersion !== catalog.pluginVersion
         || submission.adapterProfileDigest !== OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex
+        || submission.registryPolicyRevision !== OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision
+        || submission.sourceDiscoveryEpoch !== OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch
+        || submission.contributionId === undefined
       ) {
         const receipt = await submitObsidianPluginDiscovery({
           client,
@@ -159,6 +278,9 @@ export async function synchronizeConfiguredPluginTranslations(input: {
         await saveSubmission(input, submission);
         submittedCount += 1;
       } else {
+        if (submission.contributionId === undefined) {
+          throw new Error("来源贡献状态缺少贡献 ID。");
+        }
         const receipt = await client.getContributionStatus(submission.contributionId);
         const observationGeneration = submission.observationGeneration ?? 0;
         if (
@@ -233,7 +355,14 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           submission.localizationContributionId,
         );
         const demand = resolvePluginDemandStatus(status, input.targetLocale);
-        incrementDemandState(demandStateCounts, demand.coordinate.state);
+        if (
+          demand.disposition === "waiting"
+          && demand.coordinate.failureCode === "PublicDistributionAuthorityRefreshing"
+        ) {
+          authorityRefreshingCount += 1;
+        } else {
+          incrementDemandState(demandStateCounts, demand.coordinate.state);
+        }
         submission = {
           ...submission,
           localizationContributionState: status.state,
@@ -296,14 +425,52 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           }
         }
         if (demand.disposition === "failed") {
-          await clearPluginDelivery(
-            input,
-            catalog.pluginId,
-            demand.coordinate.sourceVersionId ?? submission.sourceVersionId,
-          );
-          failedPluginIds.push(catalog.pluginId);
+          const failedSourceVersionId = demand.coordinate.sourceVersionId
+            ?? submission.sourceVersionId;
+          const partialPublishedDelivery = demandPublished !== undefined
+            && demandPublished.sourceVersionId === failedSourceVersionId
+            && Math.min(
+              demandPublished.sourceUnitCount,
+              demandPublished.upstreamNativeCount + demandPublished.publishedUnitCount,
+            ) > 0;
+          if (partialPublishedDelivery) {
+            if (!publishedDeliverySynchronized) {
+              try {
+                const count = await pullPluginTranslation({
+                  input,
+                  transport,
+                  catalog,
+                  published: demandPublished,
+                  accessToken: bootstrap.intakeCredential.value,
+                  authorityWorkspaceId,
+                  upstreamNativeCount: demand.coordinate.nativeUnitCount,
+                });
+                pulledCount += 1;
+                translationCount += count;
+              } catch (error) {
+                if (!isPublishedExportPending(error)) throw error;
+                await saveNativeCoverage(
+                  input,
+                  catalog,
+                  demandPublished,
+                  demand.coordinate.nativeUnitCount,
+                );
+                pulledCount += 1;
+              }
+            }
+          } else {
+            await clearPluginDelivery(
+              input,
+              catalog.pluginId,
+              failedSourceVersionId,
+            );
+          }
+          if (!isUnprocessableMachineTranslationFailure(demand.coordinate.failureCode)) {
+            failedPluginIds.push(catalog.pluginId);
+          }
           continue;
         }
+        if (demand.disposition === "blocked") continue;
         nextRetryAfterMs = mergeRetryAfter(nextRetryAfterMs, demand.retryAfterMs);
       }
       waitingCount += 1;
@@ -311,7 +478,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
     } catch (error) {
       if (isGlobalSynchronizationError(error)) throw error;
       failedPluginIds.push(catalog.pluginId);
-      await saveSynchronizationError(input, catalog.pluginId, error);
+      await saveSynchronizationError(input, catalog, bootstrap.installationId, error);
     }
   }
   return {
@@ -321,9 +488,133 @@ export async function synchronizeConfiguredPluginTranslations(input: {
     waitingCount,
     translationCount,
     waitingPluginIds,
-    failedPluginIds,
+    failedPluginIds: retryableFailedPluginIds(
+      input,
+      failedPluginIds,
+      sourceSelectablePluginIds,
+    ),
     ...(nextRetryAfterMs === undefined ? {} : { nextRetryAfterMs }),
     demandStateCounts,
+    ...(authorityRefreshingCount === 0 ? {} : { authorityRefreshingCount }),
+  };
+}
+
+function retryableFailedPluginIds(
+  input: Pick<
+    Parameters<typeof synchronizeConfiguredPluginTranslations>[0],
+    "getState" | "targetLocale"
+  >,
+  failedPluginIds: readonly string[],
+  selectablePluginIds: ReadonlySet<string>,
+): readonly string[] {
+  const state = input.getState();
+  return [...new Set(failedPluginIds)].filter((pluginId) => visiblePluginManualRetryKind({
+    state,
+    pluginId,
+    targetLocale: input.targetLocale,
+    sourceSelectable: selectablePluginIds.has(pluginId),
+    // Reaching this point means ActivationStore produced an authenticated
+    // Public Client. Global session failures abort before a summary is shown.
+    hasSession: true,
+  }) !== null);
+}
+
+function trustedStoredRepository(
+  submission: PluginSubmissionState | undefined,
+  catalog: PluginUiCatalog,
+  sourceVersionId: string,
+): string | undefined {
+  if (
+    submission === undefined
+    || submission.pluginId !== catalog.pluginId
+    || submission.pluginVersion !== catalog.pluginVersion
+    || submission.catalogDigest !== catalog.digest
+    || submission.sourceVersionId !== sourceVersionId
+    || !(
+      submission.sourceAuthority === "published"
+      || submission.contributionId !== undefined
+        && submission.contributionState === "source_attested"
+    )
+    || submission.repository === undefined
+  ) return undefined;
+  return normalizeGitHubRepository(submission.repository);
+}
+
+function submissionForCompletedAuthoritativeSource(
+  submission: PluginSubmissionState,
+  sourceVersionId: string,
+): PluginSubmissionState {
+  const {
+    localizationTargetLocale: discardedTargetLocale,
+    localizationContributionId: discardedContributionId,
+    localizationContributionState: discardedContributionState,
+    localizationDemandStatus: discardedDemandStatus,
+    ...sourceSubmission
+  } = submission;
+  void discardedTargetLocale;
+  void discardedContributionId;
+  void discardedContributionState;
+  void discardedDemandStatus;
+  return { ...sourceSubmission, sourceVersionId };
+}
+
+function authoritativeLocalizationSubmission(input: {
+  readonly catalog: PluginUiCatalog;
+  readonly existing: PluginSubmissionState | undefined;
+  readonly installationId: string;
+  readonly manuallyResubmit: boolean;
+  readonly repository: string;
+  readonly sourceVersionId: string;
+  readonly targetLocale: string;
+}): PluginSubmissionState {
+  const { existing } = input;
+  const sameObservationBase = existing !== undefined
+    && existing.pluginId === input.catalog.pluginId
+    && existing.pluginVersion === input.catalog.pluginVersion
+    && existing.catalogDigest === input.catalog.digest
+    && existing.adapterProfileDigest === OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex
+    && existing.registryPolicyRevision === OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision
+    && existing.sourceDiscoveryEpoch === OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch
+    && existing.installationId === input.installationId
+    && (existing.repository === undefined || existing.repository === input.repository);
+  const sourceChanged = sameObservationBase
+    && existing.sourceVersionId !== input.sourceVersionId;
+  const observationGeneration = input.manuallyResubmit || sourceChanged
+    ? (existing?.observationGeneration ?? 0) + 1
+    : sameObservationBase
+      ? existing.observationGeneration
+      : undefined;
+  const reuseLocalizationDemand = sameObservationBase
+    && !input.manuallyResubmit
+    && !sourceChanged
+    && existing.localizationTargetLocale === input.targetLocale
+    && existing.localizationContributionId !== undefined;
+  return {
+    pluginId: input.catalog.pluginId,
+    pluginVersion: input.catalog.pluginVersion,
+    catalogDigest: input.catalog.digest,
+    adapterProfileDigest: OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
+    registryPolicyRevision: OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision,
+    sourceDiscoveryEpoch: OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch,
+    installationId: input.installationId,
+    sourceAuthority: "published",
+    contributionState: "source_attested",
+    ...(observationGeneration === undefined ? {} : { observationGeneration }),
+    repository: input.repository,
+    ...(reuseLocalizationDemand
+      ? {
+          localizationTargetLocale: existing.localizationTargetLocale,
+          localizationContributionId: existing.localizationContributionId,
+          ...(existing.localizationContributionState === undefined
+            ? {}
+            : { localizationContributionState: existing.localizationContributionState }),
+          ...(existing.localizationDemandStatus === undefined
+            ? {}
+            : { localizationDemandStatus: existing.localizationDemandStatus }),
+        }
+      : {}),
+    sourceVersionId: input.sourceVersionId,
+    submittedAt: sameObservationBase ? existing.submittedAt : input.catalog.scannedAt,
   };
 }
 
@@ -441,6 +732,12 @@ async function saveNativeCoverage(
     targetLocale: input.targetLocale,
     sourceUnitCount: published.sourceUnitCount,
     upstreamNativeCount,
+    ...(published.upstreamScopedNativeCount === undefined
+      ? {}
+      : { upstreamScopedNativeCount: published.upstreamScopedNativeCount }),
+    ...(published.upstreamScopeCoverage === undefined
+      ? {}
+      : { upstreamScopeCoverage: published.upstreamScopeCoverage }),
     publishedUnitCount: published.publishedUnitCount,
     missingUnitCount: published.missingUnitCount,
     entries: [],
@@ -488,6 +785,8 @@ function submissionFromReceipt(
     pluginVersion: catalog.pluginVersion,
     catalogDigest: catalog.digest,
     adapterProfileDigest: OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
+    registryPolicyRevision: OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision,
+    sourceDiscoveryEpoch: OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch,
     installationId,
     contributionId: receipt.contributionId,
     contributionState: receipt.state,
@@ -519,10 +818,12 @@ async function saveSynchronizationError(
     Parameters<typeof synchronizeConfiguredPluginTranslations>[0],
     "getState" | "replaceState" | "save" | "targetLocale"
   >,
-  pluginId: string,
+  catalog: PluginUiCatalog,
+  installationId: string,
   error: unknown,
 ): Promise<void> {
   const state = input.getState();
+  const pluginId = catalog.pluginId;
   const submission = state.pluginSubmissions[pluginId];
   const errorRecord = {
     code: synchronizationErrorCode(error),
@@ -538,9 +839,12 @@ async function saveSynchronizationError(
         ...state.pluginSubmissions,
         [pluginId]: {
           pluginId,
-          pluginVersion: "",
-          catalogDigest: "",
-          contributionId: "",
+          pluginVersion: catalog.pluginVersion,
+          catalogDigest: catalog.digest,
+          adapterProfileDigest: OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
+          registryPolicyRevision: OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision,
+          sourceDiscoveryEpoch: OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch,
+          installationId,
           contributionState: "rejected",
           submittedAt: new Date().toISOString(),
           lastError: errorRecord,
@@ -584,6 +888,33 @@ function incrementDemandState(
   counts[state] = (counts[state] ?? 0) + 1;
 }
 
+async function loadPublishedCatalogForSynchronization(
+  transport: ObsidianHttpTransport,
+  catalogs: readonly PluginUiCatalog[],
+  targetLocale: TargetLocale,
+): Promise<Awaited<ReturnType<typeof loadPublishedEcosystemCatalog>>> {
+  if (catalogs.length === 0) return undefined;
+  try {
+    return await loadPublishedEcosystemCatalog(
+      transport,
+      catalogs.map((catalog) => ({
+        pluginId: catalog.pluginId,
+        pluginVersion: catalog.pluginVersion,
+      })),
+      targetLocale,
+    );
+  } catch (error) {
+    if (!isTemporaryPublishedCatalogError(error)) throw error;
+    console.warn("[Trans-Hub] 权威公共目录暂不可用，改由服务器验证来源提交：", error);
+    return undefined;
+  }
+}
+
+function isTemporaryPublishedCatalogError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /^读取 Obsidian 公共目录失败：HTTP (?:408|429|5\d\d)$/u.test(error.message);
+}
+
 function mergeRetryAfter(current: number | undefined, next: number): number {
   if (!Number.isFinite(next) || next <= 0) return current ?? 5_000;
   return current === undefined ? next : Math.max(current, next);
@@ -602,17 +933,24 @@ function isGlobalSynchronizationError(error: unknown): boolean {
 }
 
 function synchronizationErrorCode(error: unknown): string {
+  if (error instanceof SourceArtifactMismatchError) return error.code;
   return isDiagnosticError(error) ? error.code : "plugin_sync_failed";
 }
 
 function synchronizationErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/[\r\n]+/gu, " ").slice(0, 240);
+  const protocolDiagnostic = protocolDiagnosticSuffix(error);
+  return `${message}${protocolDiagnostic}`.replace(/[\r\n]+/gu, " ").slice(0, 240);
 }
 
 function isDiagnosticError(error: unknown): error is Error & {
   readonly code: string;
-  readonly diagnostic: { readonly status?: number };
+  readonly diagnostic: {
+    readonly status?: number;
+    readonly operation?: string;
+    readonly protocolCode?: string;
+    readonly detail?: string;
+  };
 } {
   if (!(error instanceof Error)) return false;
   const value = error as Partial<{
@@ -622,6 +960,25 @@ function isDiagnosticError(error: unknown): error is Error & {
   return typeof value.code === "string"
     && typeof value.diagnostic === "object"
     && value.diagnostic !== null;
+}
+
+function protocolDiagnosticSuffix(error: unknown): string {
+  if (!isDiagnosticError(error) || error.code !== "PC_PROTOCOL_REJECTED") return "";
+  const diagnostic = error.diagnostic;
+  const parts = [
+    protocolDiagnosticValue("operation", diagnostic.operation, /^[a-z][a-z-]{0,80}$/u),
+    protocolDiagnosticValue("protocol", diagnostic.protocolCode, /^CP_[A-Z_]{3,80}$/u),
+    protocolDiagnosticValue("path", diagnostic.detail, /^\$(?:\.[A-Za-z][A-Za-z0-9_]*|\[[0-9]+\])*$/u),
+  ].filter((value): value is string => value !== null);
+  return parts.length === 0 ? "" : ` [${parts.join("; ")}]`;
+}
+
+function protocolDiagnosticValue(
+  label: string,
+  value: string | undefined,
+  pattern: RegExp,
+): string | null {
+  return value !== undefined && pattern.test(value) ? `${label}=${value}` : null;
 }
 
 export function validatePluginTranslations(
@@ -686,6 +1043,12 @@ export function validatePluginTranslations(
     targetLocale,
     ...(published === undefined ? {} : { sourceUnitCount: published.sourceUnitCount }),
     upstreamNativeCount,
+    ...(published?.upstreamScopedNativeCount === undefined
+      ? {}
+      : { upstreamScopedNativeCount: published.upstreamScopedNativeCount }),
+    ...(published?.upstreamScopeCoverage === undefined
+      ? {}
+      : { upstreamScopeCoverage: published.upstreamScopeCoverage }),
     ...(published === undefined ? {} : { publishedUnitCount: published.publishedUnitCount }),
     ...(published === undefined ? {} : { missingUnitCount: published.missingUnitCount }),
     entries,

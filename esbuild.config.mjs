@@ -11,12 +11,18 @@ const DEFAULT_TRANSFER_ROOT = {
   publicKeyBase64Url: "jaDlCqNcXw6UBT8A2oXvfF0pyz1j94Yrdqyr1YDgCh4",
 };
 function resolveTrustRoot(envPrefix, fallback) {
-  const rawKeyId = process.env[`${envPrefix}_KEY_ID`];
-  if (rawKeyId === undefined || rawKeyId.trim() === "") return fallback;
+  const names = [
+    `${envPrefix}_KEY_ID`,
+    `${envPrefix}_KEY_VERSION`,
+    `${envPrefix}_PUBLIC_KEY_B64`,
+  ];
+  const values = names.map((name) => process.env[name]?.trim() ?? "");
+  if (values.every((value) => value === "")) return fallback;
+  if (values.some((value) => value === "")) throw new Error(`${envPrefix} trust root is incomplete`);
   return {
-    keyId: required(`${envPrefix}_KEY_ID`, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u),
-    keyVersion: Number(required(`${envPrefix}_KEY_VERSION`, /^[1-9][0-9]*$/u)),
-    publicKeyBase64Url: required(`${envPrefix}_PUBLIC_KEY_B64`, /^[A-Za-z0-9_-]{43}$/u),
+    keyId: required(names[0], /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/u),
+    keyVersion: Number(required(names[1], /^[1-9][0-9]*$/u)),
+    publicKeyBase64Url: required(names[2], /^[A-Za-z0-9_-]{43}$/u),
   };
 }
 const transferRoot = resolveTrustRoot("TRANS_HUB_TRANSFER_ROOT", DEFAULT_TRANSFER_ROOT);

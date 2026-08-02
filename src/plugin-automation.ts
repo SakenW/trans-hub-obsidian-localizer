@@ -7,6 +7,13 @@ import {
   resolveCommunityPluginSourceEligibility,
 } from "./plugin-registry";
 import {
+  hasTrustedPublishedPluginVersion,
+  isPluginSourceSelectable,
+  type PluginSourceSnapshot,
+  type PluginSourceState,
+  trustedPublishedPluginVersions,
+} from "./plugin-picker-source";
+import {
   getPluginTranslation,
   setPluginTranslation,
   type PluginState,
@@ -36,10 +43,12 @@ export interface PluginScanResult {
   readonly scannedCount: number;
   readonly changedCount: number;
   readonly stringCount: number;
+  readonly selectablePluginIds: readonly string[];
 }
 
 export class PluginAutomationController {
   private readonly runtime = new PluginUiTranslationRuntime();
+  private sourceSnapshot: PluginSourceSnapshot = new Map();
 
   constructor(private readonly input: {
     readonly app: App;
@@ -48,7 +57,7 @@ export class PluginAutomationController {
     readonly state: () => PluginState;
     readonly replaceState: (state: PluginState) => void;
     readonly save: () => Promise<void>;
-    readonly synchronize: () => Promise<PluginSyncSummary>;
+    readonly synchronize: (sourceSelectablePluginIds?: readonly string[]) => Promise<PluginSyncSummary>;
   }) {}
 
   start(): void {
@@ -67,7 +76,7 @@ export class PluginAutomationController {
   async runAutomaticScan(): Promise<PluginScanResult | null> {
     if (!this.input.settings().pluginTranslationEnabled) return null;
     const result = await this.scanInstalledPlugins();
-    await this.input.synchronize();
+    await this.input.synchronize(result.selectablePluginIds);
     this.applyCachedTranslations();
     return result;
   }
@@ -78,7 +87,25 @@ export class PluginAutomationController {
     const discovered = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
     const selected = discovered.filter((plugin) => plugin.enabled && !excluded.has(plugin.id));
     const eligibility = await resolveCommunityPluginSourceEligibility(selected.map((plugin) => plugin.id));
-    const eligibleSelected = selected.filter((plugin) => eligibility.get(plugin.id)?.kind === "supported");
+    const trustedPublished = trustedPublishedPluginVersions(this.input.state());
+    const sourceSnapshot = new Map<string, {
+      readonly pluginVersion: string;
+      readonly source: PluginSourceState;
+    }>();
+    for (const plugin of selected) {
+      const resolved = eligibility.get(plugin.id) ?? { kind: "unsupported" as const };
+      sourceSnapshot.set(plugin.id, {
+        pluginVersion: plugin.version,
+        source: resolved.kind === "unsupported"
+          && hasTrustedPublishedPluginVersion(trustedPublished, plugin.id, plugin.version)
+          ? { kind: "published" }
+          : resolved,
+      });
+    }
+    this.sourceSnapshot = sourceSnapshot;
+    const eligibleSelected = selected.filter((plugin) =>
+      isPluginSourceSelectable(sourceSnapshot.get(plugin.id)?.source ?? { kind: "unsupported" }),
+    );
     const only = onlyPluginIds === undefined ? null : new Set(onlyPluginIds);
     const candidates = only === null
       ? eligibleSelected
@@ -92,17 +119,20 @@ export class PluginAutomationController {
     let stringCount = 0;
     for (const plugin of candidates) {
       const bundle = await readPluginBundle(this.input.app.vault, plugin);
-      const identity = await resolveCommunityPluginIdentity(plugin.id, plugin.version);
+      const sourceSupported = eligibility.get(plugin.id)?.kind === "supported";
+      const identity = sourceSupported
+        ? await resolveCommunityPluginIdentity(plugin.id, plugin.version)
+        : undefined;
       const catalog = await scanPluginUiStrings({
         plugin,
         bundle,
         sourceLocale: OBSIDIAN_SOURCE_LOCALE,
         targetLocale: settings.targetLocale,
         registryMetadata: {
-          name: identity.officialName,
-          description: identity.officialDescription,
+          name: identity?.officialName ?? plugin.name,
+          description: identity?.officialDescription ?? plugin.description,
         },
-        ...(identity.readmeMarkdown === undefined ? {} : { readmeMarkdown: identity.readmeMarkdown }),
+        ...(identity?.readmeMarkdown === undefined ? {} : { readmeMarkdown: identity.readmeMarkdown }),
       });
       stringCount += catalog.strings.length;
       const previous = catalogs[plugin.id];
@@ -119,8 +149,11 @@ export class PluginAutomationController {
       scannedCount: candidates.length,
       changedCount,
       stringCount,
+      selectablePluginIds: enabledPluginIds,
     };
   }
+
+  getSourceSnapshot(): PluginSourceSnapshot { return this.sourceSnapshot; }
 
   applyCachedTranslations(): PluginAutomationSummary {
     const translations = this.allTranslations();

@@ -19,7 +19,11 @@ describeLocal("local Obsidian vault integration", () => {
     const enabledIds = new Set(enabled.filter((item): item is string => typeof item === "string"));
     const results: { id: string; count: number }[] = [];
     let linterSources: ReadonlySet<string> | undefined;
-    for (const dir of pluginDirs.filter((item) => item.isDirectory() && (scanAllInstalled || enabledIds.has(item.name)))) {
+    for (const dir of pluginDirs.filter((item) =>
+      item.isDirectory()
+      && !item.name.startsWith(".")
+      && (scanAllInstalled || enabledIds.has(item.name))
+    )) {
       const root = join(configDir, "plugins", dir.name);
       const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as Record<string, unknown>;
       if (manifest.id === OBSIDIAN_PLUGIN_ID) continue;

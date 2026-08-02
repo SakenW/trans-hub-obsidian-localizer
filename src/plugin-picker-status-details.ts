@@ -13,17 +13,16 @@ export function renderPluginPickerCatalogMismatchDetails(
     text: translate("已安全应用 {count} 条精确命中译文", { count: summary.safelyAppliedCount }),
     cls: "trans-hub-plugin-picker__catalog-applied",
   });
-  if (summary.authorityCatalog === undefined) return;
+  if (summary.currentCatalog === undefined) return;
 
   const facts = details.createDiv({ cls: "trans-hub-plugin-picker__catalog-facts" });
   facts.createSpan({
-    text: translate("权威目录 {count} 条", { count: summary.authorityCatalog.totalCount }),
+    text: translate("当前目录 {count} 条", { count: summary.currentCatalog.totalCount }),
     cls: "trans-hub-plugin-picker__catalog-total",
   });
   for (const metric of [
-    translate("插件自带 {count}", { count: summary.authorityCatalog.upstreamNativeCount }),
-    translate("语枢已发布 {count}", { count: summary.authorityCatalog.publishedCount }),
-    translate("待补 {count}", { count: summary.authorityCatalog.missingCount }),
+    translate("插件自带 {count}", { count: summary.currentCatalog.nativeCount }),
+    translate("待补 {count}", { count: summary.currentCatalog.missingCount }),
   ]) {
     facts.createSpan({
       text: metric,
@@ -37,6 +36,12 @@ export function renderPluginPickerCoverageDetails(
   summary: PluginLocalizationCoverageSummary,
 ): void {
   const details = container.createDiv({ cls: "trans-hub-plugin-picker__catalog-details" });
+  if (summary.notice !== undefined) {
+    details.createDiv({
+      text: summary.notice,
+      cls: "trans-hub-plugin-picker__provenance",
+    });
+  }
   details.createDiv({
     text: summary.headline,
     cls: "trans-hub-plugin-picker__catalog-applied",

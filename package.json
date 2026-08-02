@@ -1,6 +1,6 @@
 {
   "name": "@trans-hub/obsidian-client",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "license": "Apache-2.0",
   "description": "Automatic translation and localization for Obsidian community plugin names, descriptions, and user interfaces.",
@@ -34,6 +34,7 @@
   },
   "scripts": {
     "build": "node esbuild.config.mjs",
+    "install:local": "node scripts/install-local.mjs",
     "package": "node scripts/package.mjs",
     "lint": "eslint src tests",
     "test": "vitest run",

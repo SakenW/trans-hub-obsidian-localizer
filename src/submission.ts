@@ -16,16 +16,16 @@ import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 export const OBSIDIAN_PUBLIC_PROFILE = {
   externalRegistry: "obsidian_community_plugins",
   adapterDefinitionId: "obsidian",
-  adapterVersion: "1.4.2",
-  adapterBuildDigestHex: "4d48c5e1b4d6fbfa22057f4642247d1c71a98f0079c19d390656847686657904",
+  adapterVersion: "1.4.3",
+  adapterBuildDigestHex: "91db112fb6b3f6e2ea3e94abab9d22c74c7af4231bb576548f49440040de08e8",
+  registryPolicyRevision: 24,
+  sourceDiscoveryEpoch: 22,
 } as const;
 
-// Bump these epochs only when an already accepted observation must be
-// re-evaluated under a newer server-side source or demand contract. The
-// observation body remains content-addressed; the epoch creates a new,
-// auditable contribution instead of mutating the previous receipt.
-const SOURCE_DISCOVERY_EPOCH = 17;
-const LOCALIZATION_OBSERVATION_EPOCH = 11;
+// This is a retry namespace for a failed observation that has no saved
+// contribution id. Successfully accepted observations are not force-resubmitted
+// by changing this constant alone.
+const LOCALIZATION_OBSERVATION_EPOCH = 12;
 
 export async function submitObsidianPluginDiscovery(input: {
   readonly client: PublicClient;
@@ -35,6 +35,7 @@ export async function submitObsidianPluginDiscovery(input: {
   readonly candidateLocators: readonly string[];
   readonly observationGeneration?: number;
 }): Promise<ContributionStateReceipt<"source_discovery">> {
+  const candidateLocators = discoveryCandidateLocators(input);
   const observationMaterial = {
     pluginId: input.catalog.pluginId,
     pluginVersion: input.catalog.pluginVersion,
@@ -51,12 +52,14 @@ export async function submitObsidianPluginDiscovery(input: {
   };
   const observationDigest = await computeProtocolDigest("request", observationMaterial, digestPort);
   const generationSuffix = observationGenerationSuffix(input.observationGeneration);
-  const idempotencyKey = `obsidian-public-v${SOURCE_DISCOVERY_EPOCH}${generationSuffix}-${await sha256Hex([
+  const idempotencyKey = `obsidian-public-v${OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch}${generationSuffix}-${await sha256Hex([
     input.repository,
     input.catalog.pluginVersion,
     input.catalog.artifactDigest,
     input.catalog.digest,
     OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
+    String(OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision),
+    candidateLocators.join("\u0000"),
   ].join("\u0000"))}`;
   const payload: Omit<SourceDiscoveryIntent, "installationProof"> = {
     kind: "contribution_intent",
@@ -83,11 +86,23 @@ export async function submitObsidianPluginDiscovery(input: {
       observationDigest,
     },
     discovery: {
-      candidateLocators: [...new Set(input.candidateLocators)],
+      candidateLocators,
       localArtifactDigest: createDigest("transport", input.catalog.artifactDigest),
     },
   };
   return input.client.submitContribution(payload) as Promise<ContributionStateReceipt<"source_discovery">>;
+}
+
+function discoveryCandidateLocators(input: {
+  readonly repository: string;
+  readonly candidateLocators: readonly string[];
+}): readonly string[] {
+  const candidateLocators = [...new Set(input.candidateLocators)];
+  if (candidateLocators.length > 0) return candidateLocators;
+  if (!/^[^/\s]+\/[^/\s]+$/u.test(input.repository)) {
+    throw new Error("可信 GitHub 仓库格式无效，无法提交来源发现。");
+  }
+  return [`https://github.com/${input.repository}`];
 }
 
 export async function submitObsidianLocalizationObservation(input: {

@@ -23,13 +23,19 @@ export type CommunityPluginSourceEligibility =
   | { readonly kind: "supported"; readonly repository: string }
   | { readonly kind: "unsupported" };
 
-class CommunityPluginNotFoundError extends Error {
+export class CommunityPluginNotFoundError extends Error {
   readonly code = "community_plugin_not_found";
 
   constructor(readonly pluginId: string) {
     super(`Obsidian 官方社区目录中找不到插件：${pluginId}`);
     this.name = "CommunityPluginNotFoundError";
   }
+}
+
+export function isCommunityPluginNotFoundError(
+  error: unknown,
+): error is CommunityPluginNotFoundError {
+  return error instanceof CommunityPluginNotFoundError;
 }
 
 let cachedRegistry: ReadonlyMap<string, CommunityPluginRegistryEntry> | null = null;

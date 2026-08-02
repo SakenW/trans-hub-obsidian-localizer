@@ -45,6 +45,8 @@ export interface PluginTranslationState {
   readonly targetLocale: string;
   readonly sourceUnitCount?: number;
   readonly upstreamNativeCount?: number;
+  readonly upstreamScopedNativeCount?: number;
+  readonly upstreamScopeCoverage?: Readonly<Record<string, number>>;
   readonly publishedUnitCount?: number;
   readonly missingUnitCount?: number;
   readonly entries: readonly PluginUiTranslation[];
@@ -56,8 +58,11 @@ export interface PluginSubmissionState {
   readonly pluginVersion: string;
   readonly catalogDigest: string;
   readonly adapterProfileDigest?: string;
+  readonly registryPolicyRevision?: number;
+  readonly sourceDiscoveryEpoch?: number;
   readonly installationId?: string;
-  readonly contributionId: string;
+  readonly sourceAuthority?: "published";
+  readonly contributionId?: string;
   readonly contributionState: string;
   readonly observationGeneration?: number;
   readonly repository?: string;
@@ -115,6 +120,12 @@ export interface PluginState {
   readonly translationExportStates: Readonly<Record<string, TranslationSyncState>>;
 }
 
+export const PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION = 1;
+
+export function isPluginLocalizationDerivedCacheCurrent(value: unknown): boolean {
+  return value === PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION;
+}
+
 export const EMPTY_PLUGIN_STATE: PluginState = {
   notes: {},
   pendingSubmissions: {},
@@ -151,6 +162,15 @@ export function parsePluginState(value: unknown): PluginState {
     translationExportStates: isRecord(value.translationExportStates)
       ? parseRecord(value.translationExportStates, parseTranslationExportState)
       : {},
+  };
+}
+
+export function resetPluginLocalizationDerivedState(state: PluginState): PluginState {
+  return {
+    ...state,
+    pluginSubmissions: {},
+    pluginTranslations: {},
+    translationExportStates: {},
   };
 }
 
@@ -367,8 +387,21 @@ function parsePluginStringEvidence(value: unknown): PluginStringEvidence | null 
 
 function parsePluginSubmission(value: unknown): PluginSubmissionState | null {
   if (!isRecord(value)) return null;
-  const strings = [value.pluginId, value.pluginVersion, value.catalogDigest, value.contributionId, value.contributionState, value.submittedAt];
+  const strings = [value.pluginId, value.pluginVersion, value.catalogDigest, value.contributionState, value.submittedAt];
   if (!strings.every((item) => typeof item === "string" && item !== "")) return null;
+  const sourceAuthority = value.sourceAuthority === "published" ? "published" : undefined;
+  const contributionId = typeof value.contributionId === "string" && value.contributionId !== ""
+    ? value.contributionId
+    : undefined;
+  if (value.sourceAuthority !== undefined && sourceAuthority === undefined) return null;
+  if (
+    sourceAuthority === "published"
+    && (
+      contributionId !== undefined
+      || stringValue(value.sourceVersionId) === null
+      || stringValue(value.repository) === null
+    )
+  ) return null;
   const localizationDemandStatus = parsePluginLocalizationDemandStatus(
     value.localizationDemandStatus,
   );
@@ -380,10 +413,17 @@ function parsePluginSubmission(value: unknown): PluginSubmissionState | null {
     ...(typeof value.adapterProfileDigest === "string" && value.adapterProfileDigest !== ""
       ? { adapterProfileDigest: value.adapterProfileDigest }
       : {}),
+    ...(isNonNegativeInteger(value.registryPolicyRevision)
+      ? { registryPolicyRevision: value.registryPolicyRevision }
+      : {}),
+    ...(isNonNegativeInteger(value.sourceDiscoveryEpoch)
+      ? { sourceDiscoveryEpoch: value.sourceDiscoveryEpoch }
+      : {}),
     ...(typeof value.installationId === "string" && value.installationId !== ""
       ? { installationId: value.installationId }
       : {}),
-    contributionId: value.contributionId as string,
+    ...(sourceAuthority === undefined ? {} : { sourceAuthority }),
+    ...(contributionId === undefined ? {} : { contributionId }),
     contributionState: value.contributionState as string,
     ...(isNonNegativeInteger(value.observationGeneration)
       ? { observationGeneration: value.observationGeneration }
@@ -459,7 +499,7 @@ function parsePluginSynchronizationError(
 function isLocalizationDemandState(value: unknown): value is LocalizationDemandState {
   return [
     "awaiting_source", "rejected", "reconciled", "mt_queued", "mt_running",
-    "mt_failed", "export_pending", "export_ready", "native_complete",
+    "mt_failed", "distribution_blocked", "export_pending", "export_ready", "native_complete",
   ].includes(String(value));
 }
 
@@ -491,6 +531,8 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
     ? value.upstreamNativeCount
     : 0;
   const sourceUnitCount = optionalNonNegativeInteger(value.sourceUnitCount);
+  const upstreamScopedNativeCount = optionalNonNegativeInteger(value.upstreamScopedNativeCount);
+  const upstreamScopeCoverage = parseNonNegativeIntegerRecord(value.upstreamScopeCoverage);
   const publishedUnitCount = optionalNonNegativeInteger(value.publishedUnitCount);
   const missingUnitCount = optionalNonNegativeInteger(value.missingUnitCount);
   if ([pluginId, pluginVersion, sourceVersionId, targetLocale, pulledAt].some((item) => item === null)) return null;
@@ -505,7 +547,8 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
   const sourceSnapshotDigest = optionalSha256(value.sourceSnapshotDigest);
   const artifactDigest = optionalSha256(value.artifactDigest);
   if ((value.sourceSnapshotDigest !== undefined && sourceSnapshotDigest === undefined)
-    || (value.artifactDigest !== undefined && artifactDigest === undefined)) return null;
+    || (value.artifactDigest !== undefined && artifactDigest === undefined)
+    || (value.upstreamScopeCoverage !== undefined && upstreamScopeCoverage === undefined)) return null;
   const entries = value.entries.map((entry) => {
     if (!isRecord(entry)) return null;
     const entryPluginId = stringValue(entry.pluginId);
@@ -550,10 +593,26 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
     targetLocale: targetLocale!, pulledAt: pulledAt!,
     ...(sourceUnitCount === undefined ? {} : { sourceUnitCount }),
     upstreamNativeCount,
+    ...(upstreamScopedNativeCount === undefined ? {} : { upstreamScopedNativeCount }),
+    ...(upstreamScopeCoverage === undefined ? {} : { upstreamScopeCoverage }),
     ...(publishedUnitCount === undefined ? {} : { publishedUnitCount }),
     ...(missingUnitCount === undefined ? {} : { missingUnitCount }),
     entries: entries.filter((entry): entry is PluginUiTranslation => entry !== null),
   };
+}
+
+function parseNonNegativeIntegerRecord(
+  value: unknown,
+): Readonly<Record<string, number>> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value);
+  if (!entries.every(([key, count]) => key.trim() !== "" && isNonNegativeInteger(count))) {
+    return undefined;
+  }
+  return Object.fromEntries(entries
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, count]) => [key, count as number]));
 }
 
 function optionalNonNegativeInteger(value: unknown): number | undefined {

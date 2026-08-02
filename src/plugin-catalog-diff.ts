@@ -100,6 +100,14 @@ export function calculatePluginTranslationCoverage(
   const effectiveTranslation = mergeCatalogNativeTranslations(catalog, translation);
   const canonicalStrings = catalog.strings.filter(isCanonicalPluginCatalogString);
   const currentSources = new Map(canonicalStrings.map((item) => [item.source, item.placeholderSignature]));
+  const authorityIdentity = effectiveTranslation.catalogIdentity;
+  const authorityCatalogMatchesArtifact = authorityIdentity !== undefined
+    && effectiveTranslation.pluginVersion === catalog.pluginVersion
+    && effectiveTranslation.sourceUnitCount === authorityIdentity.unitCount
+    && (effectiveTranslation.upstreamNativeCount ?? 0) <= authorityIdentity.unitCount
+    && authorityIdentity.artifactDigest === catalog.artifactDigest
+    && effectiveTranslation.artifactDigest === catalog.artifactDigest
+    && catalog.catalogIdentity?.artifactDigest === catalog.artifactDigest;
   const allCatalogSources = new Set(catalog.strings.map((item) => item.source));
   const translatedSources = new Set(effectiveTranslation.entries
     .filter((entry) => isCompatibleEntry(entry, currentSources))
@@ -119,26 +127,53 @@ export function calculatePluginTranslationCoverage(
   // the same catalog cardinality as this local scan and cannot exceed that
   // scan. Otherwise it can belong to an older or broader parser profile and
   // must not inflate current coverage.
-  const nativeCoverageAligned = effectiveTranslation.sourceUnitCount === undefined
+  const nativeCoverageAligned = authorityCatalogMatchesArtifact
+    || effectiveTranslation.sourceUnitCount === undefined
     || effectiveTranslation.sourceUnitCount === currentSources.size
     && effectiveNativeCount <= currentSources.size;
-  const unattributedNativeCount = nativeCoverageAligned
+  const nativeCountWithoutEntries = nativeCoverageAligned
     ? Math.max(effectiveNativeCount - attributedNativeSources.size, 0)
     : 0;
-  const translatedCount = Math.min(currentSources.size, translatedSources.size + unattributedNativeCount);
-  const totalCount = currentSources.size;
+  const scopedNativeCount = Math.min(
+    effectiveTranslation.upstreamScopedNativeCount ?? 0,
+    effectiveNativeCount,
+  );
+  const unattributedNativeCount = nativeCoverageAligned
+    ? Math.max(
+      effectiveNativeCount - Math.max(scopedNativeCount, attributedNativeSources.size),
+      0,
+    )
+    : 0;
+  const totalCount = authorityCatalogMatchesArtifact
+    ? authorityIdentity.unitCount
+    : currentSources.size;
+  const translatedCount = Math.min(totalCount, translatedSources.size + nativeCountWithoutEntries);
+  const authorityScopeTotals = authorityCatalogMatchesArtifact
+    ? new Map(authorityIdentity.scopes.map((item) => [item.scope, item.unitCount]))
+    : undefined;
   const scopes = (["runtime-ui", "metadata", "readme"] as const).flatMap((scope) => {
     const sources = new Set(canonicalStrings
       .filter((item) => resolvePluginStringScopes(item.origins).includes(scope))
       .map((item) => item.source));
-    if (sources.size === 0) return [];
-    const translated = [...sources].filter((source) => translatedSources.has(source)).length;
+    const scopeTotal = authorityScopeTotals?.get(scope) ?? sources.size;
+    if (scopeTotal === 0) return [];
+    const translatedInEntries = [...sources].filter((source) => translatedSources.has(source)).length;
+    const attributedNativeInScope = [...attributedNativeSources]
+      .filter((source) => sources.has(source)).length;
+    const scopedNativeWithoutEntries = nativeCoverageAligned
+      ? Math.max(
+        Math.min(effectiveTranslation.upstreamScopeCoverage?.[scope] ?? 0, scopeTotal)
+          - attributedNativeInScope,
+        0,
+      )
+      : 0;
+    const translated = Math.min(scopeTotal, translatedInEntries + scopedNativeWithoutEntries);
     return [{
       scope,
-      totalCount: sources.size,
+      totalCount: scopeTotal,
       translatedCount: translated,
-      missingCount: Math.max(sources.size - translated, 0),
-      percent: Math.round((translated / sources.size) * 100),
+      missingCount: Math.max(scopeTotal - translated, 0),
+      percent: Math.round((translated / scopeTotal) * 100),
     }];
   });
   return {
@@ -182,22 +217,58 @@ export function mergeCatalogNativeTranslations(
 ): PluginTranslationState {
   if (catalog === undefined) return translation;
   const entries = new Map(translation.entries.map((entry) => [entry.source, entry]));
-  for (const item of catalog.strings) {
-    if (item.nativeTargetLocale !== translation.targetLocale || item.nativeTarget === undefined) continue;
-    const existing = entries.get(item.source);
+  const nativeTargets = failClosedCatalogNativeTargets(catalog, translation.targetLocale);
+  const originsBySource = new Map(catalog.strings.map((item) => [
+    item.source.normalize("NFC").trim(),
+    item.origins,
+  ]));
+  for (const [source, nativeTarget] of nativeTargets) {
+    const existing = entries.get(source);
     if (
       existing?.provenanceKind === "th-reviewed-correction"
       && existing.application === "correction"
     ) continue;
-    entries.set(item.source, {
+    entries.set(source, {
       pluginId: translation.pluginId,
-      source: item.source,
-      target: item.nativeTarget,
+      source,
+      target: nativeTarget,
       provenanceKind: "upstream-native",
-      scopes: resolvePluginStringScopes(item.origins),
+      scopes: resolvePluginStringScopes(originsBySource.get(source) ?? []),
     });
   }
   return { ...translation, entries: [...entries.values()] };
+}
+
+function failClosedCatalogNativeTargets(
+  catalog: PluginUiCatalog,
+  targetLocale: string,
+): ReadonlyMap<string, string> {
+  const nativeTargets = new Map<string, string>();
+  const conflicts = new Set<string>();
+  for (const item of catalog.strings) {
+    if (item.nativeTargetLocale !== targetLocale || item.nativeTarget === undefined) continue;
+    const source = item.source.normalize("NFC").trim();
+    const target = item.nativeTarget.normalize("NFC").trim();
+    if (conflicts.has(source)) continue;
+    if (
+      source === target
+      || target.trim() === ""
+      || placeholderSignature(source) !== item.placeholderSignature
+      || placeholderSignature(target) !== item.placeholderSignature
+    ) {
+      nativeTargets.delete(source);
+      conflicts.add(source);
+      continue;
+    }
+    const existing = nativeTargets.get(source);
+    if (existing !== undefined && existing !== target) {
+      nativeTargets.delete(source);
+      conflicts.add(source);
+      continue;
+    }
+    nativeTargets.set(source, target);
+  }
+  return nativeTargets;
 }
 
 export function selectCurrentCatalogTranslations(

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { TransportClient } from "../src/http-transport";
-import { resolvePublishedPluginSource } from "../src/plugin-source-resolution";
+import {
+  resolvePublishedPluginArtifactDigestFromCatalog,
+  resolvePublishedPluginSource,
+} from "../src/plugin-source-resolution";
 
 const SOURCE_VERSION_ID = "019f0000-0000-7000-8000-000000000001";
 const OBJECT_VERSION_ID = "019f0000-0000-7000-8000-000000000002";
@@ -20,9 +23,20 @@ const CATALOG_IDENTITY = {
 } as const;
 
 describe("resolvePublishedPluginSource", () => {
+  it("reads the immutable release artifact even before locale coverage exists", () => {
+    const body = catalog();
+    body.objects[0].coverage = [];
+
+    expect(resolvePublishedPluginArtifactDigestFromCatalog(body, {
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+    })).toBe(ARTIFACT_DIGEST);
+  });
+
   it("resolves an exact published Obsidian plugin version and locale", async () => {
+    const requestPaths: string[] = [];
     const result = await resolvePublishedPluginSource({
-      transport: transport(200, catalog()),
+      transport: transport(200, catalog(), requestPaths),
       pluginId: "dataview",
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
@@ -32,16 +46,76 @@ describe("resolvePublishedPluginSource", () => {
       sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
       artifactDigest: ARTIFACT_DIGEST,
+      repository: "blacksmithgu/obsidian-dataview",
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
       catalogIdentity: CATALOG_IDENTITY,
+      catalogIdentityExact: true,
       sourceUnitCount: 77,
       upstreamNativeCount: 0,
       publishedUnitCount: 77,
       missingUnitCount: 0,
     });
+    expect(requestPaths[0]).toContain("object_slug=dataview");
+    expect(requestPaths[0]).toContain("version_key=0.5.68");
+    expect(requestPaths[0]).toContain("target_locale=zh-CN");
   });
 
-  it("waits when the exact version has neither published nor upstream coverage", async () => {
+  it("maps only the verified Obsidian registry owner/repo identity to GitHub", async () => {
+    const body = catalog();
+    Object.assign(body.objects[0].versions[0], {
+      verified_external_registry_key: "obsidian_community_plugins",
+      canonical_external_identity: "owner/generic",
+    });
+
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).resolves.toEqual(expect.objectContaining({ repository: "owner/generic" }));
+
+    Object.assign(body.objects[0].versions[0], {
+      canonical_external_identity: "owner/generic/releases/latest",
+    });
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).resolves.not.toHaveProperty("repository");
+
+    for (const identity of [
+      "owner//generic",
+      "https://github.com/owner/generic",
+      "owner/generic?download=1",
+      "owner/generic#readme",
+    ]) {
+      Object.assign(body.objects[0].versions[0], { canonical_external_identity: identity });
+      await expect(resolvePublishedPluginSource({
+        transport: transport(200, body),
+        pluginId: "dataview",
+        pluginVersion: "0.5.68",
+        targetLocale: "zh-CN",
+        localCatalogIdentity: CATALOG_IDENTITY,
+      })).resolves.not.toHaveProperty("repository");
+    }
+
+    Object.assign(body.objects[0].versions[0], {
+      verified_external_registry_key: "generic_registry",
+      canonical_external_identity: "owner/generic",
+    });
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).resolves.not.toHaveProperty("repository");
+  });
+
+  it("keeps the authoritative source when locale coverage is still zero", async () => {
     const body = catalog();
     body.objects[0].coverage[0].published_unit_count = 0;
     await expect(resolvePublishedPluginSource({
@@ -50,7 +124,19 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual({
+      sourceVersionId: SOURCE_VERSION_ID,
+      objectVersionId: OBJECT_VERSION_ID,
+      artifactDigest: ARTIFACT_DIGEST,
+      repository: "blacksmithgu/obsidian-dataview",
+      sourceSnapshotDigest: SNAPSHOT_DIGEST,
+      catalogIdentity: CATALOG_IDENTITY,
+      catalogIdentityExact: true,
+      sourceUnitCount: 77,
+      upstreamNativeCount: 0,
+      publishedUnitCount: 0,
+      missingUnitCount: 0,
+    });
   });
 
   it("resolves native-only coverage without pretending a TH pack exists", async () => {
@@ -68,13 +154,35 @@ describe("resolvePublishedPluginSource", () => {
       sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
       artifactDigest: ARTIFACT_DIGEST,
+      repository: "blacksmithgu/obsidian-dataview",
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
       catalogIdentity: CATALOG_IDENTITY,
+      catalogIdentityExact: true,
       sourceUnitCount: 77,
       upstreamNativeCount: 65,
       publishedUnitCount: 0,
       missingUnitCount: 12,
     });
+  });
+
+  it("preserves generic scope attribution for upstream-native coverage", async () => {
+    const body = catalog();
+    body.objects[0].coverage[0].upstream_unit_count = 15;
+    Object.assign(body.objects[0].coverage[0], {
+      upstream_scoped_unit_count: 15,
+      upstream_scope_coverage: { "runtime-ui": 15 },
+    });
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).resolves.toEqual(expect.objectContaining({
+      upstreamNativeCount: 15,
+      upstreamScopedNativeCount: 15,
+      upstreamScopeCoverage: { "runtime-ui": 15 },
+    }));
   });
 
   it("fails closed when one plugin version resolves to multiple source versions", async () => {
@@ -125,8 +233,10 @@ describe("resolvePublishedPluginSource", () => {
       sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
       artifactDigest: ARTIFACT_DIGEST,
+      repository: "blacksmithgu/obsidian-dataview",
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
       catalogIdentity: CATALOG_IDENTITY,
+      catalogIdentityExact: true,
       sourceUnitCount: 77,
       upstreamNativeCount: 0,
       publishedUnitCount: 70,
@@ -160,6 +270,7 @@ describe("resolvePublishedPluginSource", () => {
       localCatalogIdentity: CATALOG_IDENTITY,
     })).resolves.toEqual(expect.objectContaining({
       sourceVersionId: SOURCE_VERSION_ID,
+      catalogIdentityExact: false,
       catalogIdentity: mismatch.objects[0].coverage[0].catalog_identity,
     }));
 
@@ -176,6 +287,7 @@ describe("resolvePublishedPluginSource", () => {
       localCatalogIdentity: CATALOG_IDENTITY,
     })).resolves.toEqual(expect.objectContaining({
       sourceVersionId: SOURCE_VERSION_ID,
+      catalogIdentityExact: false,
       catalogIdentity: scopeMismatch.objects[0].coverage[0].catalog_identity,
     }));
 
@@ -195,6 +307,7 @@ describe("resolvePublishedPluginSource", () => {
       localCatalogIdentity: CATALOG_IDENTITY,
     })).resolves.toEqual(expect.objectContaining({
       sourceVersionId: SOURCE_VERSION_ID,
+      catalogIdentityExact: false,
       artifactDigest: authorityIdentity.artifactDigest,
       catalogIdentity: authorityIdentity,
     }));
@@ -221,9 +334,12 @@ describe("resolvePublishedPluginSource", () => {
   });
 });
 
-function transport(status: number, body: unknown): TransportClient {
+function transport(status: number, body: unknown, paths: string[] = []): TransportClient {
   return {
-    send: <TResponse>() => Promise.resolve({ status, body: body as TResponse, headers: {} }),
+    send: <TResponse>(request: { readonly path: string }) => {
+      paths.push(request.path);
+      return Promise.resolve({ status, body: body as TResponse, headers: {} });
+    },
   };
 }
 
@@ -236,6 +352,8 @@ function catalog() {
         object_version_id: OBJECT_VERSION_ID,
         version_key: "0.5.68",
         content_digest: ARTIFACT_DIGEST,
+        verified_external_registry_key: "obsidian_community_plugins",
+        canonical_external_identity: "blacksmithgu/obsidian-dataview",
       }],
       coverage: [{
         object_version_id: OBJECT_VERSION_ID,

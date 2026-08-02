@@ -604,6 +604,7 @@ export type LocalizationDemandState =
   | "mt_queued"
   | "mt_running"
   | "mt_failed"
+  | "distribution_blocked"
   | "export_pending"
   | "export_ready"
   | "native_complete";

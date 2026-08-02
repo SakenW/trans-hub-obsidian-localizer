@@ -6,7 +6,13 @@ import type {
 
 import type { PluginLocalizationDemandStatusState } from "./plugin-state";
 
-export type PluginDemandDisposition = "waiting" | "ready" | "native" | "failed";
+export type PluginDemandDisposition = "waiting" | "ready" | "native" | "blocked" | "failed";
+
+export function isUnprocessableMachineTranslationFailure(
+  failureCode: string | null | undefined,
+): boolean {
+  return failureCode === "MachineTranslationUnsupportedComplexPlaceholder";
+}
 
 export interface PluginDemandResolution {
   readonly coordinate: LocalizationDemandCoordinateStatus;
@@ -73,6 +79,7 @@ function demandDisposition(
 ): PluginDemandDisposition {
   if (state === "export_ready") return "ready";
   if (state === "native_complete") return "native";
+  if (state === "distribution_blocked") return "blocked";
   if (state === "rejected" || (state === "mt_failed" && !failureRetryable)) return "failed";
   return "waiting";
 }

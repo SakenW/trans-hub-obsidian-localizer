@@ -105,6 +105,7 @@ function describeDemandStateCounts(sync: PluginSyncSummary): string {
   const counts = sync.demandStateCounts ?? {};
   return [
     demandCount(counts.awaiting_source, "等待来源"),
+    demandCount(sync.authorityRefreshingCount, "权威校验"),
     demandCount(counts.reconciled, "等待翻译"),
     demandCount(counts.mt_queued, "机翻排队"),
     demandCount(counts.mt_running, "机翻中"),

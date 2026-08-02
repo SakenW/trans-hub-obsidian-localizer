@@ -40,7 +40,7 @@ describe("submitObsidianPluginDiscovery", () => {
       },
     });
     const captured = payload as ContributionSigningPayload | null;
-    expect(captured?.idempotencyKey).toMatch(/^obsidian-public-v17-[a-f0-9]{64}$/u);
+    expect(captured?.idempotencyKey).toMatch(/^obsidian-public-v22-[a-f0-9]{64}$/u);
     expect(captured).toMatchObject({
       submittedAt: "2026-07-17T00:00:00.000Z",
       contributionType: "source_discovery",
@@ -74,15 +74,34 @@ describe("submitObsidianPluginDiscovery", () => {
       client, installationId: "installation", repository: "blacksmithgu/obsidian-dataview",
       candidateLocators: [], catalog, observationGeneration: 1,
     });
+    const recoveryPayload = payload as Extract<
+      ContributionSigningPayload,
+      { readonly contributionType: "source_discovery" }
+    > | null;
+    const fallbackIdempotencyKey = recoveryPayload?.idempotencyKey;
+    expect(fallbackIdempotencyKey)
+      .toMatch(/^obsidian-public-v22-r1-[a-f0-9]{64}$/u);
+    expect(recoveryPayload?.discovery.candidateLocators).toEqual([
+      "https://github.com/blacksmithgu/obsidian-dataview",
+    ]);
+
+    await submitObsidianPluginDiscovery({
+      client, installationId: "installation", repository: "blacksmithgu/obsidian-dataview",
+      candidateLocators: [
+        "https://github.com/blacksmithgu/obsidian-dataview",
+        "https://github.com/blacksmithgu/obsidian-dataview/releases/tag/0.5.68",
+      ],
+      catalog, observationGeneration: 1,
+    });
     expect((payload as ContributionSigningPayload | null)?.idempotencyKey)
-      .toMatch(/^obsidian-public-v17-r1-[a-f0-9]{64}$/u);
+      .not.toBe(fallbackIdempotencyKey);
 
     await submitObsidianLocalizationObservation({
       client, installationId: "installation", repository: "blacksmithgu/obsidian-dataview",
       targetLocale: "zh-CN", catalog, observationGeneration: 1,
     });
     expect((payload as ContributionSigningPayload | null)?.idempotencyKey)
-      .toMatch(/^obsidian-localize-v11-r1-[a-f0-9]{64}$/u);
+      .toMatch(/^obsidian-localize-v12-r1-[a-f0-9]{64}$/u);
   });
 });
 
@@ -203,7 +222,7 @@ describe("submitObsidianLocalizationObservation", () => {
       },
     });
     const captured = payload as ContributionSigningPayload | null;
-    expect(captured?.idempotencyKey).toMatch(/^obsidian-localize-v11-[a-f0-9]{64}$/u);
+    expect(captured?.idempotencyKey).toMatch(/^obsidian-localize-v12-[a-f0-9]{64}$/u);
     expect(captured).toMatchObject({
       contributionType: "localization_observation",
       targetHint: {

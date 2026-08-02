@@ -13,6 +13,7 @@ const scanResult = {
   scannedCount: 2,
   changedCount: 1,
   stringCount: 80,
+  selectablePluginIds: ["dataview", "tasks"],
 };
 
 describe("processPluginSelection", () => {
@@ -78,6 +79,26 @@ describe("processPluginSelection", () => {
     expect(pendingTranslationRetryDelay(20)).toBe(60_000);
     expect(pendingTranslationRetryDelay(0, 45_000)).toBe(45_000);
     expect(pendingTranslationRetryDelay(0, 30 * 60_000)).toBe(15 * 60_000);
+  });
+
+  it("权威刷新不误报为等待翻译", () => {
+    const result = {
+      kind: "synchronized" as const,
+      scan: scanResult,
+      sync: {
+        submittedCount: 0,
+        requestedCount: 0,
+        pulledCount: 0,
+        waitingCount: 3,
+        translationCount: 0,
+        waitingPluginIds: ["notebook-navigator", "obsidian-git", "obsidian-excalidraw-plugin"],
+        authorityRefreshingCount: 3,
+        demandStateCounts: {},
+      },
+    };
+
+    expect(describePluginSelectionProcessing(result)).toContain("权威校验 3");
+    expect(describePluginSelectionProcessing(result)).not.toContain("等待翻译");
   });
 
   it("serializes overlapping plugin scans so older snapshots cannot save last", async () => {

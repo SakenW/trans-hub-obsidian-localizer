@@ -24,6 +24,7 @@ const LOCALIZATION_DEMAND_STATES = [
   "mt_queued",
   "mt_running",
   "mt_failed",
+  "distribution_blocked",
   "export_pending",
   "export_ready",
   "native_complete",
@@ -192,6 +193,16 @@ function parseCoordinate(
       "CP_INVALID_VALUE",
       path,
       "failed state requires a failed work item",
+    );
+  }
+  if (
+    state === "distribution_blocked"
+    && (failureCode === null || failureRetryable || retryAfterSeconds !== 0)
+  ) {
+    protocolError(
+      "CP_INVALID_VALUE",
+      path,
+      "blocked distribution requires terminal failure evidence",
     );
   }
   if (

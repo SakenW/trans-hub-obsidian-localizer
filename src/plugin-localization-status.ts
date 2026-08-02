@@ -4,14 +4,25 @@ import {
   mergeCatalogNativeTranslations,
 } from "./plugin-catalog-diff";
 import { translate } from "./client-localization";
-import type { PluginSubmissionState, PluginTranslationState } from "./plugin-state";
+import { isUnprocessableMachineTranslationFailure } from "./plugin-demand-status";
+import {
+  getPluginSubmissionForLocale,
+  getPluginTranslation,
+  type PluginState,
+  type PluginSubmissionState,
+  type PluginTranslationState,
+} from "./plugin-state";
 import type { PluginUiCatalog } from "./plugin-string-scanner";
+import type { TargetLocale } from "./product-config";
 
 export type PluginLocalizationStatusKind =
   | "localized"
   | "catalog-mismatch"
   | "waiting"
+  | "login-required"
   | "unrecorded"
+  | "blocked"
+  | "preserved-source"
   | "failed";
 
 export interface PluginLocalizationStatus {
@@ -23,16 +34,16 @@ export interface PluginLocalizationStatus {
 
 export interface PluginCatalogMismatchSummary {
   readonly safelyAppliedCount: number;
-  readonly authorityCatalog?: {
+  readonly currentCatalog?: {
     readonly totalCount: number;
-    readonly upstreamNativeCount: number;
-    readonly publishedCount: number;
+    readonly nativeCount: number;
     readonly missingCount: number;
   };
 }
 
 export interface PluginLocalizationCoverageSummary {
   readonly headline: string;
+  readonly notice?: string;
   readonly complete: boolean;
   readonly scopeMetrics: readonly string[];
   readonly sourceMetrics: readonly PluginLocalizationCoverageSourceMetric[];
@@ -45,19 +56,58 @@ export interface PluginLocalizationCoverageSourceMetric {
 
 export type PluginManualRetryKind = "resynchronize" | "resubmit";
 
+export function visiblePluginManualRetryKind(input: {
+  readonly state: Pick<PluginState, "pluginCatalogs" | "pluginSubmissions" | "pluginTranslations">;
+  readonly pluginId: string;
+  readonly targetLocale: TargetLocale;
+  readonly sourceSelectable: boolean;
+  readonly hasSession: boolean;
+}): PluginManualRetryKind | null {
+  if (!input.sourceSelectable || !input.hasSession) return null;
+  return pluginManualRetryKind({
+    submission: getPluginSubmissionForLocale(input.state, input.pluginId, input.targetLocale),
+    translation: getPluginTranslation(input.state, input.pluginId, input.targetLocale),
+    catalog: input.state.pluginCatalogs[input.pluginId],
+    targetLocale: input.targetLocale,
+  });
+}
+
 export function pluginManualRetryKind(input: {
   readonly submission?: PluginSubmissionState;
   readonly translation?: PluginTranslationState;
+  readonly catalog?: PluginUiCatalog;
   readonly targetLocale: string;
 }): PluginManualRetryKind | null {
-  if (
-    input.targetLocale === "en"
-    || input.translation?.targetLocale === input.targetLocale
-  ) return null;
+  if (input.targetLocale === "en") return null;
   const submission = input.submission;
+  const demand = submission?.localizationDemandStatus;
+  const currentCatalogSubmission = submission !== undefined
+    && input.catalog !== undefined
+    && submission.catalogDigest === input.catalog.digest
+    && submission.pluginVersion === input.catalog.pluginVersion;
+  const exactUnprocessableMachineFailure = demand?.state === "mt_failed"
+    && !demand.failureRetryable
+    && currentCatalogSubmission
+    && demand.sourceVersionId === submission.sourceVersionId
+    && isUnprocessableMachineTranslationFailure(demand.failureCode);
+  const terminalCurrentMachineFailure = demand?.state === "mt_failed"
+    && !demand.failureRetryable
+    && input.translation?.targetLocale === input.targetLocale
+    && demand.sourceVersionId === input.translation.sourceVersionId;
   if (submission === undefined) return null;
-  if (submission.lastError !== undefined) return "resynchronize";
-  const demand = submission.localizationDemandStatus;
+  if (submission.lastError?.code === "source_artifact_mismatch") return null;
+  if (isCurrentLocaleSynchronizationError(submission.lastError, input.targetLocale)) {
+    return "resynchronize";
+  }
+  if (
+    input.translation?.targetLocale === input.targetLocale
+    && !currentCatalogSubmission
+    && !terminalCurrentMachineFailure
+  ) return null;
+  if (exactUnprocessableMachineFailure) return null;
+  if (hasCompleteAuthoritativeTranslation(input, submission)) return null;
+  if (terminalCurrentMachineFailure) return "resubmit";
+  if (demand?.state === "distribution_blocked") return null;
   if (
     demand?.state === "rejected"
     || (demand?.state === "mt_failed" && !demand.failureRetryable)
@@ -65,6 +115,31 @@ export function pluginManualRetryKind(input: {
     || submission.localizationContributionState === "rejected"
   ) return "resubmit";
   return null;
+}
+
+function hasCompleteAuthoritativeTranslation(
+  input: {
+    readonly translation?: PluginTranslationState;
+    readonly catalog?: PluginUiCatalog;
+    readonly targetLocale: string;
+  },
+  submission: PluginSubmissionState,
+): boolean {
+  const { catalog, translation } = input;
+  if (
+    catalog === undefined
+    || translation === undefined
+    || translation.pluginId !== catalog.pluginId
+    || translation.targetLocale !== input.targetLocale
+    || translation.sourceVersionId !== submission.sourceVersionId
+    || !comparePluginCatalogIdentity(catalog, translation).exact
+  ) return false;
+  const coverage = calculatePluginTranslationCoverage(
+    catalog,
+    translation,
+    input.targetLocale,
+  );
+  return coverage?.exactPluginVersion === true && coverage.missingCount === 0;
 }
 
 export interface PluginTranslationSourceSummary {
@@ -83,8 +158,11 @@ export const PLUGIN_LOCALIZATION_STATUS_FILTERS: readonly {
   { value: "localized", label: "已本地化" },
   { value: "catalog-mismatch", label: "目录待同步" },
   { value: "waiting", label: "等待发布" },
+  { value: "login-required", label: "需要登录" },
   { value: "unrecorded", label: "未收录" },
-  { value: "failed", label: "需要重试" },
+  { value: "blocked", label: "分发受限" },
+  { value: "preserved-source", label: "保留原文" },
+  { value: "failed", label: "处理失败" },
 ];
 
 export function describePluginLocalizationStatus(input: {
@@ -93,30 +171,98 @@ export function describePluginLocalizationStatus(input: {
   readonly catalog?: PluginUiCatalog;
   readonly targetLocale: string;
   readonly hasSession?: boolean;
+  readonly requiresReconnect?: boolean;
 }): PluginLocalizationStatus {
   if (input.targetLocale === "en") {
     return { kind: "localized", label: translate("源语言，无需翻译") };
   }
+  if (input.hasSession === false) {
+    return {
+      kind: "login-required",
+      label: translate(input.requiresReconnect ? "重新连接后继续同步" : "登录后同步"),
+    };
+  }
+  const recoverableSynchronizationError = input.submission?.lastError;
+  if (
+    recoverableSynchronizationError !== undefined
+    && recoverableSynchronizationError.code !== "source_artifact_mismatch"
+    && isCurrentLocaleSynchronizationError(recoverableSynchronizationError, input.targetLocale)
+  ) {
+    return {
+      kind: "failed",
+      label: translate("同步失败：{message}。点击右侧“重试此插件”，无需关闭开关。", {
+        message: recoverableSynchronizationError.message,
+      }),
+    };
+  }
+  const currentCatalogSubmission = input.submission !== undefined
+    && input.catalog !== undefined
+    && input.submission.catalogDigest === input.catalog.digest
+    && input.submission.pluginVersion === input.catalog.pluginVersion;
+  const currentDistributionBlock = input.submission?.localizationDemandStatus?.state === "distribution_blocked"
+    && input.submission.localizationDemandStatus.sourceVersionId === input.submission.sourceVersionId;
+  const currentUnprocessableMachineFailure = input.submission?.localizationDemandStatus?.state === "mt_failed"
+    && input.submission.localizationDemandStatus.sourceVersionId === input.submission.sourceVersionId
+    && isUnprocessableMachineTranslationFailure(input.submission.localizationDemandStatus.failureCode);
+  if (
+    currentCatalogSubmission
+    && input.submission?.lastError?.code === "source_artifact_mismatch"
+  ) {
+    return {
+      kind: "catalog-mismatch",
+      label: translate("本地安装与权威目录的精确制品不一致，已暂停同步"),
+    };
+  }
+  if (
+    currentCatalogSubmission
+    && !currentDistributionBlock
+    && !currentUnprocessableMachineFailure
+    && (input.submission?.contributionState === "rejected"
+      || input.submission?.localizationContributionState === "rejected")
+  ) {
+    return {
+      kind: "failed",
+      label: translate("需求未被接受。点击右侧“重试此插件”。"),
+    };
+  }
   if (input.translation?.targetLocale === input.targetLocale) {
+    const demand = input.submission?.localizationDemandStatus;
+    const exactCompleteTranslation = input.submission !== undefined
+      && hasCompleteAuthoritativeTranslation(input, input.submission);
+    const authorityRefreshing = demand?.state === "reconciled"
+      && demand.failureCode === "PublicDistributionAuthorityRefreshing"
+      && demand.sourceVersionId === input.translation.sourceVersionId;
+    const distributionBlock = demand?.state === "distribution_blocked"
+      && demand.sourceVersionId === input.translation.sourceVersionId
+      ? { failureCode: demand.failureCode }
+      : undefined;
+    const machineTranslationFailure = demand?.state === "mt_failed"
+      && demand.sourceVersionId === input.translation.sourceVersionId
+      && !exactCompleteTranslation
+      ? {
+          retryable: demand.failureRetryable,
+          attemptNumber: demand.failureAttemptNumber,
+          failureCode: demand.failureCode,
+        }
+      : undefined;
     if (input.catalog !== undefined) {
       const identity = comparePluginCatalogIdentity(input.catalog, input.translation);
-      if (!identity.exact) {
-        if (identity.kind === "artifact") {
-          return catalogMismatchStatus(
-            translate("本地插件文件与官方版本不一致"),
-            identity.safelyAppliedCount,
-            input.translation,
-          );
-        }
-        const scopes = identity.mismatchedScopes.map(scopeLabel).join("、");
-        return catalogMismatchStatus(
-          identity.kind === "legacy"
-            ? translate("服务器正在更新目录身份")
-            : translate("服务器目录正在更新：{scopes}", {
-                scopes: scopes === "" ? translate("目录范围") : scopes,
-              }),
-          identity.safelyAppliedCount,
+      if (
+        !identity.exact
+        || distributionBlock !== undefined
+        || machineTranslationFailure !== undefined
+        || authorityRefreshing
+      ) {
+        return safeIntersectionStatus(
           input.translation,
+          input.catalog,
+          input.targetLocale,
+          {
+            catalogDrift: !identity.exact,
+            distributionBlock,
+            machineTranslationFailure,
+            authorityRefreshing,
+          },
         );
       }
     }
@@ -180,20 +326,31 @@ export function describePluginLocalizationStatus(input: {
         coverage: coverageSummary(headline, true, scopeMetrics, sourceMetrics),
       };
     }
+    const machineTranslationFailureLabel = describeMachineTranslationFailure(machineTranslationFailure);
+    const localizedLabel = translate("已本地化 {count} 条", {
+      count: new Set(input.translation.entries.map((entry) => entry.source)).size,
+    });
     return {
-      kind: "localized",
+      kind: distributionBlock !== undefined
+        ? "blocked"
+        : authorityRefreshing
+          ? "waiting"
+          : machineTranslationFailure !== undefined
+            ? machineTranslationFailure.retryable ? "waiting" : "failed"
+            : "localized",
       label: appendSourceSummary(
-        translate("已本地化 {count} 条", {
-          count: new Set(input.translation.entries.map((entry) => entry.source)).size,
-        }),
+        distributionBlock === undefined
+          ? authorityRefreshing
+            ? translate("服务器正在校验当前精确版本的权威来源与许可证")
+            : machineTranslationFailureLabel ?? localizedLabel
+          : describeDistributionBlock(distributionBlock.failureCode),
         sourceSummary,
       ),
     };
   }
   const submission = input.submission;
   if (submission === undefined) {
-    if (input.hasSession === false) return { kind: "unrecorded", label: translate("登录后同步") };
-    return { kind: "unrecorded", label: translate("未收录") };
+    return { kind: "unrecorded", label: translate("尚未提交本地化需求") };
   }
   if (submission.lastError !== undefined) {
     return {
@@ -202,6 +359,12 @@ export function describePluginLocalizationStatus(input: {
         message: submission.lastError.message,
       }),
     };
+  }
+  if (
+    currentCatalogSubmission
+    && isSourceContributionProcessing(submission.contributionState)
+  ) {
+    return { kind: "waiting", label: translate("等待可信来源收录") };
   }
   const demand = submission.localizationDemandStatus;
   if (demand !== undefined) {
@@ -214,6 +377,12 @@ export function describePluginLocalizationStatus(input: {
           label: translate("本地化需求未被接受。点击右侧“重试此插件”。"),
         };
       case "reconciled":
+        if (demand.failureCode === "PublicDistributionAuthorityRefreshing") {
+          return {
+            kind: "waiting",
+            label: translate("服务器正在校验当前精确版本的权威来源与许可证"),
+          };
+        }
         return {
           kind: "waiting",
           label: translate("已建立 {count} 条缺失本地化需求，等待机器翻译", {
@@ -238,6 +407,16 @@ export function describePluginLocalizationStatus(input: {
           }),
         };
       case "mt_failed":
+        if (isUnprocessableMachineTranslationFailure(demand.failureCode)) {
+          return {
+            kind: "preserved-source",
+            label: describeMachineTranslationFailure({
+              retryable: false,
+              attemptNumber: demand.failureAttemptNumber,
+              failureCode: demand.failureCode,
+            })!,
+          };
+        }
         return demand.failureRetryable
           ? {
               kind: "waiting",
@@ -249,6 +428,11 @@ export function describePluginLocalizationStatus(input: {
               kind: "failed",
               label: translate("机器翻译失败，服务器已停止自动重试。点击右侧“重试此插件”。"),
             };
+      case "distribution_blocked":
+        return {
+          kind: "blocked",
+          label: describeDistributionBlock(demand.failureCode),
+        };
       case "export_pending":
         return {
           kind: "waiting",
@@ -258,7 +442,12 @@ export function describePluginLocalizationStatus(input: {
           }),
         };
       case "export_ready":
-        return { kind: "waiting", label: translate("译文已发布，等待客户端回拉") };
+        return {
+          kind: "waiting",
+          label: demand.publishedUnitCount > 0
+            ? translate("译文已发布，等待客户端回拉")
+            : translate("译文制品已生成，等待服务端公共目录更新"),
+        };
       case "native_complete":
         return {
           kind: "localized",
@@ -279,6 +468,68 @@ export function describePluginLocalizationStatus(input: {
     return { kind: "waiting", label: translate("等待本地化需求处理") };
   }
   return { kind: "waiting", label: translate("等待来源收录") };
+}
+
+function isCurrentLocaleSynchronizationError(
+  error: PluginSubmissionState["lastError"],
+  targetLocale: string,
+): boolean {
+  return error !== undefined
+    && (error.targetLocale === undefined || error.targetLocale === targetLocale);
+}
+
+function isSourceContributionProcessing(state: string): boolean {
+  return state === "received"
+    || state === "target_resolved"
+    || state === "artifact_acquired"
+    || state === "byte_verified";
+}
+
+function describeDistributionBlock(failureCode: string | undefined): string {
+  switch (failureCode) {
+    case "PublicDistributionPolicyPending":
+      return translate("暂无法公开发布：许可证证据已确认，服务端正在生成公开分发策略");
+    case "PublicDistributionLicenseUnsupported":
+      return translate("无法公开发布：上游许可证不在当前安全分发范围");
+    case "PublicDistributionLicenseEvidenceMissing":
+      return translate("无法公开发布：缺少当前精确版本的许可证证据");
+    case "PublicDistributionPolicyAmbiguous":
+      return translate("无法公开发布：当前精确版本存在冲突的公开分发策略");
+    case "PublicSourceVersionYanked":
+      return translate("无法公开发布：当前来源版本已下架");
+    case "PublicDistributionSourceDrift":
+      return translate("暂无法公开发布：当前来源与权威来源不一致，需重新收录精确来源版本");
+    case "PublicDistributionSourceUnsupported":
+      return translate("无法公开发布：当前来源未通过权威来源校验");
+    case "PublicDistributionManualDeny":
+      return translate("无法公开发布：管理员已关闭当前精确版本的公开分发");
+    case "PublicDistributionAuthorizationDenied":
+      return translate("无法公开发布：服务器无权为当前来源建立公开分发策略");
+    case "PublicDistributionAuthorityInvalid":
+      return translate("无法公开发布：当前来源的权威证据无效");
+    case "PublicDistributionAuthorityRetryExhausted":
+      return translate("无法公开发布：权威来源校验多次失败，服务器已停止自动重试");
+    default:
+      return translate("无法公开发布：当前精确版本的公开分发策略不可用");
+  }
+}
+
+function describeMachineTranslationFailure(
+  failure: {
+    readonly retryable: boolean;
+    readonly attemptNumber?: number;
+    readonly failureCode?: string;
+  } | undefined,
+): string | undefined {
+  if (failure === undefined) return undefined;
+  if (isUnprocessableMachineTranslationFailure(failure.failureCode)) {
+    return translate("机器翻译无法安全处理当前来源中的复杂占位符；该条将保留原文。");
+  }
+  return failure.retryable
+    ? translate("机器翻译暂时失败，服务器将自动重试（第 {attempt}/5 次）", {
+      attempt: failure.attemptNumber ?? 1,
+    })
+    : translate("机器翻译失败，服务器已停止自动重试。点击右侧“重试此插件”。");
 }
 
 function scopeLabel(scope: string): string {
@@ -331,10 +582,13 @@ function describePluginTranslationSourceMetrics(
   if (!currentTranslation.entries.some((entry) => entry.provenanceKind !== undefined)
     && (currentTranslation.upstreamNativeCount ?? 0) === 0) return [];
   const summary = summarizePluginTranslationSources(currentTranslation);
+  const authorityNativeCount = inputCatalogMatchesAuthorityArtifact(catalog, currentTranslation)
+    ? Math.max((currentTranslation.upstreamNativeCount ?? 0) - summary.reviewedCorrection, 0)
+    : 0;
   const effectiveUpstreamNative = Math.max(
     coverage === undefined
       ? (currentTranslation.upstreamNativeCount ?? 0) - summary.reviewedCorrection
-      : summary.upstreamNative,
+      : Math.max(summary.upstreamNative, authorityNativeCount),
     summary.upstreamNative,
   );
   return [
@@ -356,13 +610,28 @@ function describePluginTranslationSourceMetrics(
   ].filter((value): value is PluginLocalizationCoverageSourceMetric => value !== undefined);
 }
 
+function inputCatalogMatchesAuthorityArtifact(
+  catalog: PluginUiCatalog | undefined,
+  translation: PluginTranslationState,
+): boolean {
+  return catalog !== undefined
+    && translation.catalogIdentity !== undefined
+    && translation.pluginVersion === catalog.pluginVersion
+    && translation.sourceUnitCount === translation.catalogIdentity.unitCount
+    && (translation.upstreamNativeCount ?? 0) <= translation.catalogIdentity.unitCount
+    && translation.catalogIdentity.artifactDigest === catalog.artifactDigest
+    && translation.artifactDigest === catalog.artifactDigest
+    && catalog.catalogIdentity?.artifactDigest === catalog.artifactDigest;
+}
+
 function coverageSummary(
   headline: string,
   complete: boolean,
   scopeMetrics: readonly string[],
   sourceMetrics: readonly PluginLocalizationCoverageSourceMetric[],
+  notice?: string,
 ): PluginLocalizationCoverageSummary {
-  return { headline, complete, scopeMetrics, sourceMetrics };
+  return { headline, ...(notice === undefined ? {} : { notice }), complete, scopeMetrics, sourceMetrics };
 }
 
 function describeScopeCoverageMetrics(
@@ -400,25 +669,92 @@ function appendSourceSummary(label: string, summary: string): string {
   return summary === "" ? label : `${label}；${summary}`;
 }
 
-function catalogMismatchStatus(
-  label: string,
-  safelyAppliedCount: number,
+function safeIntersectionStatus(
   translation: PluginTranslationState,
+  catalog: PluginUiCatalog,
+  targetLocale: string,
+  cause: {
+    readonly catalogDrift: boolean;
+    readonly authorityRefreshing?: boolean;
+    readonly distributionBlock?: { readonly failureCode?: string };
+    readonly machineTranslationFailure?: {
+      readonly retryable: boolean;
+      readonly attemptNumber?: number;
+      readonly failureCode?: string;
+    };
+  },
 ): PluginLocalizationStatus {
-  const authorityCatalog = translation.sourceUnitCount === undefined
-    || translation.publishedUnitCount === undefined
-    || translation.missingUnitCount === undefined
+  const effectiveTranslation = mergeCatalogNativeTranslations(catalog, translation);
+  const coverage = calculatePluginTranslationCoverage(catalog, effectiveTranslation, targetLocale);
+  const translatedCount = coverage?.translatedCount
+    ?? new Set(effectiveTranslation.entries.map((entry) => entry.source)).size;
+  const totalCount = coverage?.totalCount ?? translatedCount;
+  const missingCount = coverage?.missingCount ?? 0;
+  const safeIntersection = missingCount > 0
+    ? translate("已安全应用 {translated}/{total} 条匹配译文，{missing} 条暂不可安全应用", {
+        translated: translatedCount,
+        total: totalCount,
+        missing: missingCount,
+      })
+    : translate("已安全应用 {translated}/{total} 条匹配译文", {
+      translated: translatedCount,
+      total: totalCount,
+    });
+  const distributionBlock = cause.distributionBlock === undefined
     ? undefined
-    : {
-        totalCount: translation.sourceUnitCount,
-        upstreamNativeCount: translation.upstreamNativeCount ?? 0,
-        publishedCount: translation.publishedUnitCount,
-        missingCount: translation.missingUnitCount,
-      };
+    : describeDistributionBlock(cause.distributionBlock.failureCode);
+  const machineTranslationFailure = describeMachineTranslationFailure(cause.machineTranslationFailure);
+  const authorityRefreshing = cause.authorityRefreshing
+    ? translate("服务器正在校验当前精确版本的权威来源与许可证")
+    : undefined;
+  const headline = distributionBlock
+    ?? authorityRefreshing
+    ?? machineTranslationFailure
+    ?? (cause.catalogDrift ? translate("本地目录与服务器权威目录待同步") : safeIntersection);
+  const hasPrimaryCause = distributionBlock !== undefined
+    || authorityRefreshing !== undefined
+    || machineTranslationFailure !== undefined
+    || cause.catalogDrift;
+  const notice = hasPrimaryCause
+    ? appendSourceSummary(
+      safeIntersection,
+      cause.catalogDrift && headline !== translate("本地目录与服务器权威目录待同步")
+        ? translate("本地目录与服务器权威目录待同步")
+        : "",
+    )
+    : undefined;
+  const scopeMetrics = coverage === undefined ? [] : describeScopeCoverageMetrics(coverage);
+  const sourceMetrics = describePluginTranslationSourceMetrics(
+    effectiveTranslation,
+    catalog,
+    coverage,
+  );
   return {
-    kind: "catalog-mismatch",
-    label,
-    catalogMismatch: { safelyAppliedCount, authorityCatalog },
+    kind: distributionBlock !== undefined
+      ? "blocked"
+      : authorityRefreshing !== undefined
+        ? "waiting"
+        : machineTranslationFailure !== undefined
+          ? isUnprocessableMachineTranslationFailure(
+            cause.machineTranslationFailure?.failureCode,
+          )
+            ? "preserved-source"
+            : cause.machineTranslationFailure?.retryable ? "waiting" : "failed"
+          : cause.catalogDrift ? "catalog-mismatch" : "localized",
+    label: appendSourceSummary(
+      headline,
+      appendSourceSummary(
+        scopeMetrics.join(" · "),
+        appendSourceSummary(sourceMetrics.map((metric) => metric.label).join(" · "), notice ?? ""),
+      ),
+    ),
+    coverage: coverageSummary(
+      headline,
+      missingCount === 0,
+      scopeMetrics,
+      sourceMetrics,
+      notice,
+    ),
   };
 }
 
