@@ -630,7 +630,7 @@ export class TransHubSettingTab extends PluginSettingTab {
     this.selectionStatusFailed = false;
     this.refreshSettings(scrollSource);
     try {
-      const result = await this.plugin.processSelectedPlugins();
+      const result = await this.plugin.processSelectedPlugins(true);
       this.selectionStatus = describePluginSelectionProcessing(result);
       new Notice(this.selectionStatus);
     } catch (error) {

@@ -372,6 +372,31 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             : { sourceVersionId: demand.coordinate.sourceVersionId }),
         };
         await saveSubmission(input, submission);
+        const requestsAuthorityRecoveryObservation = manuallyResubmit
+          && demand.coordinate.state === "distribution_blocked"
+          && demand.coordinate.failureCode === "PublicDistributionAuthorityRetryExhausted"
+          && demand.coordinate.sourceVersionId !== null
+          && demand.coordinate.sourceVersionId === submission.sourceVersionId;
+        if (requestsAuthorityRecoveryObservation) {
+          const receipt = await submitObsidianLocalizationObservation({
+            client,
+            installationId: bootstrap.installationId,
+            catalog,
+            repository: identity.repository,
+            targetLocale: input.targetLocale,
+            observationGeneration: submission.observationGeneration,
+          });
+          submission = {
+            ...submission,
+            localizationContributionId: receipt.contributionId,
+            localizationContributionState: receipt.state,
+          };
+          await saveSubmission(input, submission);
+          requestedCount += 1;
+          waitingCount += 1;
+          waitingPluginIds.push(catalog.pluginId);
+          continue;
+        }
         const demandPublished = publishedCatalog === undefined
           ? undefined
           : resolvePublishedPluginSourceFromCatalog(publishedCatalog, {

@@ -127,6 +127,7 @@ const ENGLISH_MESSAGES: Readonly<Record<string, string>> = {
   "暂无法公开发布：许可证证据已确认，服务端正在生成公开分发策略": "Cannot publish yet: license evidence is verified and the server is generating the public distribution policy",
   "无法公开发布：上游许可证不在当前安全分发范围": "Cannot publish: the upstream license is outside the current safe distribution scope",
   "无法公开发布：缺少当前精确版本的许可证证据": "Cannot publish: license evidence is missing for this exact version",
+  "无法公开发布：当前来源的许可证证据存在冲突，服务器无法唯一确认许可证": "Cannot publish: the current source has conflicting license evidence, so the server cannot uniquely verify its license",
   "无法公开发布：当前精确版本存在冲突的公开分发策略": "Cannot publish: this exact version has conflicting public distribution policies",
   "无法公开发布：当前来源版本已下架": "Cannot publish: the current source version has been withdrawn",
   "暂无法公开发布：当前来源与权威来源不一致，需重新收录精确来源版本": "Cannot publish yet: the current source differs from the authoritative source and the exact source version must be ingested again",

@@ -427,10 +427,9 @@ describe("describePluginLocalizationStatus", () => {
       },
       targetLocale: "zh-CN",
     })).toMatchObject({
-      kind: "catalog-mismatch",
+      kind: "localized",
       coverage: {
-        headline: "本地目录与服务器权威目录待同步",
-        notice: "已安全应用 1/2 条匹配译文，1 条暂不可安全应用",
+        headline: "已安全应用 1/2 条匹配译文，1 条暂不可安全应用",
         complete: false,
       },
     });
@@ -452,16 +451,15 @@ describe("describePluginLocalizationStatus", () => {
       },
       targetLocale: "zh-CN",
     })).toMatchObject({
-      kind: "catalog-mismatch",
+      kind: "localized",
       coverage: {
-        headline: "本地目录与服务器权威目录待同步",
-        notice: "已安全应用 1/1 条匹配译文",
+        headline: "已安全应用 1/1 条匹配译文",
         complete: true,
       },
     });
   });
 
-  it("本地制品变体只显示安全交集，不再伪装成服务器目录更新", () => {
+  it("本地制品变体只显示安全交集，不误报服务器目录待同步", () => {
     const localIdentity = {
       ...exactIdentity,
       artifactDigest: "cd".repeat(32),
@@ -492,9 +490,9 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     });
 
-    expect(status.kind).toBe("catalog-mismatch");
-    expect(status.coverage?.headline).toBe("本地目录与服务器权威目录待同步");
-    expect(status.coverage?.notice).toBe("已安全应用 1/2 条匹配译文，1 条暂不可安全应用");
+    expect(status.kind).toBe("localized");
+    expect(status.coverage?.headline).toBe("已安全应用 1/2 条匹配译文，1 条暂不可安全应用");
+    expect(status.coverage?.notice).toBeUndefined();
     expect(status.coverage?.complete).toBe(false);
   });
 
@@ -552,7 +550,7 @@ describe("describePluginLocalizationStatus", () => {
       "无法公开发布：当前精确版本的公开分发策略不可用",
     );
     expect(status.coverage?.notice).toBe(
-      "已安全应用 1/2 条匹配译文，1 条暂不可安全应用；本地目录与服务器权威目录待同步",
+      "已安全应用 1/2 条匹配译文，1 条暂不可安全应用",
     );
     expect(status.label).not.toContain("等待");
     expect(pluginManualRetryKind({
@@ -813,6 +811,7 @@ describe("describePluginLocalizationStatus", () => {
   it.each([
     ["PublicDistributionPolicyPending", "暂无法公开发布：许可证证据已确认，服务端正在生成公开分发策略"],
     ["PublicDistributionLicenseUnsupported", "无法公开发布：上游许可证不在当前安全分发范围"],
+    ["PublicDistributionLicenseEvidenceAmbiguous", "无法公开发布：当前来源的许可证证据存在冲突，服务器无法唯一确认许可证"],
     ["PublicDistributionPolicyAmbiguous", "无法公开发布：当前精确版本存在冲突的公开分发策略"],
     ["PublicSourceVersionYanked", "无法公开发布：当前来源版本已下架"],
     ["PublicDistributionSourceDrift", "暂无法公开发布：当前来源与权威来源不一致，需重新收录精确来源版本"],
@@ -941,7 +940,11 @@ describe("describePluginLocalizationStatus", () => {
 
     expect(status.kind).toBe("waiting");
     expect(status.coverage?.headline).toBe("服务器正在校验当前精确版本的权威来源与许可证");
-    if (drift) expect(status.coverage?.notice).toContain("本地目录与服务器权威目录待同步");
+    expect(status.coverage?.notice).toBe(
+      drift
+        ? "已安全应用 1/2 条匹配译文，1 条暂不可安全应用"
+        : "已安全应用 2/2 条匹配译文",
+    );
   });
 
   it("当前目录重建失败时不被旧译文的目录差异状态遮挡", () => {
@@ -1304,10 +1307,9 @@ describe("describePluginLocalizationStatus", () => {
       },
       targetLocale: "zh-CN",
     })).toMatchObject({
-      kind: "catalog-mismatch",
+      kind: "localized",
       coverage: {
-        headline: "本地目录与服务器权威目录待同步",
-        notice: "已安全应用 1/2 条匹配译文，1 条暂不可安全应用",
+        headline: "已安全应用 1/2 条匹配译文，1 条暂不可安全应用",
         complete: false,
       },
     });
@@ -1349,10 +1351,9 @@ describe("describePluginLocalizationStatus", () => {
       },
       targetLocale: "zh-CN",
     })).toMatchObject({
-      kind: "catalog-mismatch",
+      kind: "localized",
       coverage: {
-        headline: "本地目录与服务器权威目录待同步",
-        notice: "已安全应用 1350/1683 条匹配译文，333 条暂不可安全应用",
+        headline: "已安全应用 1350/1683 条匹配译文，333 条暂不可安全应用",
         complete: false,
         scopeMetrics: ["插件界面 1350/1402", "名称与说明 0/2", "README 0/290"],
         sourceMetrics: [{ label: "插件自带 1350", tone: "native" }],

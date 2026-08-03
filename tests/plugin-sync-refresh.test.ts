@@ -1787,6 +1787,101 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     }));
   });
 
+  it("manual refresh submits one new observation for an exact exhausted authority", async () => {
+    mocks.resolvePublished.mockReturnValue(undefined);
+    let state: PluginState = {
+      ...retryablePluginState({
+        contributionState: "source_attested",
+        sourceVersionId: "current-source",
+        localizationTargetLocale: "zh-CN",
+        localizationContributionId: "old-localization",
+        localizationContributionState: "distribution_blocked",
+        localizationDemandStatus: {
+          state: "distribution_blocked",
+          sourceVersionId: "current-source",
+          targetLocale: "zh-CN",
+          targetVariant: "default",
+          totalUnitCount: 1,
+          workItemCount: 1,
+          nativeUnitCount: 0,
+          queuedCount: 0,
+          runningCount: 0,
+          succeededCount: 1,
+          failedCount: 0,
+          reviewedUnitCount: 0,
+          publishedUnitCount: 0,
+          retryAfterSeconds: 0,
+          failureCode: "PublicDistributionAuthorityRetryExhausted",
+          failureRetryable: false,
+          updatedAt: "2026-08-03T00:00:00.000Z",
+        },
+      }),
+    };
+    const getLocalizationDemandStatus = vi.fn().mockResolvedValue({
+      state: "distribution_blocked",
+      retryAfterSeconds: 0,
+      coordinates: [{
+        state: "distribution_blocked",
+        sourceVersionId: "current-source",
+        targetLocale: "zh-CN",
+        targetVariant: "default",
+        totalUnitCount: 1,
+        workItemCount: 1,
+        nativeUnitCount: 0,
+        queuedCount: 0,
+        runningCount: 0,
+        succeededCount: 1,
+        failedCount: 0,
+        reviewedUnitCount: 0,
+        publishedUnitCount: 0,
+        manifestId: null,
+        generationNumber: null,
+        retryAfterSeconds: 0,
+        failureCode: "PublicDistributionAuthorityRetryExhausted",
+        failureRetryable: false,
+        failureAttemptNumber: null,
+        updatedAt: "2026-08-03T00:00:00.000Z",
+      }],
+    });
+    vi.mocked(submitObsidianLocalizationObservation).mockResolvedValue({
+      contributionId: "authority-recovery-observation",
+      state: "received",
+    } as never);
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: {
+          getContributionStatus: vi.fn().mockResolvedValue({ state: "source_attested" }),
+          getLocalizationDemandStatus,
+        },
+        bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+
+    const summary = await synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "https://api.trans-hub.net",
+      targetLocale: "zh-CN",
+      excludedPluginIds: [],
+      manualResubmitPluginIds: ["dataview"],
+      activationStore,
+      translationPackStore,
+      getState: () => state,
+      replaceState: (next) => { state = next; },
+      save: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
+    expect(submitObsidianLocalizationObservation).toHaveBeenCalledWith(expect.objectContaining({
+      targetLocale: "zh-CN",
+      observationGeneration: 1,
+    }));
+    expect(state.pluginSubmissions.dataview).toEqual(expect.objectContaining({
+      localizationContributionId: "authority-recovery-observation",
+      localizationContributionState: "received",
+    }));
+    expect(summary).toEqual(expect.objectContaining({ requestedCount: 1, waitingCount: 1 }));
+  });
+
   it("isolates an exhausted plugin retry budget and continues processing the remaining plugins", async () => {
     mocks.resolvePublished.mockReturnValue(undefined);
     mocks.resolveIdentity.mockImplementation((pluginId: string) => {

@@ -208,8 +208,13 @@ export default class TransHubObsidianPlugin extends Plugin {
   applyCachedPluginTranslations(): void { this.pluginAutomation.applyCachedTranslations(); }
   refreshPluginTranslationRuntime(): void { this.pluginAutomation.refreshRuntime(); }
 
-  processSelectedPlugins(): Promise<PluginSelectionProcessingResult> {
-    return this.processPlugins();
+  processSelectedPlugins(
+    resubmitRecoverableAuthorityObservations = false,
+  ): Promise<PluginSelectionProcessingResult> {
+    return this.processPlugins(
+      undefined,
+      resubmitRecoverableAuthorityObservations ? this.state.enabledPluginIds : undefined,
+    );
   }
 
   processPluginIds(pluginIds: readonly string[]): Promise<PluginSelectionProcessingResult> {

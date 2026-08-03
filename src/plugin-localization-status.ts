@@ -258,7 +258,6 @@ export function describePluginLocalizationStatus(input: {
           input.catalog,
           input.targetLocale,
           {
-            catalogDrift: !identity.exact,
             distributionBlock,
             machineTranslationFailure,
             authorityRefreshing,
@@ -493,6 +492,8 @@ function describeDistributionBlock(failureCode: string | undefined): string {
       return translate("无法公开发布：上游许可证不在当前安全分发范围");
     case "PublicDistributionLicenseEvidenceMissing":
       return translate("无法公开发布：缺少当前精确版本的许可证证据");
+    case "PublicDistributionLicenseEvidenceAmbiguous":
+      return translate("无法公开发布：当前来源的许可证证据存在冲突，服务器无法唯一确认许可证");
     case "PublicDistributionPolicyAmbiguous":
       return translate("无法公开发布：当前精确版本存在冲突的公开分发策略");
     case "PublicSourceVersionYanked":
@@ -674,7 +675,6 @@ function safeIntersectionStatus(
   catalog: PluginUiCatalog,
   targetLocale: string,
   cause: {
-    readonly catalogDrift: boolean;
     readonly authorityRefreshing?: boolean;
     readonly distributionBlock?: { readonly failureCode?: string };
     readonly machineTranslationFailure?: {
@@ -710,18 +710,12 @@ function safeIntersectionStatus(
   const headline = distributionBlock
     ?? authorityRefreshing
     ?? machineTranslationFailure
-    ?? (cause.catalogDrift ? translate("本地目录与服务器权威目录待同步") : safeIntersection);
+    ?? safeIntersection;
   const hasPrimaryCause = distributionBlock !== undefined
     || authorityRefreshing !== undefined
-    || machineTranslationFailure !== undefined
-    || cause.catalogDrift;
+    || machineTranslationFailure !== undefined;
   const notice = hasPrimaryCause
-    ? appendSourceSummary(
-      safeIntersection,
-      cause.catalogDrift && headline !== translate("本地目录与服务器权威目录待同步")
-        ? translate("本地目录与服务器权威目录待同步")
-        : "",
-    )
+    ? safeIntersection
     : undefined;
   const scopeMetrics = coverage === undefined ? [] : describeScopeCoverageMetrics(coverage);
   const sourceMetrics = describePluginTranslationSourceMetrics(
@@ -740,7 +734,7 @@ function safeIntersectionStatus(
           )
             ? "preserved-source"
             : cause.machineTranslationFailure?.retryable ? "waiting" : "failed"
-          : cause.catalogDrift ? "catalog-mismatch" : "localized",
+          : "localized",
     label: appendSourceSummary(
       headline,
       appendSourceSummary(
