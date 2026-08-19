@@ -20,7 +20,7 @@ const publicFiles = [
 
 const primaryReadmeContent = readFileSync(publicReadme, "utf8");
 if (
-  !primaryReadmeContent.includes("简体中文见下方")
+  !primaryReadmeContent.includes("简体中文见上方")
   || !primaryReadmeContent.includes("# 语枢 · 插件本地化")
   || primaryReadmeContent.includes('href="readme/README.zh-CN.md"')
 ) {
