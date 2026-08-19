@@ -20,7 +20,7 @@ import {
   restorePublishedPluginFilePatch,
 } from "../src/third-party-plugin-patcher";
 
-async function readCopilotTestBundle(): Promise<string> {
+function readCopilotTestBundle(): string {
   return [
     'setting.setName("Copilot Settings");',
     'setting.setName("Reset Settings");',
@@ -101,7 +101,7 @@ describe("third-party plugin file patching", () => {
   });
 
   it("applies, exposes the logical bundle, and restores the real Copilot bundle", async () => {
-    const bundle = await readCopilotTestBundle();
+    const bundle = readCopilotTestBundle();
     const plugin: InstalledObsidianPlugin = {
       id: "copilot",
       name: "Copilot",
@@ -194,7 +194,7 @@ describe("third-party plugin file patching", () => {
   });
 
   it("restores a legacy version-1 receipt written with the old digest normalization", async () => {
-    const bundle = await readCopilotTestBundle();
+    const bundle = readCopilotTestBundle();
     const plugin: InstalledObsidianPlugin = {
       id: "copilot",
       name: "Copilot",
@@ -238,7 +238,7 @@ describe("third-party plugin file patching", () => {
   });
 
   it("re-applying heals a stuck legacy patch by restoring it first", async () => {
-    const bundle = await readCopilotTestBundle();
+    const bundle = readCopilotTestBundle();
     const plugin: InstalledObsidianPlugin = {
       id: "copilot",
       name: "Copilot",
