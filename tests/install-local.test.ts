@@ -13,8 +13,15 @@ import { resolve } from "node:path";
 
 import { expect, it } from "vitest";
 
+const pluginRoot = resolve(import.meta.dirname, "..");
+const installScript = readFileSync(resolve(pluginRoot, "scripts", "install-local.mjs"), "utf8");
+
+it("checks only the Obsidian client directory before issuing an install receipt", () => {
+  expect(installScript).toContain('relative(repositoryRoot, root)');
+  expect(installScript).toContain('pluginRelativePath === "" ? "." : pluginRelativePath');
+});
+
 it("builds and installs each exact bundle file without changing data", () => {
-  const pluginRoot = resolve(import.meta.dirname, "..");
   const vault = mkdtempSync(resolve(tmpdir(), "transhub-obsidian-install-"));
   const installedRoot = resolve(
     vault,
@@ -62,7 +69,6 @@ it("builds and installs each exact bundle file without changing data", () => {
 });
 
 it("rejects a symlinked intermediate plugins directory", () => {
-  const pluginRoot = resolve(import.meta.dirname, "..");
   const vault = mkdtempSync(resolve(tmpdir(), "transhub-obsidian-install-link-"));
   const external = mkdtempSync(resolve(tmpdir(), "transhub-obsidian-external-"));
   mkdirSync(resolve(vault, ".obsidian"), { recursive: true });

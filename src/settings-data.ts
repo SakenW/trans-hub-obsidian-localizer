@@ -4,6 +4,7 @@ export interface TransHubPluginSettings {
   targetLocale: TargetLocale;
   pluginTranslationEnabled: boolean;
   pluginMetadataTranslationEnabled: boolean;
+  thirdPartyFilePatchingEnabled: boolean;
   excludedPluginIds: string[];
 }
 
@@ -11,6 +12,7 @@ export const DEFAULT_SETTINGS: Readonly<TransHubPluginSettings> = {
   targetLocale: "zh-CN",
   pluginTranslationEnabled: true,
   pluginMetadataTranslationEnabled: true,
+  thirdPartyFilePatchingEnabled: false,
   excludedPluginIds: [],
 };
 
@@ -25,6 +27,10 @@ export function loadSettings(
     pluginMetadataTranslationEnabled: booleanOr(
       data.pluginMetadataTranslationEnabled,
       DEFAULT_SETTINGS.pluginMetadataTranslationEnabled,
+    ),
+    thirdPartyFilePatchingEnabled: booleanOr(
+      data.thirdPartyFilePatchingEnabled,
+      DEFAULT_SETTINGS.thirdPartyFilePatchingEnabled,
     ),
     excludedPluginIds: stringArrayOr(data.excludedPluginIds, DEFAULT_SETTINGS.excludedPluginIds),
   };

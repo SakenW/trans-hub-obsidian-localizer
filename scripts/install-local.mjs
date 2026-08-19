@@ -10,7 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { basename, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import process from "node:process";
 
 const root = resolve(import.meta.dirname, "..");
@@ -33,7 +33,9 @@ const repositoryRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   cwd: root,
   encoding: "utf8",
 }).trim();
-const gitStatus = execFileSync("git", ["status", "--porcelain", "--", "."], {
+const pluginRelativePath = relative(repositoryRoot, root);
+const gitStatusPath = pluginRelativePath === "" ? "." : pluginRelativePath;
+const gitStatus = execFileSync("git", ["status", "--porcelain", "--", gitStatusPath], {
   cwd: repositoryRoot,
   encoding: "utf8",
 }).trim();

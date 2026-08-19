@@ -2,6 +2,8 @@ import type {
   LocalizationDemandCoordinateStatus,
   LocalizationDemandState,
   LocalizationDemandStatus,
+  LocalizationDemandStatusBatch,
+  LocalizationDemandStatusBatchItem,
 } from "./contracts.js";
 import { protocolError } from "./errors.js";
 import { parseNullable } from "./parser-primitives.js";
@@ -196,8 +198,8 @@ function parseCoordinate(
     );
   }
   if (
-    state === "distribution_blocked"
-    && (failureCode === null || failureRetryable || retryAfterSeconds !== 0)
+    state === "distribution_blocked" &&
+    (failureCode === null || failureRetryable || retryAfterSeconds !== 0)
   ) {
     protocolError(
       "CP_INVALID_VALUE",
@@ -289,5 +291,59 @@ export function parseLocalizationDemandStatus(
       },
     ),
     updatedAt: expectTimestamp(record.updatedAt, `${path}.updatedAt`),
+  };
+}
+
+function parseBatchItem(
+  value: unknown,
+  path: string,
+): LocalizationDemandStatusBatchItem {
+  const record = exactObject(value, path, [
+    "contributionId",
+    "found",
+    "coordinates",
+  ]);
+  const found = record.found;
+  if (typeof found !== "boolean") {
+    protocolError("CP_INVALID_TYPE", `${path}.found`, "expected a boolean");
+  }
+  const coordinates = expectArray(
+    record.coordinates,
+    `${path}.coordinates`,
+    parseCoordinate,
+    { minimum: 0, maximum: 128 },
+  );
+  if (found !== (coordinates.length > 0)) {
+    protocolError(
+      "CP_INVALID_VALUE",
+      `${path}.coordinates`,
+      "found must be true exactly when coordinates are present",
+    );
+  }
+  return {
+    contributionId: expectUuid(record.contributionId, `${path}.contributionId`),
+    found,
+    coordinates,
+  };
+}
+
+export function parseLocalizationDemandStatusBatch(
+  value: unknown,
+  path = "$",
+): LocalizationDemandStatusBatch {
+  const record = exactObject(value, path, ["kind", "protocol", "items"]);
+  expectLiteral(
+    record.kind,
+    "localization_demand_status_batch",
+    `${path}.kind`,
+  );
+  const items = expectArray(record.items, `${path}.items`, parseBatchItem, {
+    minimum: 0,
+    maximum: 1000,
+  });
+  return {
+    kind: "localization_demand_status_batch",
+    protocol: parseProtocolVersion(record.protocol, `${path}.protocol`),
+    items,
   };
 }

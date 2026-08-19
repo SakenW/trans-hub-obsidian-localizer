@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildConflictSafeDictionary,
   buildRuntimeTranslationPlan,
   filterTranslationScope,
+  PluginUiTranslationRuntime,
   shouldUsePluginMetadataPlan,
   shouldTranslatePluginUiElement,
   translatePluginReadmeTemplate,
@@ -89,6 +90,43 @@ describe("dynamic UI template replacement", () => {
 });
 
 describe("runtime DOM boundary", () => {
+  it("detaches a closed popout root before allowing a replacement observer", () => {
+    class MockMutationObserver {
+      static instances: MockMutationObserver[] = [];
+      disconnected = false;
+
+      constructor(_callback: MutationCallback) { MockMutationObserver.instances.push(this); }
+      observe(_target: Node, _options: MutationObserverInit): void {}
+      disconnect(): void { this.disconnected = true; }
+      takeRecords(): MutationRecord[] { return []; }
+    }
+    const root = {
+      nodeType: 1,
+      childNodes: [],
+      closest: () => null,
+      contains: () => true,
+      getAttribute: () => null,
+      matches: () => false,
+      ownerDocument: {
+        defaultView: { MutationObserver: MockMutationObserver },
+        createTreeWalker: () => ({ nextNode: () => null }),
+      },
+    } as unknown as HTMLElement;
+    const runtime = new PluginUiTranslationRuntime();
+    vi.stubGlobal("NodeFilter", { SHOW_TEXT: 4, SHOW_ELEMENT: 1 });
+    try {
+      runtime.start(root);
+      runtime.stopRoot(root);
+      runtime.start(root);
+
+      expect(MockMutationObserver.instances).toHaveLength(2);
+      expect(MockMutationObserver.instances[0]?.disconnected).toBe(true);
+    } finally {
+      runtime.stop();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("does not translate search-highlight fragments as complete plugin strings", () => {
     const highlighted = {
       closest: (selector: string): Element | null => selector === ".suggestion-highlight" ? {} as Element : null,
@@ -99,10 +137,8 @@ describe("runtime DOM boundary", () => {
     expect(shouldTranslatePluginUiElement(ordinary)).toBe(true);
   });
 
-  it("uses the metadata plan for both supported native installed-plugin layouts", () => {
-    const currentObsidianSetting = {
-      closest: (selector: string): Element | null => selector.includes(".modal.mod-settings") ? {} as Element : null,
-    };
+  it("keeps settings-modal bodies out of the global metadata plan", () => {
+    const currentObsidianSetting = { closest: (): Element | null => null };
     const flattenedInstalledPluginRow = {
       closest: (selector: string): Element | null => selector.includes(".installed-plugins-container")
         ? {} as Element
@@ -110,9 +146,65 @@ describe("runtime DOM boundary", () => {
     };
     const regularRuntimeSurface = { closest: (): Element | null => null };
 
-    expect(shouldUsePluginMetadataPlan(currentObsidianSetting)).toBe(true);
+    expect(shouldUsePluginMetadataPlan(currentObsidianSetting)).toBe(false);
     expect(shouldUsePluginMetadataPlan(flattenedInstalledPluginRow)).toBe(true);
     expect(shouldUsePluginMetadataPlan(regularRuntimeSurface)).toBe(false);
+  });
+
+  it("uses the active plugin tab to select a settings runtime plan and leaves an unowned modal untouched", () => {
+    const runtime = new PluginUiTranslationRuntime();
+    runtime.update([
+      { pluginId: "omnisearch", source: "Omnisearch", target: "全能搜索", scopes: ["metadata"] },
+      { pluginId: "omnisearch", source: "Indexing", target: "索引", scopes: ["runtime-ui"] },
+      { pluginId: "copilot", source: "Copilot", target: "副驾驶", scopes: ["metadata"] },
+      { pluginId: "copilot", source: "Indexing", target: "建立索引", scopes: ["runtime-ui"] },
+    ]);
+    const activeItem = {
+      getAttribute: () => null,
+      textContent: "全能搜索",
+    } as unknown as HTMLElement;
+    const modal = {
+      querySelector: () => activeItem,
+    } as unknown as Element;
+    const settingsBody = {
+      closest: (selector: string): Element | null => selector === ".modal.mod-settings" ? modal : null,
+    } as unknown as Element;
+    const unownedModal = {
+      querySelector: () => null,
+    } as unknown as Element;
+    const unownedBody = {
+      closest: (selector: string): Element | null => selector === ".modal.mod-settings" ? unownedModal : null,
+    } as unknown as Element;
+    const unsafeRuntime = runtime as unknown as {
+      runtimePlanForElement(element: Element): ReturnType<typeof buildRuntimeTranslationPlan> | undefined;
+    };
+
+    expect(translatePluginUiValue("Indexing", unsafeRuntime.runtimePlanForElement(settingsBody)!)).toBe("索引");
+    expect(unsafeRuntime.runtimePlanForElement(unownedBody)).toBeUndefined();
+  });
+
+  it("recognizes an active plugin tab that appends settings and version text", () => {
+    const runtime = new PluginUiTranslationRuntime();
+    runtime.update([
+      { pluginId: "copilot", source: "Copilot", target: "副驾驶", scopes: ["metadata"] },
+      { pluginId: "copilot", source: "Copilot Settings", target: "副驾驶设置", scopes: ["runtime-ui"] },
+    ]);
+    const activeItem = {
+      getAttribute: () => null,
+      textContent: "Copilot Settings v3.3.3",
+    } as unknown as HTMLElement;
+    const modal = { querySelector: () => activeItem } as unknown as Element;
+    const settingsBody = {
+      closest: (selector: string): Element | null => selector === ".modal.mod-settings" ? modal : null,
+    } as unknown as Element;
+    const unsafeRuntime = runtime as unknown as {
+      runtimePlanForElement(element: Element): ReturnType<typeof buildRuntimeTranslationPlan> | undefined;
+    };
+
+    expect(translatePluginUiValue(
+      "Copilot Settings",
+      unsafeRuntime.runtimePlanForElement(settingsBody)!,
+    )).toBe("副驾驶设置");
   });
 
   it("translates a complete fragmented field and never a keyword fragment", () => {

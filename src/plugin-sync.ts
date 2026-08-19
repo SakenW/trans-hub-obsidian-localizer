@@ -41,14 +41,21 @@ import {
   submitObsidianPluginDiscovery,
 } from "./submission";
 import { downloadPluginTranslations } from "./translation-sync";
+import { refreshPluginStatusFromBatch } from "./plugin-status-refresh";
 
 export interface PluginSyncSummary {
   readonly submittedCount: number;
   readonly requestedCount: number;
   readonly pulledCount: number;
   readonly waitingCount: number;
+  /**
+   * Machine translation is complete and the server is building its public
+   * distribution package. These items remain in the automatic polling loop.
+   */
+  readonly exportPendingCount?: number;
   readonly translationCount: number;
   readonly waitingPluginIds?: readonly string[];
+  readonly exportPendingPluginIds?: readonly string[];
   readonly failedPluginIds?: readonly string[];
   readonly nextRetryAfterMs?: number;
   readonly demandStateCounts?: Readonly<Partial<Record<LocalizationDemandState, number>>>;
@@ -106,8 +113,10 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   let requestedCount = 0;
   let pulledCount = 0;
   let waitingCount = 0;
+  let exportPendingCount = 0;
   let translationCount = 0;
   const waitingPluginIds: string[] = [];
+  const exportPendingPluginIds: string[] = [];
   const failedPluginIds: string[] = [];
   const demandStateCounts: Partial<Record<LocalizationDemandState, number>> = {};
   let authorityRefreshingCount = 0;
@@ -122,12 +131,17 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             targetLocale: input.targetLocale,
             localCatalogIdentity: catalog.catalogIdentity,
           });
-      const authoritativeArtifactDigest = publishedCatalog === undefined
-        ? undefined
-        : resolvePublishedPluginArtifactDigestFromCatalog(publishedCatalog, {
-            pluginId: catalog.pluginId,
-            pluginVersion: catalog.pluginVersion,
-          });
+      // Prefer the resolved coverage identity digest: it is the current
+      // authoritative scan digest, which is what the local scanner produces.
+      // The raw catalog fallback only applies when no locale coverage exists.
+      const authoritativeArtifactDigest = published?.artifactDigest
+        ?? (publishedCatalog === undefined
+          ? undefined
+          : resolvePublishedPluginArtifactDigestFromCatalog(publishedCatalog, {
+              pluginId: catalog.pluginId,
+              pluginVersion: catalog.pluginVersion,
+              targetLocale: input.targetLocale,
+            }));
       const localArtifactVariant = authoritativeArtifactDigest !== undefined
         && authoritativeArtifactDigest !== catalog.artifactDigest;
       let publishedDeliverySynchronized = false;
@@ -174,7 +188,11 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             deliveryWaiting = true;
           }
         }
-        if (!publishedTranslationCoverageIncomplete) {
+        const localCatalogUnitCount = catalog.catalogIdentity?.unitCount ?? catalog.strings.length;
+        const publishedCatalogNeedsExpansion = !localArtifactVariant
+          && !published.catalogIdentityExact
+          && localCatalogUnitCount > published.sourceUnitCount;
+        if (!publishedTranslationCoverageIncomplete && !publishedCatalogNeedsExpansion) {
           if (deliveryWaiting) {
             throw new Error("服务器公开目录与译文制品状态不一致，请稍后重试。");
           }
@@ -187,7 +205,13 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           continue;
         }
       }
-      if (published === undefined && localArtifactVariant) {
+      if (published === undefined && localArtifactVariant && !manualResubmit.has(catalog.pluginId)) {
+        // A manual resubmit may still submit the discovery observation: the
+        // authoritative digest can be stale server-side (an object version
+        // acquired before the bundle-normalization change), and the server
+        // reconciles it by re-acquiring the upstream artifact.  Without this
+        // escape hatch the client would stay paused forever and could never
+        // trigger the one-time authority recovery observation.
         await saveSynchronizationError(
           input,
           catalog,
@@ -496,6 +520,17 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           continue;
         }
         if (demand.disposition === "blocked") continue;
+        if (demand.coordinate.state === "export_pending") {
+          // The machine results are ready, but the server still needs to build
+          // and publish the immutable public distribution package. Keep this
+          // in the ordinary retry loop: no human review is required here.
+          exportPendingCount += 1;
+          exportPendingPluginIds.push(catalog.pluginId);
+          nextRetryAfterMs = mergeRetryAfter(nextRetryAfterMs, demand.retryAfterMs);
+          waitingCount += 1;
+          waitingPluginIds.push(catalog.pluginId);
+          continue;
+        }
         nextRetryAfterMs = mergeRetryAfter(nextRetryAfterMs, demand.retryAfterMs);
       }
       waitingCount += 1;
@@ -511,8 +546,10 @@ export async function synchronizeConfiguredPluginTranslations(input: {
     requestedCount,
     pulledCount,
     waitingCount,
+    ...(exportPendingCount === 0 ? {} : { exportPendingCount }),
     translationCount,
     waitingPluginIds,
+    ...(exportPendingPluginIds.length === 0 ? {} : { exportPendingPluginIds }),
     failedPluginIds: retryableFailedPluginIds(
       input,
       failedPluginIds,
@@ -613,7 +650,14 @@ function authoritativeLocalizationSubmission(input: {
     && !input.manuallyResubmit
     && !sourceChanged
     && existing.localizationTargetLocale === input.targetLocale
-    && existing.localizationContributionId !== undefined;
+    && existing.localizationContributionId !== undefined
+    // A demand receipt is bound to its authoritative source version.  Do not
+    // carry a cached terminal state into a newer authority observation merely
+    // because the submission metadata itself was already updated.
+    && (
+      existing.localizationDemandStatus === undefined
+      || existing.localizationDemandStatus.sourceVersionId === input.sourceVersionId
+    );
   return {
     pluginId: input.catalog.pluginId,
     pluginVersion: input.catalog.pluginVersion,
@@ -1096,4 +1140,57 @@ function translationExportStateKey(sourceVersionId: string, targetLocale: string
 
 function isLocalHttp(value: string): boolean {
   return /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/u.test(value);
+}
+
+/**
+ * R-028 / Phase 3: refresh the client status line with a single zero-write
+ * batch read.  No observation, demand, job, retry or authority event is ever
+ * submitted here.  Plugins without a mapped contribution are surfaced as
+ * unknown (not "processing"), so the UI never misreads an absent item as
+ * work in flight.
+ */
+export async function refreshConfiguredPluginStatuses(input: {
+  readonly apiBaseUrl: string;
+  readonly targetLocale: TargetLocale;
+  readonly excludedPluginIds: readonly string[];
+  readonly onlyPluginIds?: readonly string[];
+  readonly activationStore: ActivationStore;
+  readonly getState: () => PluginState;
+}): Promise<PluginSyncSummary> {
+  const { client } = await input.activationStore.client({
+    apiBaseUrl: input.apiBaseUrl,
+  });
+  const excluded = new Set(input.excludedPluginIds);
+  const only = input.onlyPluginIds === undefined ? null : new Set(input.onlyPluginIds);
+  const contributionToPlugin = new Map<string, string>();
+  for (const catalog of Object.values(input.getState().pluginCatalogs)) {
+    if (excluded.has(catalog.pluginId) || (only !== null && !only.has(catalog.pluginId))) {
+      continue;
+    }
+    const submission = input.getState().pluginSubmissions[catalog.pluginId];
+    const contributionId = submission?.localizationContributionId;
+    if (contributionId === undefined) {
+      continue;
+    }
+    if (!contributionToPlugin.has(contributionId)) {
+      contributionToPlugin.set(contributionId, catalog.pluginId);
+    }
+  }
+  const contributionIds = [...contributionToPlugin.keys()];
+  if (contributionIds.length === 0) {
+    return {
+      submittedCount: 0,
+      requestedCount: 0,
+      pulledCount: 0,
+      translationCount: 0,
+      waitingCount: 0,
+    };
+  }
+  const batch = await client.getLocalizationDemandStatusBatch({ contributionIds });
+  const summary = refreshPluginStatusFromBatch({
+    batch: batch.items,
+    contributionIdToPluginId: contributionToPlugin,
+    targetLocale: input.targetLocale,
+  });
+  return summary;
 }

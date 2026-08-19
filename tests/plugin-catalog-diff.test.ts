@@ -284,6 +284,51 @@ describe("plugin catalog version carry-over", () => {
     expect(selectCurrentCatalogTranslations(metadataOnlyCatalog, translation)).toEqual([]);
   });
 
+  it("当前扫描发现更多条目时不再用旧权威目录的较小分母掩盖缺口", () => {
+    const expandedCatalog = {
+      ...catalog,
+      catalogIdentity: {
+        protocol: "trans-hub.source-catalog-identity" as const,
+        revision: 2 as const,
+        resourceKey: "sample",
+        resourceVersion: "2.0.0",
+        sourceLocale: "en",
+        artifactDigest: "artifact",
+        unitCount: 4,
+        digest: "expanded",
+        scopes: [
+          { scope: "metadata", unitCount: 2, digest: "metadata" },
+          { scope: "runtime-ui", unitCount: 2, digest: "runtime" },
+        ],
+      },
+    };
+    const staleAuthority = {
+      ...previous,
+      pluginVersion: "2.0.0",
+      artifactDigest: "artifact",
+      sourceUnitCount: 2,
+      upstreamNativeCount: 0,
+      catalogIdentity: {
+        protocol: "trans-hub.source-catalog-identity" as const,
+        revision: 2 as const,
+        resourceKey: "sample",
+        resourceVersion: "2.0.0",
+        sourceLocale: "en",
+        artifactDigest: "artifact",
+        unitCount: 2,
+        digest: "stale",
+        scopes: [{ scope: "metadata", unitCount: 2, digest: "metadata" }],
+      },
+      entries: [
+        { pluginId: "sample", source: "Sample", target: "示例" },
+        { pluginId: "sample", source: "Sample description", target: "示例说明" },
+      ],
+    };
+
+    expect(calculatePluginTranslationCoverage(expandedCatalog, staleAuthority, "zh-CN"))
+      .toEqual(expect.objectContaining({ totalCount: 4, translatedCount: 2, missingCount: 2 }));
+  });
+
   it("制品摘要不一致时不采用更大权威目录的汇总", () => {
     const localCatalog = {
       ...catalog,

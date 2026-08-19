@@ -108,4 +108,25 @@ describe("plugin picker scroll state", () => {
     expect(state.pluginListScrollTop).toBe(516);
     expect(state.update).toHaveBeenCalledOnce();
   });
+
+  it("rerenders the open settings form when an external command reports its status", () => {
+    const container = { querySelector: () => null } as unknown as HTMLElement;
+    const tab = new TransHubSettingTab(new App(), {} as never);
+    const state = tab as unknown as {
+      containerEl: HTMLElement;
+      renderedContainerEl: HTMLElement | null;
+      selectionStatus: string;
+      selectionStatusFailed: boolean;
+      update: () => void;
+    };
+    state.containerEl = container;
+    state.renderedContainerEl = container;
+    state.update = vi.fn();
+
+    tab.reportCommandStatus("连接成功，正在同步所选插件…", false);
+
+    expect(state.selectionStatus).toBe("连接成功，正在同步所选插件…");
+    expect(state.selectionStatusFailed).toBe(false);
+    expect(state.update).toHaveBeenCalledOnce();
+  });
 });

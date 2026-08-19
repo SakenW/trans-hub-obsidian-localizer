@@ -1,9 +1,9 @@
 {
   "name": "@trans-hub/obsidian-client",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "license": "Apache-2.0",
-  "description": "Automatic translation and localization for Obsidian community plugin names, descriptions, and user interfaces.",
+  "description": "Runtime i18n that translates and localizes Obsidian community plugins with server-authoritative, version-aware translations that never modify third-party files.",
   "keywords": [
     "obsidian",
     "obsidian-plugin",

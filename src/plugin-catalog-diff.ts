@@ -101,13 +101,17 @@ export function calculatePluginTranslationCoverage(
   const canonicalStrings = catalog.strings.filter(isCanonicalPluginCatalogString);
   const currentSources = new Map(canonicalStrings.map((item) => [item.source, item.placeholderSignature]));
   const authorityIdentity = effectiveTranslation.catalogIdentity;
-  const authorityCatalogMatchesArtifact = authorityIdentity !== undefined
+  // An equal installed artifact does not prove an equal source catalog: the
+  // adapter can safely discover additional UI strings without changing
+  // main.js. An authority catalog may still describe a deliberately smaller
+  // local scan, but it must never hide strings that the current scan found.
+  const authorityCatalogCoversLocalCatalog = authorityIdentity !== undefined
     && effectiveTranslation.pluginVersion === catalog.pluginVersion
     && effectiveTranslation.sourceUnitCount === authorityIdentity.unitCount
     && (effectiveTranslation.upstreamNativeCount ?? 0) <= authorityIdentity.unitCount
     && authorityIdentity.artifactDigest === catalog.artifactDigest
     && effectiveTranslation.artifactDigest === catalog.artifactDigest
-    && catalog.catalogIdentity?.artifactDigest === catalog.artifactDigest;
+    && authorityIdentity.unitCount >= canonicalStrings.length;
   const allCatalogSources = new Set(catalog.strings.map((item) => item.source));
   const translatedSources = new Set(effectiveTranslation.entries
     .filter((entry) => isCompatibleEntry(entry, currentSources))
@@ -127,7 +131,7 @@ export function calculatePluginTranslationCoverage(
   // the same catalog cardinality as this local scan and cannot exceed that
   // scan. Otherwise it can belong to an older or broader parser profile and
   // must not inflate current coverage.
-  const nativeCoverageAligned = authorityCatalogMatchesArtifact
+  const nativeCoverageAligned = authorityCatalogCoversLocalCatalog
     || effectiveTranslation.sourceUnitCount === undefined
     || effectiveTranslation.sourceUnitCount === currentSources.size
     && effectiveNativeCount <= currentSources.size;
@@ -144,11 +148,11 @@ export function calculatePluginTranslationCoverage(
       0,
     )
     : 0;
-  const totalCount = authorityCatalogMatchesArtifact
+  const totalCount = authorityCatalogCoversLocalCatalog
     ? authorityIdentity.unitCount
     : currentSources.size;
   const translatedCount = Math.min(totalCount, translatedSources.size + nativeCountWithoutEntries);
-  const authorityScopeTotals = authorityCatalogMatchesArtifact
+  const authorityScopeTotals = authorityCatalogCoversLocalCatalog
     ? new Map(authorityIdentity.scopes.map((item) => [item.scope, item.unitCount]))
     : undefined;
   const scopes = (["runtime-ui", "metadata", "readme"] as const).flatMap((scope) => {

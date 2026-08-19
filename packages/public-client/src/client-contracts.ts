@@ -5,6 +5,7 @@ import type {
   ContributionSigningPayload,
   ContributionStateReceipt,
   LocalizationDemandStatus,
+  LocalizationDemandStatusBatch,
   PublicCapability,
   PublicUploadGrant,
 } from "@trans-hub/client-protocol";
@@ -67,6 +68,9 @@ export interface PublicClientControl {
     contributionId: string,
     signal?: AbortSignal,
   ): Promise<LocalizationDemandStatus>;
+  getLocalizationDemandStatusBatch(
+    input: GetLocalizationDemandStatusBatchInput,
+  ): Promise<LocalizationDemandStatusBatch>;
   createUploadGrant(input: CreateUploadGrantInput): Promise<PublicUploadGrant>;
 }
 
@@ -75,5 +79,10 @@ export interface CreateUploadGrantInput {
   readonly idempotencyKey: string;
   readonly componentRole: string;
   readonly componentName: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface GetLocalizationDemandStatusBatchInput {
+  readonly contributionIds: readonly string[];
   readonly signal?: AbortSignal;
 }

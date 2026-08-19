@@ -39,6 +39,14 @@ const ADVANCED_TABLES_FALSE_POSITIVES = [
   "CharRange", "Comment", "Link", "PrimaryPreDecoration", "RULE_Char", "Url", "wrapper",
 ] as const;
 
+function nestedReactTree(depth: number): string {
+  let expression = '"Deep leaf text"';
+  for (let current = depth; current >= 1; current -= 1) {
+    expression = `React.createElement("div",{title:"Depth ${current}"},${expression})`;
+  }
+  return expression;
+}
+
 const PYTHON_SNAPSHOT = String.raw`
 import importlib.util, json, pathlib, sys
 adapter_path, manifest_path, bundle_path, readme_path = map(pathlib.Path, sys.argv[1:5])
@@ -86,9 +94,21 @@ describe.skipIf(!existsSync(ADAPTER_PATH))(
         'setting.setDesc(\'{"title":"Sync your vault","actions":["open","sync"]}\');',
         'setting.setDesc(\'{"title":"Settings"}\');',
         'setting.setDesc(\'{"summary":"Settings"}\');',
+        'React.createElement("span", null, "Copilot Settings");',
+        'React.createElement("input", {placeholder: "Enter your license key"});',
+        'React.createElement("span", null, user.name);',
+        'React.createElement("input", {title: model.name});',
+        'React.createElement(SettingsPanel, {title: "Component title"}, "Component child");',
+        'Sr.default.createElement("span", null, "Aliased React label");',
+        'Ns.default.createElement(ActionButton, {placeholder: "Aliased component placeholder"}, "Aliased component child");',
+        'setting.setDesc(Yt("Wrapped setting description"));',
         'const grammar={name:"Attribute",bnf:[]};',
         'const model={name:"Anthropic Claude Opus 4.6",description:"Internal model metadata"};',
         'plugin.addCommand({id:"transpose",name:"Transpose",editorCheckCallback:run});',
+        'React.createElement("div",{title:"Outer title"},React.createElement("span",{title:"Nested title"},"Nested text"));',
+        `${nestedReactTree(10)};`,
+        'React.createElement("span",null,"After deep tree");',
+        " ".repeat(1_048_577),
       ].join("\n"));
       await writeFile(readmePath, [
         "For more information, visit the [Help Docs](https://example.com/help).",
@@ -134,12 +154,104 @@ describe.skipIf(!existsSync(ADAPTER_PATH))(
       );
       expect(client.strings.map((item) => item.source)).toContain('{"title":"Settings"}');
       expect(client.strings.map((item) => item.source)).toContain('{"summary":"Settings"}');
+      expect(client.strings.map((item) => item.source)).toContain("Copilot Settings");
+      expect(client.strings.map((item) => item.source)).toContain("Enter your license key");
+      expect(client.strings.map((item) => item.source)).not.toContain("{{th:expr:0}}");
+      expect(client.strings.map((item) => item.source)).toEqual(expect.arrayContaining([
+        "Component title", "Component child", "Aliased React label",
+        "Aliased component placeholder", "Aliased component child", "Wrapped setting description",
+      ]));
+      expect(client.strings.map((item) => item.source)).toEqual(expect.arrayContaining([
+        "Depth 1", "Depth 2", "Depth 3", "Depth 4",
+        "Depth 5", "Depth 6", "Depth 7", "Depth 8",
+        "After deep tree",
+      ]));
+      expect(client.strings.map((item) => item.source)).not.toContain("Depth 9");
+      expect(client.strings.map((item) => item.source)).not.toContain("Depth 10");
+      expect(client.strings.map((item) => item.source)).not.toContain("Deep leaf text");
       expect(authority.native_locale_coverage.map((item) => item.locale)).toEqual([
         "es", "fr", "ja", "ko", "ru", "zh-CN",
       ]);
       expect(JSON.stringify(authority.native_locale_coverage)).not.toContain("打开设置");
       expect(client.strings.map((item) => item.source)).toContain("Support via today.");
       expect(client.strings.map((item) => item.source)).not.toContain("{{th:expr:0}}");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps both scanners aligned on grouped UI copy dictionaries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "trans-hub-obsidian-dict-parity-"));
+    try {
+      const manifestPath = join(root, "manifest.json");
+      const bundlePath = join(root, "main.js");
+      await writeFile(manifestPath, JSON.stringify({
+        id: "dict-sample",
+        name: "Dict Sample",
+        version: "1.0.0",
+        description: "Ships grouped UI copy.",
+      }));
+      await writeFile(bundlePath, [
+        'var wfe={hintText:{fileName:"Enter File Name",alias:"Enter Display Name"},',
+        'timeUnits:{hour:"Hour",day:"Day",week:"Week",month:"Month"},',
+        'aggregates:{values:"Values",sum:"Sum",average:"Average",median:"Median"},',
+        'fieldTypes:{object:"Object",text:"Text",file:"File",date:"Date"},',
+        'commands:{open:"Open",close:"Close",save:"Save",run:"Run",export:"Export",move:"Move",delete:"Delete",edit:"Edit",copy:"Copy",paste:"Paste"},',
+        'views:{table:"Table",card:"Card",board:"Board",list:"List",flow:"Flow",gallery:"Gallery",calendar:"Calendar",catalog:"Catalog",details:"Details",grid:"Grid"}};',
+        'var keyCodes={8:"Backspace",9:"Tab",12:"Clear",13:"Enter",16:"Shift",17:"Control",18:"Alt"};',
+        'var emoji={a:"grinning face",b:"smiling face with open mouth",c:"winking face",d:"heart eyes",e:"star struck",f:"face with tears of joy",g:"thinking face",h:"zipper mouth face",i:"money mouth face",j:"hugging face",k:"smirking face",l:"unamused face"};',
+        'var easing={a:"easeInQuad",b:"easeOutQuad",c:"easeInOutQuad",d:"easeInCubic",e:"easeOutCubic",f:"easeInOutCubic",g:"easeInQuart",h:"easeOutQuart",i:"easeInOutQuart",j:"easeInSine",k:"easeOutSine",l:"easeInOutSine"};',
+      ].join("\n"));
+
+      const client = await scanFixture(manifestPath, bundlePath);
+      const authority = scanAuthority(manifestPath, bundlePath);
+      expect(normalizeClient(client)).toEqual(normalizeAuthority(authority));
+      const sources = client.strings.map((item) => item.source);
+      expect(sources).toContain("Enter File Name");
+      expect(sources).toContain("Values");
+      expect(sources).toContain("Gallery");
+      expect(sources).not.toContain("Backspace");
+      expect(sources).not.toContain("grinning face");
+      expect(sources).not.toContain("easeInQuad");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps both scanners aligned on per-language settings schemas", async () => {
+    const root = await mkdtemp(join(tmpdir(), "trans-hub-obsidian-schema-parity-"));
+    try {
+      const manifestPath = join(root, "manifest.json");
+      const bundlePath = join(root, "main.js");
+      await writeFile(manifestPath, JSON.stringify({
+        id: "schema-sample",
+        name: "Schema Sample",
+        version: "1.0.0",
+        description: "Ships one settings schema per language.",
+      }));
+      await writeFile(bundlePath, [
+        "const en = { items: {",
+        'listPaneTitle:{name:"List pane title",desc:"Choose where the list pane title is shown."},',
+        'defaultSort:{name:"Default sort order",desc:"Choose the default sort order for notes."},',
+        'grouping:{name:"Grouping properties",desc:"Comma-separated properties that group the list."},',
+        'icons:{name:"Icons",desc:"Show file icons next to note titles."},',
+        'preview:{name:"Preview text",desc:"Render preview text for each note."},',
+        "}};",
+        "const de = { items: {",
+        'listPaneTitle:{name:"Titel des Listenbereichs",desc:"Wählen Sie aus, wo der Titel des Listenbereichs angezeigt wird."},',
+        'defaultSort:{name:"Standard-Sortierreihenfolge",desc:"Wählen Sie die Standardsortierung für Notizen aus."},',
+        'grouping:{name:"Gruppierungseigenschaften",desc:"Durch Kommas getrennte Eigenschaften zum Gruppieren."},',
+        'icons:{name:"Symbole",desc:"Dateisymbole neben Notiztiteln anzeigen."},',
+        'preview:{name:"Vorschautext",desc:"Vorschautext für jede Notiz rendern."},',
+        "}};",
+      ].join("\n"));
+
+      const client = await scanFixture(manifestPath, bundlePath);
+      const authority = scanAuthority(manifestPath, bundlePath);
+      expect(normalizeClient(client)).toEqual(normalizeAuthority(authority));
+      const sources = client.strings.map((item) => item.source);
+      expect(sources).toContain("List pane title");
+      expect(sources).not.toContain("Titel des Listenbereichs");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

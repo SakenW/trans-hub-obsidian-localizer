@@ -1,0 +1,19 @@
+{
+  "schema": "trans-hub-adapter-release-profile-v1",
+  "adapterKey": "obsidian",
+  "semanticVersion": "1.4.6",
+  "tenantIdEnvironment": "TRANSHUB_OBSIDIAN_PUBLIC_TENANT_ID",
+  "artifactPath": "/app/clients/obsidian/adapter/adapter_worker.py",
+  "storageLocator": "/run/transhub/adapter-artifacts/sha256/{artifactDigest}/adapter_worker.py",
+  "mediaType": "text/x-python",
+  "argv": [
+    "/usr/local/bin/python",
+    "/run/transhub/adapter-artifacts/sha256/{artifactDigest}/adapter_worker.py"
+  ],
+  "runtimeServices": [
+    "adapter-plane-worker",
+    "adapter-plane-authority-worker",
+    "obsidian-registry-reconciler"
+  ],
+  "authorityPath": "/opt/apps/transhub/obsidian/registry-authority.json"
+}

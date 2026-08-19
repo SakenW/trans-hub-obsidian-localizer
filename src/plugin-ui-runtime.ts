@@ -26,14 +26,15 @@ const COMMUNITY_FIELD_SELECTOR = ".community-item-name, .community-item-desc";
 const COMMUNITY_FIELD_BADGE_SELECTOR = ".flair";
 // Obsidian 1.13 can flatten an installed-plugin row into a generic setting
 // item, so its old name/description descendants are not a durable boundary.
-// The installed-plugin list container and the newer settings modal are both
-// metadata-only surfaces. The metadata plan remains exact-match only, so
-// version/author text without a metadata entry stays unchanged.
+// A settings modal also contains runtime text from whichever plugin tab is
+// active; it is resolved separately through a verified active-tab owner.
 const METADATA_TEXT_SELECTOR = [
   ".vertical-tab-nav-item-title",
   ".installed-plugins-container",
-  ".modal.mod-settings",
 ].join(", ");
+const SETTINGS_MODAL_SELECTOR = ".modal.mod-settings";
+const SETTINGS_NAV_ITEM_SELECTOR = ".vertical-tab-nav-item.is-active, .vertical-tab-nav-item[aria-selected='true'], [role='tab'][aria-selected='true']";
+const SETTINGS_PLUGIN_ID_ATTRIBUTES = ["data-plugin-id", "data-id", "data-setting-id"] as const;
 const README_CONTAINER_SELECTOR = ".community-modal-readme.markdown-rendered";
 const README_BLOCK_SELECTOR = "h1, h2, h3, h4, h5, h6, p, li, blockquote, th, td";
 const README_PROTECTED_SELECTOR = "a, code, kbd, samp, var";
@@ -192,8 +193,9 @@ export class PluginUiTranslationRuntime {
   private runtimePlan: RuntimeTranslationPlan = emptyPlan();
   private metadataPlan: RuntimeTranslationPlan = emptyPlan();
   private readmePlan: RuntimeTranslationPlan = emptyPlan();
-  private observer: MutationObserver | null = null;
-  private observedRoot: HTMLElement | null = null;
+  private readonly runtimePlansByPluginId = new Map<string, RuntimeTranslationPlan>();
+  private readonly settingsOwnerByLabel = new Map<string, string>();
+  private readonly observers = new Map<HTMLElement, MutationObserver>();
   private readonly restoredText = new Map<Text, { original: string; translated: string }>();
   private readonly restoredAttributes = new Map<Element, Map<string, { original: string; translated: string }>>();
   private readonly restoredReadmeBlocks = new Map<Element, {
@@ -206,15 +208,42 @@ export class PluginUiTranslationRuntime {
     this.runtimePlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "runtime-ui"));
     this.metadataPlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "metadata"));
     this.readmePlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "readme"));
-    if (this.observedRoot !== null) this.translateTree(this.observedRoot);
+    this.runtimePlansByPluginId.clear();
+    this.settingsOwnerByLabel.clear();
+    const translationsByPluginId = new Map<string, PluginUiTranslation[]>();
+    for (const translation of translations) {
+      const pluginTranslations = translationsByPluginId.get(translation.pluginId) ?? [];
+      pluginTranslations.push(translation);
+      translationsByPluginId.set(translation.pluginId, pluginTranslations);
+    }
+    const settingsOwnerCandidates = new Map<string, Set<string>>();
+    for (const [pluginId, pluginTranslations] of translationsByPluginId) {
+      this.runtimePlansByPluginId.set(
+        pluginId,
+        buildRuntimeTranslationPlan(filterTranslationScope(pluginTranslations, "runtime-ui")),
+      );
+      for (const translation of pluginTranslations) {
+        if (!translation.scopes?.includes("metadata")) continue;
+        for (const label of [translation.source, translation.target]) {
+          const normalized = normalizeSettingsOwnerLabel(label);
+          if (normalized === "") continue;
+          const candidates = settingsOwnerCandidates.get(normalized) ?? new Set<string>();
+          candidates.add(pluginId);
+          settingsOwnerCandidates.set(normalized, candidates);
+        }
+      }
+    }
+    for (const [label, candidates] of settingsOwnerCandidates) {
+      if (candidates.size === 1) this.settingsOwnerByLabel.set(label, [...candidates][0] ?? "");
+    }
+    for (const root of this.observers.keys()) this.translateTree(root);
   }
 
   start(root: HTMLElement = document.body): void {
-    if (this.observer !== null) return;
-    this.observedRoot = root;
+    if (this.observers.has(root)) return;
     this.translateTree(root);
     const Observer = root.ownerDocument.defaultView?.MutationObserver ?? MutationObserver;
-    this.observer = new Observer((mutations) => {
+    const observer = new Observer((mutations) => {
       for (const mutation of mutations) {
         if (mutation.type === "characterData" && isTextNode(mutation.target)) {
           this.translateText(mutation.target);
@@ -229,20 +258,26 @@ export class PluginUiTranslationRuntime {
         for (const node of Array.from(mutation.addedNodes)) this.translateTree(node);
       }
     });
-    this.observer.observe(root, {
+    observer.observe(root, {
       subtree: true,
       childList: true,
       characterData: true,
       attributes: true,
       attributeFilter: [...TRANSLATABLE_ATTRIBUTES],
     });
+    this.observers.set(root, observer);
   }
 
   stop(): void {
-    this.observer?.disconnect();
-    this.observer = null;
-    this.observedRoot = null;
+    for (const observer of this.observers.values()) observer.disconnect();
+    this.observers.clear();
     this.restore();
+  }
+
+  stopRoot(root: HTMLElement): void {
+    this.observers.get(root)?.disconnect();
+    this.observers.delete(root);
+    this.restoreWhere((node) => root.contains(node));
   }
 
   private translateTree(root: Node): void {
@@ -281,7 +316,8 @@ export class PluginUiTranslationRuntime {
     const raw = node.data;
     const plan = shouldUsePluginMetadataPlan(parent)
       ? this.metadataPlan
-      : this.runtimePlan;
+      : this.runtimePlanForElement(parent);
+    if (plan === undefined) return;
     const translated = translatePluginUiValue(raw, plan);
     if (translated === undefined) return;
     if (!this.restoredText.has(node)) this.restoredText.set(node, { original: raw, translated });
@@ -326,10 +362,12 @@ export class PluginUiTranslationRuntime {
 
   private translateAttributes(element: Element): void {
     if (!shouldTranslatePluginUiElement(element)) return;
+    const plan = this.runtimePlanForElement(element);
+    if (plan === undefined) return;
     for (const attribute of TRANSLATABLE_ATTRIBUTES) {
       const raw = element.getAttribute(attribute);
       if (raw === null) continue;
-      const translated = translatePluginUiValue(raw, this.runtimePlan);
+      const translated = translatePluginUiValue(raw, plan);
       if (translated === undefined) continue;
       const values = this.restoredAttributes.get(element) ?? new Map<string, { original: string; translated: string }>();
       if (!values.has(attribute)) values.set(attribute, { original: raw, translated });
@@ -338,22 +376,61 @@ export class PluginUiTranslationRuntime {
     }
   }
 
+  private runtimePlanForElement(element: Element): RuntimeTranslationPlan | undefined {
+    const settingsModal = element.closest(SETTINGS_MODAL_SELECTOR);
+    if (settingsModal === null) return this.runtimePlan;
+    if (element.closest(".vertical-tab-nav-item") !== null) return this.metadataPlan;
+    const owner = this.settingsPluginOwner(settingsModal);
+    return owner === undefined ? undefined : this.runtimePlansByPluginId.get(owner);
+  }
+
+  private settingsPluginOwner(settingsModal: Element): string | undefined {
+    const activeItem = settingsModal.querySelector<HTMLElement>(SETTINGS_NAV_ITEM_SELECTOR);
+    if (activeItem === null) return undefined;
+    for (const attribute of SETTINGS_PLUGIN_ID_ATTRIBUTES) {
+      const candidate = activeItem.getAttribute(attribute);
+      if (candidate !== null && this.runtimePlansByPluginId.has(candidate)) return candidate;
+    }
+    return this.settingsOwnerForLabel(normalizeSettingsOwnerLabel(activeItem.textContent ?? ""));
+  }
+
+  private settingsOwnerForLabel(label: string): string | undefined {
+    const exact = this.settingsOwnerByLabel.get(label);
+    if (exact !== undefined) return exact;
+    // Obsidian 1.13 may show an active plugin tab as "Plugin Settings vX".
+    // A unique plugin-name prefix is still an owner proof; a generic global
+    // runtime plan is not, because it could translate unrelated settings.
+    const candidates = new Set(
+      [...this.settingsOwnerByLabel.entries()]
+        .filter(([knownLabel]) => label.startsWith(`${knownLabel} `))
+        .map(([, pluginId]) => pluginId),
+    );
+    return candidates.size === 1 ? [...candidates][0] : undefined;
+  }
+
   private restore(): void {
+    this.restoreWhere(() => true);
+  }
+
+  private restoreWhere(contains: (node: Node) => boolean): void {
     for (const [block, value] of this.restoredReadmeBlocks) {
+      if (!contains(block)) continue;
       const current = Array.from(block.childNodes);
       if (sameNodes(current, value.translated)) block.replaceChildren(...value.original);
+      this.restoredReadmeBlocks.delete(block);
     }
-    this.restoredReadmeBlocks.clear();
     for (const [node, value] of this.restoredText) {
+      if (!contains(node)) continue;
       if (node.data === value.translated) node.data = value.original;
+      this.restoredText.delete(node);
     }
     for (const [element, attributes] of this.restoredAttributes) {
+      if (!contains(element)) continue;
       for (const [name, value] of attributes) {
         if (element.getAttribute(name) === value.translated) element.setAttribute(name, value.original);
       }
+      this.restoredAttributes.delete(element);
     }
-    this.restoredText.clear();
-    this.restoredAttributes.clear();
   }
 }
 
@@ -420,6 +497,12 @@ function translateProtectedReadmeLabel(element: Element, plan: RuntimeTranslatio
 }
 
 function normalizeReadmeText(value: string): string {
+  if (typeof value !== "string") return "";
+  return value.normalize("NFC").replace(/\s+/gu, " ").trim();
+}
+
+function normalizeSettingsOwnerLabel(value: string): string {
+  if (typeof value !== "string") return "";
   return value.normalize("NFC").replace(/\s+/gu, " ").trim();
 }
 

@@ -49,5 +49,6 @@ function defaultBlockId(): string {
 }
 
 function escapeRegex(value: string): string {
+  if (typeof value !== "string") return "";
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

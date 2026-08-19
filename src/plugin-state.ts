@@ -120,7 +120,10 @@ export interface PluginState {
   readonly translationExportStates: Readonly<Record<string, TranslationSyncState>>;
 }
 
-export const PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION = 1;
+// v2 invalidates submissions and delivery state produced before adapter 1.4.6.
+// Those entries can have no contribution ID while still claiming `rejected`,
+// which cannot be safely reconciled against the current authority contract.
+export const PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION = 2;
 
 export function isPluginLocalizationDerivedCacheCurrent(value: unknown): boolean {
   return value === PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION;
@@ -311,6 +314,17 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
   const artifactDigest = stringValue(value.artifactDigest);
   const scannedAt = stringValue(value.scannedAt);
   if ([pluginId, pluginName, pluginVersion, sourceLocale, digest, artifactDigest, scannedAt].some((item) => item === null)) return null;
+  if (
+    value.patchEvidenceRevision !== undefined
+    && value.patchEvidenceRevision !== 1
+    && value.patchEvidenceRevision !== 2
+    && value.patchEvidenceRevision !== 3
+    && value.patchEvidenceRevision !== 4
+    && value.patchEvidenceRevision !== 5
+    && value.patchEvidenceRevision !== 6
+    && value.patchEvidenceRevision !== 7
+    && value.patchEvidenceRevision !== 10
+  ) return null;
   let catalogIdentity: SourceCatalogIdentity | undefined;
   try {
     catalogIdentity = value.catalogIdentity === undefined
@@ -361,6 +375,9 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
   return {
     pluginId: pluginId!, pluginName: pluginName!, pluginVersion: pluginVersion!,
     sourceLocale: sourceLocale!, digest: digest!, artifactDigest: artifactDigest!, scannedAt: scannedAt!,
+    ...(value.patchEvidenceRevision === undefined
+      ? {}
+      : { patchEvidenceRevision: value.patchEvidenceRevision }),
     ...(catalogIdentity === undefined ? {} : { catalogIdentity }),
     strings: strings.filter((item): item is NonNullable<typeof item> => item !== null),
   };
@@ -375,6 +392,11 @@ function parsePluginStringEvidence(value: unknown): PluginStringEvidence | null 
     || !isNullableNonNegativeInteger(value.line) || !isNullableNonNegativeInteger(value.column)) {
     return null;
   }
+  if (
+    (value.literalStart !== undefined && !isNullableNonNegativeInteger(value.literalStart))
+    || (value.literalEnd !== undefined && !isNullableNonNegativeInteger(value.literalEnd))
+    || (typeof value.literalStart === "number" && typeof value.literalEnd === "number" && value.literalEnd <= value.literalStart)
+  ) return null;
   return {
     origin: value.origin,
     strategy: value.strategy,
@@ -382,6 +404,9 @@ function parsePluginStringEvidence(value: unknown): PluginStringEvidence | null 
     offset: value.offset,
     line: value.line,
     column: value.column,
+    ...(typeof value.literalStart === "number" && typeof value.literalEnd === "number"
+      ? { literalStart: value.literalStart, literalEnd: value.literalEnd }
+      : {}),
   };
 }
 

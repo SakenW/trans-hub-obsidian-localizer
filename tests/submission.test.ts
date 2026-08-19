@@ -103,6 +103,35 @@ describe("submitObsidianPluginDiscovery", () => {
     expect((payload as ContributionSigningPayload | null)?.idempotencyKey)
       .toMatch(/^obsidian-localize-v12-r1-[a-f0-9]{64}$/u);
   });
+
+  it("keeps source discovery idempotent for one persisted scan and separates rescans", async () => {
+    const idempotencyKeys: string[] = [];
+    const client = {
+      submitContribution(value: ContributionSigningPayload) {
+        idempotencyKeys.push(value.idempotencyKey);
+        return Promise.resolve({ contributionId: "source", state: "received" } as ContributionStateReceipt);
+      },
+    } as PublicClient;
+    const catalog = {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+      sourceLocale: "en", digest: "a".repeat(64), artifactDigest: "b".repeat(64),
+      scannedAt: "2026-07-23T00:00:00.000Z", strings: [],
+    };
+    const submit = (scannedAt: string) => submitObsidianPluginDiscovery({
+      client,
+      installationId: "installation",
+      repository: "blacksmithgu/obsidian-dataview",
+      candidateLocators: [],
+      catalog: { ...catalog, scannedAt },
+    });
+
+    await submit(catalog.scannedAt);
+    await submit(catalog.scannedAt);
+    await submit("2026-07-23T00:00:01.000Z");
+
+    expect(idempotencyKeys[1]).toBe(idempotencyKeys[0]);
+    expect(idempotencyKeys[2]).not.toBe(idempotencyKeys[0]);
+  });
 });
 
 describe("submitObsidianMissingTranslationIssue", () => {
@@ -237,5 +266,34 @@ describe("submitObsidianLocalizationObservation", () => {
         variantRaw: "default",
       },
     });
+  });
+
+  it("keeps localization observation idempotent for one persisted scan and separates rescans", async () => {
+    const idempotencyKeys: string[] = [];
+    const client = {
+      submitContribution(value: ContributionSigningPayload) {
+        idempotencyKeys.push(value.idempotencyKey);
+        return Promise.resolve({ contributionId: "localization", state: "received" } as ContributionStateReceipt);
+      },
+    } as PublicClient;
+    const catalog = {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+      sourceLocale: "en", digest: "a".repeat(64), artifactDigest: "b".repeat(64),
+      scannedAt: "2026-07-23T00:00:00.000Z", strings: [],
+    };
+    const submit = (scannedAt: string) => submitObsidianLocalizationObservation({
+      client,
+      installationId: "installation",
+      repository: "blacksmithgu/obsidian-dataview",
+      targetLocale: "zh-CN",
+      catalog: { ...catalog, scannedAt },
+    });
+
+    await submit(catalog.scannedAt);
+    await submit(catalog.scannedAt);
+    await submit("2026-07-23T00:00:01.000Z");
+
+    expect(idempotencyKeys[1]).toBe(idempotencyKeys[0]);
+    expect(idempotencyKeys[2]).not.toBe(idempotencyKeys[0]);
   });
 });

@@ -10,7 +10,7 @@ export function renderPluginPickerCatalogMismatchDetails(
 ): void {
   const details = container.createDiv({ cls: "trans-hub-plugin-picker__catalog-details" });
   details.createDiv({
-    text: translate("已安全应用 {count} 条精确命中译文", { count: summary.safelyAppliedCount }),
+    text: translate("可安全应用 {count} 条精确命中译文", { count: summary.safelyAppliedCount }),
     cls: "trans-hub-plugin-picker__catalog-applied",
   });
   if (summary.currentCatalog === undefined) return;

@@ -28,6 +28,11 @@ export type PluginLocalizationStatusKind =
 export interface PluginLocalizationStatus {
   readonly kind: PluginLocalizationStatusKind;
   readonly label: string;
+  /**
+   * The selected plugin has no server submission yet, so the client is still
+   * preparing its first safe discovery and localization contribution.
+   */
+  readonly initialSubmission?: boolean;
   readonly catalogMismatch?: PluginCatalogMismatchSummary;
   readonly coverage?: PluginLocalizationCoverageSummary;
 }
@@ -95,10 +100,23 @@ export function pluginManualRetryKind(input: {
     && input.translation?.targetLocale === input.targetLocale
     && demand.sourceVersionId === input.translation.sourceVersionId;
   if (submission === undefined) return null;
-  if (submission.lastError?.code === "source_artifact_mismatch") return null;
-  if (isCurrentLocaleSynchronizationError(submission.lastError, input.targetLocale)) {
-    return "resynchronize";
+  if (submission.lastError?.code === "source_artifact_mismatch") {
+    // A rejected mismatch contribution can be stale server-side: the object
+    // version digest may predate the bundle-normalization change while the
+    // local file matches the official release.  The manual resubmit submits a
+    // fresh discovery observation so the server can re-acquire the artifact
+    // and reconcile the digest (one-time authority recovery).  A normal
+    // mismatch pause (contribution not rejected) keeps no retry button.
+    if (
+      submission.contributionState === "rejected"
+      || submission.localizationContributionState === "rejected"
+    ) {
+      return "resubmit";
+    }
+    return null;
   }
+  if (hasCurrentPublishedTranslation(input, submission)) return null;
+  if (isCurrentLocaleSynchronizationError(submission.lastError, input.targetLocale)) return "resynchronize";
   if (
     input.translation?.targetLocale === input.targetLocale
     && !currentCatalogSubmission
@@ -182,11 +200,14 @@ export function describePluginLocalizationStatus(input: {
       label: translate(input.requiresReconnect ? "重新连接后继续同步" : "登录后同步"),
     };
   }
-  const recoverableSynchronizationError = input.submission?.lastError;
+  const errorSubmission = input.submission;
+  const recoverableSynchronizationError = errorSubmission?.lastError;
   if (
     recoverableSynchronizationError !== undefined
     && recoverableSynchronizationError.code !== "source_artifact_mismatch"
     && isCurrentLocaleSynchronizationError(recoverableSynchronizationError, input.targetLocale)
+    && errorSubmission !== undefined
+    && !hasCurrentPublishedTranslation(input, errorSubmission)
   ) {
     return {
       kind: "failed",
@@ -199,8 +220,11 @@ export function describePluginLocalizationStatus(input: {
     && input.catalog !== undefined
     && input.submission.catalogDigest === input.catalog.digest
     && input.submission.pluginVersion === input.catalog.pluginVersion;
-  const currentDistributionBlock = input.submission?.localizationDemandStatus?.state === "distribution_blocked"
-    && input.submission.localizationDemandStatus.sourceVersionId === input.submission.sourceVersionId;
+  const currentDistributionBlock = isCurrentDistributionBlock(
+    input.submission,
+    input.catalog,
+    currentCatalogSubmission,
+  );
   const currentUnprocessableMachineFailure = input.submission?.localizationDemandStatus?.state === "mt_failed"
     && input.submission.localizationDemandStatus.sourceVersionId === input.submission.sourceVersionId
     && isUnprocessableMachineTranslationFailure(input.submission.localizationDemandStatus.failureCode);
@@ -232,8 +256,8 @@ export function describePluginLocalizationStatus(input: {
     const authorityRefreshing = demand?.state === "reconciled"
       && demand.failureCode === "PublicDistributionAuthorityRefreshing"
       && demand.sourceVersionId === input.translation.sourceVersionId;
-    const distributionBlock = demand?.state === "distribution_blocked"
-      && demand.sourceVersionId === input.translation.sourceVersionId
+    const distributionBlock = currentDistributionBlock
+      && demand?.sourceVersionId === input.translation.sourceVersionId
       ? { failureCode: demand.failureCode }
       : undefined;
     const machineTranslationFailure = demand?.state === "mt_failed"
@@ -280,8 +304,8 @@ export function describePluginLocalizationStatus(input: {
         input.translation.sourceVersionId,
       );
       const headline = translate(waiting
-        ? "已本地化 {translated}/{total} 条（{percent}%），{missing} 条等待发布"
-        : "已发布 {translated}/{total} 条（{percent}%），{missing} 条尚未发布", {
+        ? "已准备 {translated}/{total} 条匹配译文（{percent}%），{missing} 条等待发布"
+        : "已获取 {translated}/{total} 条匹配译文（{percent}%），{missing} 条尚未发布", {
         translated: coverage.translatedCount,
         total: coverage.totalCount,
         percent: coverage.percent,
@@ -311,7 +335,7 @@ export function describePluginLocalizationStatus(input: {
       };
     }
     if (coverage !== undefined) {
-      const headline = translate("已本地化 {translated}/{total} 条（{percent}%）", {
+      const headline = translate("已获取 {translated}/{total} 条匹配译文（{percent}%）", {
         translated: coverage.translatedCount,
         total: coverage.totalCount,
         percent: coverage.percent,
@@ -329,6 +353,10 @@ export function describePluginLocalizationStatus(input: {
     const localizedLabel = translate("已本地化 {count} 条", {
       count: new Set(input.translation.entries.map((entry) => entry.source)).size,
     });
+    const cachedTranslationLabel = translate("已获取 {count} 条缓存译文，等待当前目录匹配", {
+      count: new Set(input.translation.entries.map((entry) => entry.source)).size,
+    });
+    const waitingForCatalog = input.catalog === undefined;
     return {
       kind: distributionBlock !== undefined
         ? "blocked"
@@ -336,12 +364,12 @@ export function describePluginLocalizationStatus(input: {
           ? "waiting"
           : machineTranslationFailure !== undefined
             ? machineTranslationFailure.retryable ? "waiting" : "failed"
-            : "localized",
+            : waitingForCatalog ? "waiting" : "localized",
       label: appendSourceSummary(
         distributionBlock === undefined
           ? authorityRefreshing
             ? translate("服务器正在校验当前精确版本的权威来源与许可证")
-            : machineTranslationFailureLabel ?? localizedLabel
+            : machineTranslationFailureLabel ?? (waitingForCatalog ? cachedTranslationLabel : localizedLabel)
           : describeDistributionBlock(distributionBlock.failureCode),
         sourceSummary,
       ),
@@ -349,7 +377,11 @@ export function describePluginLocalizationStatus(input: {
   }
   const submission = input.submission;
   if (submission === undefined) {
-    return { kind: "unrecorded", label: translate("尚未提交本地化需求") };
+    return {
+      kind: "waiting",
+      label: translate("正在准备首次本地化…"),
+      initialSubmission: true,
+    };
   }
   if (submission.lastError !== undefined) {
     return {
@@ -366,11 +398,20 @@ export function describePluginLocalizationStatus(input: {
     return { kind: "waiting", label: translate("等待可信来源收录") };
   }
   const demand = submission.localizationDemandStatus;
-  if (demand !== undefined) {
+  if (demand !== undefined && (demand.state !== "distribution_blocked" || currentDistributionBlock)) {
     switch (demand.state) {
       case "awaiting_source":
         return { kind: "waiting", label: translate("等待可信来源收录") };
       case "rejected":
+        if (
+          demand.failureCode === "PublicDistributionLicenseRedistributionProhibited"
+          || demand.failureCode === "PublicDistributionLicenseReviewRequired"
+        ) {
+          return {
+            kind: "blocked",
+            label: describeDistributionBlock(demand.failureCode),
+          };
+        }
         return {
           kind: "failed",
           label: translate("本地化需求未被接受。点击右侧“重试此插件”。"),
@@ -435,7 +476,7 @@ export function describePluginLocalizationStatus(input: {
       case "export_pending":
         return {
           kind: "waiting",
-          label: translate("翻译已完成 {succeeded}/{total} 条，等待译文制品发布", {
+          label: translate("翻译已完成 {succeeded}/{total} 条，正在生成可下载包", {
             succeeded: demand.succeededCount,
             total: demand.workItemCount,
           }),
@@ -469,6 +510,30 @@ export function describePluginLocalizationStatus(input: {
   return { kind: "waiting", label: translate("等待来源收录") };
 }
 
+function hasCurrentPublishedTranslation(
+  input: Pick<Parameters<typeof pluginManualRetryKind>[0], "catalog" | "targetLocale" | "translation">,
+  submission: PluginSubmissionState,
+): boolean {
+  return input.catalog !== undefined
+    && input.translation?.targetLocale === input.targetLocale
+    && input.translation.sourceVersionId === submission.sourceVersionId
+    && input.translation.pluginVersion === input.catalog.pluginVersion
+    && comparePluginCatalogIdentity(input.catalog, input.translation).exact;
+}
+
+function isCurrentDistributionBlock(
+  submission: PluginSubmissionState | undefined,
+  catalog: PluginUiCatalog | undefined,
+  currentCatalogSubmission: boolean,
+): boolean {
+  if (submission === undefined || submission.localizationDemandStatus?.state !== "distribution_blocked") {
+    return false;
+  }
+  const demand = submission.localizationDemandStatus;
+  return (catalog === undefined || currentCatalogSubmission)
+    && (submission.sourceVersionId === undefined || demand.sourceVersionId === submission.sourceVersionId);
+}
+
 function isCurrentLocaleSynchronizationError(
   error: PluginSubmissionState["lastError"],
   targetLocale: string,
@@ -490,6 +555,10 @@ function describeDistributionBlock(failureCode: string | undefined): string {
       return translate("暂无法公开发布：许可证证据已确认，服务端正在生成公开分发策略");
     case "PublicDistributionLicenseUnsupported":
       return translate("无法公开发布：上游许可证不在当前安全分发范围");
+    case "PublicDistributionLicenseRedistributionProhibited":
+      return translate("无法公开发布：当前来源的许可证明确禁止公开分发");
+    case "PublicDistributionLicenseReviewRequired":
+      return translate("暂无法公开发布：当前来源的许可证需要人工确认");
     case "PublicDistributionLicenseEvidenceMissing":
       return translate("无法公开发布：缺少当前精确版本的许可证证据");
     case "PublicDistributionLicenseEvidenceAmbiguous":
@@ -691,12 +760,12 @@ function safeIntersectionStatus(
   const totalCount = coverage?.totalCount ?? translatedCount;
   const missingCount = coverage?.missingCount ?? 0;
   const safeIntersection = missingCount > 0
-    ? translate("已安全应用 {translated}/{total} 条匹配译文，{missing} 条暂不可安全应用", {
+    ? translate("可安全应用 {translated}/{total} 条匹配译文，{missing} 条暂不可安全应用", {
         translated: translatedCount,
         total: totalCount,
         missing: missingCount,
       })
-    : translate("已安全应用 {translated}/{total} 条匹配译文", {
+    : translate("可安全应用 {translated}/{total} 条匹配译文", {
       translated: translatedCount,
       total: totalCount,
     });

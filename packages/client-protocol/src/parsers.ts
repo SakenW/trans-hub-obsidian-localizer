@@ -40,8 +40,11 @@ export {
   parsePublicInstallationRecoveryCommand,
   parsePublicLifecycleTrustCapability,
 } from "./lifecycle-parser.js";
+export {
+  parseLocalizationDemandStatus,
+  parseLocalizationDemandStatusBatch,
+} from "./localization-demand-parser.js";
 export { parseRegistryResolution } from "./registry-parser.js";
-export { parseLocalizationDemandStatus } from "./localization-demand-parser.js";
 export {
   assertContributionTransition,
   parseContributionStateReceipt,

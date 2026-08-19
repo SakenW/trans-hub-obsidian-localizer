@@ -11,7 +11,8 @@ import {
 describe("parsePluginState", () => {
   it("clears only derived localization caches when the persisted cache revision expires", () => {
     expect(isPluginLocalizationDerivedCacheCurrent(undefined)).toBe(false);
-    expect(isPluginLocalizationDerivedCacheCurrent(1)).toBe(true);
+    expect(isPluginLocalizationDerivedCacheCurrent(1)).toBe(false);
+    expect(isPluginLocalizationDerivedCacheCurrent(2)).toBe(true);
     const reset = resetPluginLocalizationDerivedState(parsePluginState({
       enabledPluginIds: ["dataview"],
       notes: { note: { noteId: "note" } },

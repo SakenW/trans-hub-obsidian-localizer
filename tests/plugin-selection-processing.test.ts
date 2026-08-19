@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   describePluginSelectionProcessing,
+  describePluginStatusRefresh,
   pendingTranslationPluginIds,
   pendingTranslationRetryDelay,
   PluginProcessingQueue,
@@ -38,7 +39,7 @@ describe("processPluginSelection", () => {
 
     expect(calls).toEqual(["scan", "synchronize"]);
     expect(result.kind).toBe("synchronized");
-    expect(describePluginSelectionProcessing(result)).toContain("1 个仍在处理中");
+    expect(describePluginSelectionProcessing(result)).toContain("1 个正在处理");
     expect(pendingTranslationPluginIds(result)).toEqual(["dataview"]);
   });
 
@@ -99,6 +100,84 @@ describe("processPluginSelection", () => {
 
     expect(describePluginSelectionProcessing(result)).toContain("权威校验 3");
     expect(describePluginSelectionProcessing(result)).not.toContain("等待翻译");
+  });
+
+  it("局部选择和单插件重试不把批次数量表述为全量检查", () => {
+    const result = {
+      kind: "synchronized" as const,
+      scan: { ...scanResult, scannedCount: 1 },
+      sync: {
+        submittedCount: 0,
+        requestedCount: 0,
+        pulledCount: 0,
+        waitingCount: 0,
+        translationCount: 0,
+      },
+    };
+
+    expect(describePluginSelectionProcessing(result, "selected")).toContain("已检查所选 1 个插件");
+    expect(describePluginSelectionProcessing(result, "single-retry")).toContain("已重试 1 个插件");
+    expect(describePluginSelectionProcessing(result)).toContain("已检查 1 个插件");
+  });
+
+  it("轻量刷新状态优先提示需要重试的插件", () => {
+    expect(describePluginStatusRefresh({
+      submittedCount: 0,
+      requestedCount: 0,
+      pulledCount: 0,
+      waitingCount: 3,
+      translationCount: 0,
+      waitingPluginIds: ["a", "b", "c"],
+      failedPluginIds: ["a"],
+    }, 3)).toContain("1 个需要重试");
+  });
+
+  it("轻量刷新状态区分处理中与无新译文", () => {
+    expect(describePluginStatusRefresh({
+      submittedCount: 0,
+      requestedCount: 0,
+      pulledCount: 0,
+      waitingCount: 2,
+      translationCount: 0,
+      waitingPluginIds: ["a", "b"],
+    }, 3)).toContain("2 个仍在处理中");
+
+    expect(describePluginStatusRefresh({
+      submittedCount: 0,
+      requestedCount: 0,
+      pulledCount: 0,
+      waitingCount: 1,
+      exportPendingCount: 2,
+      translationCount: 0,
+      waitingPluginIds: ["a"],
+      exportPendingPluginIds: ["b", "c"],
+    }, 3)).toBe("已刷新所选 3 个插件状态；1 个仍在处理，另有 2 个正在自动发布。");
+
+    expect(describePluginStatusRefresh({
+      submittedCount: 0,
+      requestedCount: 0,
+      pulledCount: 0,
+      waitingCount: 0,
+      exportPendingCount: 2,
+      exportPendingPluginIds: ["a", "b"],
+      translationCount: 0,
+    }, 3)).toBe("已刷新所选 3 个插件状态；2 个译文已生成，服务器正在自动发布。");
+
+    expect(describePluginStatusRefresh({
+      submittedCount: 0,
+      requestedCount: 0,
+      pulledCount: 0,
+      waitingCount: 0,
+      translationCount: 0,
+    }, 3)).toContain("目前没有新译文");
+
+    expect(describePluginStatusRefresh({
+      submittedCount: 0,
+      requestedCount: 0,
+      pulledCount: 2,
+      waitingCount: 0,
+      translationCount: 7,
+    }, 2)).toContain("安全应用 7 条译文");
   });
 
   it("serializes overlapping plugin scans so older snapshots cannot save last", async () => {

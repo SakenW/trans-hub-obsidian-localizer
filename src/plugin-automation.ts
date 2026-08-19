@@ -1,7 +1,13 @@
-import type { App } from "obsidian";
+import type { App, EventRef } from "obsidian";
 
-import { selectCurrentCatalogTranslations } from "./plugin-catalog-diff";
-import { discoverInstalledPlugins, readPluginBundle } from "./plugin-discovery";
+import {
+  localizedPluginDisplayName,
+  selectCurrentCatalogTranslations,
+} from "./plugin-catalog-diff";
+import {
+  discoverInstalledPlugins,
+  type InstalledObsidianPlugin,
+} from "./plugin-discovery";
 import {
   resolveCommunityPluginIdentity,
   resolveCommunityPluginSourceEligibility,
@@ -19,8 +25,18 @@ import {
   type PluginState,
   type PluginTranslationState,
 } from "./plugin-state";
-import { scanPluginUiStrings } from "./plugin-string-scanner";
+import {
+  digestPluginBundle,
+  scanPluginUiStrings,
+  type PluginUiCatalog,
+} from "./plugin-string-scanner";
 import { PluginUiTranslationRuntime, type PluginUiTranslation } from "./plugin-ui-runtime";
+import {
+  applyPublishedPluginFilePatch,
+  hasActivePluginFilePatch,
+  logicalPluginBundle,
+  restorePublishedPluginFilePatch,
+} from "./third-party-plugin-patcher";
 import type { PluginSyncSummary } from "./plugin-sync";
 import { isTargetLocale, OBSIDIAN_SOURCE_LOCALE, type TargetLocale } from "./product-config";
 
@@ -46,9 +62,18 @@ export interface PluginScanResult {
   readonly selectablePluginIds: readonly string[];
 }
 
+/** Data attribute that keeps the official title of a settings nav item so the rewrite can be reversed. */
+const SETTINGS_NAV_ORIGINAL_ATTRIBUTE = "data-th-nav-original";
+
 export class PluginAutomationController {
   private readonly runtime = new PluginUiTranslationRuntime();
+  private windowOpenEvent: EventRef | null = null;
+  private windowCloseEvent: EventRef | null = null;
   private sourceSnapshot: PluginSourceSnapshot = new Map();
+  private readonly localizedDisplayNames = new Map<string, {
+    readonly original: string;
+    readonly manifest: { readonly name: string };
+  }>();
 
   constructor(private readonly input: {
     readonly app: App;
@@ -62,14 +87,38 @@ export class PluginAutomationController {
 
   start(): void {
     if (!this.input.settings().pluginTranslationEnabled) return;
+    this.applyPluginDisplayNames();
+    this.localizeSettingsWindowNavigation();
+    this.observeSettingsWindow();
     this.runtime.update(this.allTranslations());
     this.runtime.start();
+    this.windowOpenEvent ??= this.input.app.workspace.on("window-open", (_workspaceWindow, window) => {
+      this.runtime.start(window.document.body);
+    });
+    this.windowCloseEvent ??= this.input.app.workspace.on("window-close", (_workspaceWindow, window) => {
+      this.runtime.stopRoot(window.document.body);
+    });
   }
 
-  stop(): void { this.runtime.stop(); }
+  stop(): void {
+    if (this.windowOpenEvent !== null) {
+      this.input.app.workspace.offref(this.windowOpenEvent);
+      this.windowOpenEvent = null;
+    }
+    if (this.windowCloseEvent !== null) {
+      this.input.app.workspace.offref(this.windowCloseEvent);
+      this.windowCloseEvent = null;
+    }
+    this.runtime.stop();
+    this.restorePluginDisplayNames();
+    this.restoreSettingsWindowNavigation();
+  }
 
   refreshRuntime(): void {
-    this.runtime.stop();
+    // Stop through the controller so workspace listeners are removed too.
+    // Calling the runtime directly leaves a stale window-open callback alive
+    // after the user disables translation.
+    this.stop();
     this.start();
   }
 
@@ -118,7 +167,17 @@ export class PluginAutomationController {
     let changedCount = 0;
     let stringCount = 0;
     for (const plugin of candidates) {
-      const bundle = await readPluginBundle(this.input.app.vault, plugin);
+      const { content: bundle } = await logicalPluginBundle(this.input.app.vault, plugin);
+      const previous = catalogs[plugin.id];
+      const artifactDigest = await digestPluginBundle(bundle);
+      // The scanner is CPU-bound for large community bundles and runs on
+      // Obsidian's UI thread. A matching exact artifact plus unchanged
+      // manifest metadata is sufficient to reuse the immutable catalog.
+      if (canReuseScannedPluginCatalog(previous, plugin, artifactDigest)) {
+        catalogs[plugin.id] = previous;
+        stringCount += previous.strings.length;
+        continue;
+      }
       const sourceSupported = eligibility.get(plugin.id)?.kind === "supported";
       const identity = sourceSupported
         ? await resolveCommunityPluginIdentity(plugin.id, plugin.version)
@@ -135,10 +194,10 @@ export class PluginAutomationController {
         ...(identity?.readmeMarkdown === undefined ? {} : { readmeMarkdown: identity.readmeMarkdown }),
       });
       stringCount += catalog.strings.length;
-      const previous = catalogs[plugin.id];
       const unchanged = previous?.digest === catalog.digest &&
         previous.artifactDigest === catalog.artifactDigest &&
-        previous.pluginVersion === catalog.pluginVersion;
+        previous.pluginVersion === catalog.pluginVersion &&
+        previous.patchEvidenceRevision === catalog.patchEvidenceRevision;
       if (!unchanged) changedCount += 1;
       catalogs[plugin.id] = unchanged ? { ...catalog, scannedAt: previous.scannedAt } : catalog;
     }
@@ -158,7 +217,206 @@ export class PluginAutomationController {
   applyCachedTranslations(): PluginAutomationSummary {
     const translations = this.allTranslations();
     if (this.input.settings().pluginTranslationEnabled) this.runtime.update(translations);
+    this.applyPluginDisplayNames();
+    this.localizeSettingsWindowNavigation();
+    this.observeSettingsWindow();
     return this.summary();
+  }
+
+  /**
+   * Obsidian 1.13 renders the settings sidebar from the in-memory plugin
+   * registry, and community plugin code does not run in that window until its
+   * own page is opened.  Localizing the registry display names from the main
+   * window makes the sidebar titles translated from the first open.  This is
+   * a reversible presentation-layer change: the original name is restored
+   * when metadata localization is disabled or the plugin stops, and disk
+   * manifests/identities are never touched.
+   */
+  applyPluginDisplayNames(): void {
+    if (!this.input.settings().pluginMetadataTranslationEnabled) {
+      this.restorePluginDisplayNames();
+      return;
+    }
+    const manifests = this.pluginManifests();
+    if (manifests === undefined) return;
+    const state = this.input.state();
+    const targetLocale = this.input.settings().targetLocale;
+    for (const [pluginId, manifest] of Object.entries(manifests)) {
+      if (pluginId === this.input.ownPluginId || manifest.name === "") continue;
+      let previous = this.localizedDisplayNames.get(pluginId);
+      if (previous === undefined) {
+        previous = { original: manifest.name, manifest };
+        this.localizedDisplayNames.set(pluginId, previous);
+      }
+      const localized = localizedPluginDisplayName(
+        previous.original,
+        state.pluginCatalogs[pluginId],
+        getPluginTranslation(state, pluginId, targetLocale),
+        targetLocale,
+      );
+      (manifest as { name: string }).name = localized === previous.original
+        ? previous.original
+        : localized;
+    }
+  }
+
+  restorePluginDisplayNames(): void {
+    for (const { original, manifest } of this.localizedDisplayNames.values()) {
+      (manifest as { name: string }).name = original;
+    }
+    // Keep the map populated: `original` is the stable official name that the
+    // settings-window nav restore reuses when Obsidian re-rendered a nav item
+    // from the localized manifest (so no DOM attribute was ever recorded).
+    // The controller is rebuilt on plugin reload, so the map cannot leak.
+  }
+
+  /**
+   * The 1.13 settings window keeps a nav sidebar rendered from an early
+   * registry snapshot and does not re-render it when the in-memory manifest
+   * names change, and it does not emit workspace window events, so neither
+   * manifest mutation nor the popout observer reaches it. Rewriting the nav
+   * item titles in the live settings window from the main window keeps the
+   * sidebar consistent from the first open. Original titles are preserved in
+   * a data attribute and restored when metadata localization is disabled or
+   * the plugin stops.
+   */
+  localizeSettingsWindowNavigation(): void {
+    if (!this.input.settings().pluginMetadataTranslationEnabled) {
+      this.restoreSettingsWindowNavigation();
+      return;
+    }
+    const document = this.settingsWindowDocument();
+    const manifests = this.pluginManifests();
+    if (document === undefined || manifests === undefined) return;
+    const state = this.input.state();
+    const targetLocale = this.input.settings().targetLocale;
+    for (const item of Array.from(
+      document.querySelectorAll<HTMLElement>(".vertical-tab-nav-item[data-setting-id]"),
+    )) {
+      const pluginId = item.getAttribute("data-setting-id");
+      if (pluginId === null || pluginId === "") continue;
+      const manifest = manifests[pluginId];
+      if (manifest === undefined) continue;
+      const title = item.querySelector<HTMLElement>(".vertical-tab-nav-item-title");
+      if (title === null) continue;
+      const isOwn = pluginId === this.input.ownPluginId;
+      const original = isOwn
+        ? title.textContent ?? manifest.name
+        : this.localizedDisplayNames.get(pluginId)?.original ?? manifest.name;
+      // Record the official title even when Obsidian already rendered the
+      // localized text (the manifest was rewritten before the sidebar was
+      // rendered), so disabling metadata localization stays reversible.
+      if (title.getAttribute(SETTINGS_NAV_ORIGINAL_ATTRIBUTE) === null) {
+        title.setAttribute(SETTINGS_NAV_ORIGINAL_ATTRIBUTE, original);
+      }
+      const target = isOwn
+        ? manifest.name
+        : localizedPluginDisplayName(
+            original,
+            state.pluginCatalogs[pluginId],
+            getPluginTranslation(state, pluginId, targetLocale),
+            targetLocale,
+          );
+      if (target === "" || (title.textContent?.trim() ?? "") === target) continue;
+      title.textContent = target;
+    }
+  }
+
+  restoreSettingsWindowNavigation(): void {
+    const document = this.settingsWindowDocument();
+    if (document === undefined || !("querySelectorAll" in document)) return;
+    const manifests = this.pluginManifests();
+    for (const item of Array.from(
+      document.querySelectorAll<HTMLElement>(".vertical-tab-nav-item[data-setting-id]"),
+    )) {
+      const pluginId = item.getAttribute("data-setting-id");
+      if (pluginId === null || pluginId === "") continue;
+      const title = item.querySelector<HTMLElement>(".vertical-tab-nav-item-title");
+      if (title === null) continue;
+      const original = title.getAttribute(SETTINGS_NAV_ORIGINAL_ATTRIBUTE)
+        ?? this.localizedDisplayNames.get(pluginId)?.original
+        ?? manifests?.[pluginId]?.name;
+      if (original !== undefined && original !== "" && title.textContent !== original) {
+        title.textContent = original;
+      }
+      title.removeAttribute(SETTINGS_NAV_ORIGINAL_ATTRIBUTE);
+    }
+  }
+
+  /**
+   * Obsidian 1.13 renders community-plugin settings pages lazily inside the
+   * standalone settings window, which never emits workspace window events,
+   * so the runtime observer never reaches that document on its own. Attaching
+   * it to the settings window body from the main window translates the page
+   * content when it is opened or switched, with the same reversible rules as
+   * every other observed root.
+   */
+  observeSettingsWindow(): void {
+    if (!this.input.settings().pluginTranslationEnabled) return;
+    const document = this.settingsWindowDocument();
+    if (document?.body === null || document?.body === undefined) return;
+    this.runtime.start(document.body);
+  }
+
+  private pluginManifests(): Readonly<Record<string, { readonly name: string }>> | undefined {
+    const manager = Reflect.get(this.input.app, "plugins") as
+      | { readonly manifests?: Readonly<Record<string, { readonly name: string }>> }
+      | undefined;
+    return manager?.manifests;
+  }
+
+  private settingsWindowDocument(): Document | undefined {
+    const setting = Reflect.get(this.input.app, "setting") as
+      | { readonly win?: unknown }
+      | undefined;
+    const win = setting?.win;
+    if (typeof win !== "object" || win === null || !("document" in win)) return undefined;
+    return (win as { readonly document?: Document }).document;
+  }
+
+  async applyThirdPartyFilePatches(pluginIds: readonly string[]): Promise<{ readonly applied: number; readonly skipped: number; readonly conflicts: number }> {
+    const plugins = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
+    const selectedIds = new Set(pluginIds);
+    let applied = 0; let skipped = 0; let conflicts = 0;
+    for (const plugin of plugins.filter((item) => selectedIds.has(item.id) && item.enabled && !this.input.settings().excludedPluginIds.includes(item.id))) {
+      const result = await applyPublishedPluginFilePatch({
+        vault: this.input.app.vault,
+        plugin,
+        catalog: this.input.state().pluginCatalogs[plugin.id],
+        translation: getPluginTranslation(this.input.state(), plugin.id, this.input.settings().targetLocale),
+      });
+      applied += result.applied; skipped += result.skipped; conflicts += result.conflicts;
+    }
+    return { applied, skipped, conflicts };
+  }
+
+  async restoreThirdPartyFilePatches(
+    pluginIds?: readonly string[],
+    force = false,
+  ): Promise<{ readonly restored: number; readonly conflicts: number }> {
+    const plugins = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
+    const selectedIds = pluginIds === undefined ? null : new Set(pluginIds);
+    let restored = 0; let conflicts = 0;
+    for (const plugin of plugins.filter(
+      (item) => selectedIds === null || selectedIds.has(item.id),
+    )) {
+      const result = await restorePublishedPluginFilePatch(this.input.app.vault, plugin, force);
+      if (result === "restored") restored += 1;
+      if (result === "conflict") conflicts += 1;
+    }
+    return { restored, conflicts };
+  }
+
+  async pluginFilePatchStates(
+    pluginIds: readonly string[],
+  ): Promise<ReadonlyMap<string, boolean>> {
+    const plugins = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
+    const selectedIds = new Set(pluginIds);
+    const states = new Map<string, boolean>();
+    for (const plugin of plugins.filter((item) => selectedIds.has(item.id))) {
+      states.set(plugin.id, await hasActivePluginFilePatch(this.input.app.vault, plugin));
+    }
+    return states;
   }
 
   async importTranslationDictionary(raw: string): Promise<PluginTranslationState> {
@@ -195,6 +453,18 @@ export class PluginAutomationController {
   private allTranslations(): PluginUiTranslation[] {
     return selectApplicablePluginTranslations(this.input.state(), this.input.settings());
   }
+}
+
+export function canReuseScannedPluginCatalog(
+  previous: PluginUiCatalog | undefined,
+  plugin: Pick<InstalledObsidianPlugin, "name" | "version">,
+  artifactDigest: string,
+): boolean {
+  return previous?.catalogIdentity !== undefined
+    && previous.pluginVersion === plugin.version
+    && previous.pluginName === plugin.name
+    && previous.artifactDigest === artifactDigest
+    && previous.patchEvidenceRevision === 10;
 }
 
 export function selectApplicablePluginTranslations(

@@ -32,7 +32,11 @@ export interface PublishedCatalogCoordinate {
 
 export function resolvePublishedPluginArtifactDigestFromCatalog(
   catalog: PublishedEcosystemCatalog,
-  input: Readonly<{ pluginId: string; pluginVersion: string }>,
+  input: Readonly<{
+    pluginId: string;
+    pluginVersion: string;
+    targetLocale?: string;
+  }>,
 ): string | undefined {
   const pluginObjects = catalog.objects.filter(
     (item): item is Record<string, unknown> => isRecord(item) && item.slug === input.pluginId,
@@ -52,7 +56,28 @@ export function resolvePublishedPluginArtifactDigestFromCatalog(
   if (versions.length !== 1) {
     throw new Error(`Obsidian 插件目录存在重复版本：${input.pluginId}@${input.pluginVersion}`);
   }
-  return requiredSha256(versions[0].content_digest, "插件版本制品摘要无效");
+  const objectVersionDigest = requiredSha256(versions[0].content_digest, "插件版本制品摘要无效");
+  // The immutable object-version digest is reused across same-version adapter
+  // rescans (migration 185), so it may predate the current authoritative
+  // catalog.  When a locale coverage row carries a catalog identity, its
+  // artifactDigest is the current authoritative scan digest and must win.
+  const objectVersionId = requiredString(versions[0].object_version_id, "插件版本缺少对象版本 ID");
+  const coverage = Array.isArray(plugin.coverage) ? plugin.coverage : [];
+  const authoritative = coverage.find((item): item is Record<string, unknown> => (
+    isRecord(item)
+    && item.object_version_id === objectVersionId
+    && (input.targetLocale === undefined || item.target_locale === input.targetLocale)
+    && isRecord(item.catalog_identity)
+    && typeof item.catalog_identity.artifactDigest === "string"
+  ));
+  const identityDigest = (
+    authoritative !== undefined
+    && isRecord(authoritative.catalog_identity)
+    && typeof authoritative.catalog_identity.artifactDigest === "string"
+  )
+    ? authoritative.catalog_identity.artifactDigest
+    : undefined;
+  return identityDigest ?? objectVersionDigest;
 }
 
 export async function loadPublishedEcosystemCatalog(
@@ -159,7 +184,7 @@ export function resolvePublishedPluginSourceFromCatalog(
     throw new Error(`Obsidian 插件目录存在重复版本：${input.pluginId}@${input.pluginVersion}`);
   }
   const objectVersionId = requiredString(versions[0].object_version_id, "插件版本缺少对象版本 ID");
-  const artifactDigest = requiredSha256(versions[0].content_digest, "插件版本制品摘要无效");
+  const objectVersionDigest = requiredSha256(versions[0].content_digest, "插件版本制品摘要无效");
   const repository = repositoryFromVerifiedExternalIdentity(
     versions[0].verified_external_registry_key,
     versions[0].canonical_external_identity,
@@ -181,7 +206,6 @@ export function resolvePublishedPluginSourceFromCatalog(
     if (
       identity.resourceKey !== input.pluginId
       || identity.resourceVersion !== input.pluginVersion
-      || identity.artifactDigest !== artifactDigest
     ) {
       throw new Error(`Obsidian 插件权威目录身份冲突：${input.pluginId}@${input.pluginVersion}`);
     }
@@ -223,7 +247,10 @@ export function resolvePublishedPluginSourceFromCatalog(
   return {
     sourceVersionId: requiredString(sourceVersionIds[0], "译文覆盖缺少源版本 ID"),
     objectVersionId,
-    artifactDigest,
+    // The coverage catalog identity is the current authoritative scan digest;
+    // the object-version digest is only a fallback for coverage without an
+    // identity (same-version rescans reuse the immutable object version row).
+    artifactDigest: selectedEntry.identity.artifactDigest ?? objectVersionDigest,
     ...(repository === undefined ? {} : { repository }),
     ...(sourceSnapshotDigests[0] === undefined
       ? {}

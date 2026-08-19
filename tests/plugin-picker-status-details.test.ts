@@ -23,7 +23,7 @@ describe("renderPluginPickerCoverageDetails", () => {
 
     renderPluginPickerCoverageDetails(container, {
       notice: "无法公开发布：上游许可证不在当前安全分发范围",
-      headline: "已安全应用 15/466 条匹配译文，451 条暂无权威译文",
+      headline: "可安全应用 15/466 条匹配译文，451 条暂无权威译文",
       complete: false,
       scopeMetrics: [],
       sourceMetrics: [],
@@ -31,7 +31,7 @@ describe("renderPluginPickerCoverageDetails", () => {
 
     expect(rendered).toEqual([
       "无法公开发布：上游许可证不在当前安全分发范围",
-      "已安全应用 15/466 条匹配译文，451 条暂无权威译文",
+      "可安全应用 15/466 条匹配译文，451 条暂无权威译文",
     ]);
   });
 });

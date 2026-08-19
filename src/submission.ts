@@ -16,9 +16,9 @@ import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 export const OBSIDIAN_PUBLIC_PROFILE = {
   externalRegistry: "obsidian_community_plugins",
   adapterDefinitionId: "obsidian",
-  adapterVersion: "1.4.3",
-  adapterBuildDigestHex: "91db112fb6b3f6e2ea3e94abab9d22c74c7af4231bb576548f49440040de08e8",
-  registryPolicyRevision: 24,
+  adapterVersion: "1.4.6",
+  adapterBuildDigestHex: "bb81e7a6012cedb88222360f6de3fd85259c99b803066cc86952994206ab2f6d",
+  registryPolicyRevision: 25,
   sourceDiscoveryEpoch: 22,
 } as const;
 
@@ -57,6 +57,8 @@ export async function submitObsidianPluginDiscovery(input: {
     input.catalog.pluginVersion,
     input.catalog.artifactDigest,
     input.catalog.digest,
+    input.catalog.scannedAt,
+    OBSIDIAN_CLIENT_VERSION,
     OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
     String(OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision),
     candidateLocators.join("\u0000"),
@@ -134,6 +136,8 @@ export async function submitObsidianLocalizationObservation(input: {
     input.catalog.pluginVersion,
     input.targetLocale,
     input.catalog.digest,
+    input.catalog.scannedAt,
+    OBSIDIAN_CLIENT_VERSION,
     OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
   ].join("\u0000"))}`;
   const payload: Omit<LocalizationObservationIntent, "installationProof"> = {

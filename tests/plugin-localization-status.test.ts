@@ -141,7 +141,7 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "waiting",
-      label: "翻译已完成 7/7 条，等待译文制品发布",
+      label: "翻译已完成 7/7 条，正在生成可下载包",
     });
   });
 
@@ -361,12 +361,12 @@ describe("describePluginLocalizationStatus", () => {
         pulledAt: "2026-07-18T00:00:00Z",
       },
       targetLocale: "zh-CN",
-    })).toEqual({ kind: "localized", label: "已本地化 1 条" });
+    })).toEqual({ kind: "waiting", label: "已获取 1 条缓存译文，等待当前目录匹配" });
   });
 
-  it("将未收录和被拒绝的需求稳定归类，供列表筛选和单项重试使用", () => {
+  it("将首次本地化准备和被拒绝的需求稳定归类，供列表筛选和单项重试使用", () => {
     expect(describePluginLocalizationStatus({ targetLocale: "zh-CN" })).toEqual({
-      kind: "unrecorded", label: "尚未提交本地化需求",
+      kind: "waiting", label: "正在准备首次本地化…", initialSubmission: true,
     });
     expect(describePluginLocalizationStatus({
       submission: { ...baseSubmission, localizationContributionState: "rejected" },
@@ -429,7 +429,7 @@ describe("describePluginLocalizationStatus", () => {
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "已安全应用 1/2 条匹配译文，1 条暂不可安全应用",
+        headline: "可安全应用 1/2 条匹配译文，1 条暂不可安全应用",
         complete: false,
       },
     });
@@ -453,7 +453,7 @@ describe("describePluginLocalizationStatus", () => {
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "已安全应用 1/1 条匹配译文",
+        headline: "可安全应用 1/1 条匹配译文",
         complete: true,
       },
     });
@@ -491,7 +491,7 @@ describe("describePluginLocalizationStatus", () => {
     });
 
     expect(status.kind).toBe("localized");
-    expect(status.coverage?.headline).toBe("已安全应用 1/2 条匹配译文，1 条暂不可安全应用");
+    expect(status.coverage?.headline).toBe("可安全应用 1/2 条匹配译文，1 条暂不可安全应用");
     expect(status.coverage?.notice).toBeUndefined();
     expect(status.coverage?.complete).toBe(false);
   });
@@ -550,7 +550,7 @@ describe("describePluginLocalizationStatus", () => {
       "无法公开发布：当前精确版本的公开分发策略不可用",
     );
     expect(status.coverage?.notice).toBe(
-      "已安全应用 1/2 条匹配译文，1 条暂不可安全应用",
+      "可安全应用 1/2 条匹配译文，1 条暂不可安全应用",
     );
     expect(status.label).not.toContain("等待");
     expect(pluginManualRetryKind({
@@ -597,7 +597,7 @@ describe("describePluginLocalizationStatus", () => {
       "机器翻译失败，服务器已停止自动重试。点击右侧“重试此插件”。",
     );
     expect(status.coverage?.notice).toBe(
-      "已安全应用 1/2 条匹配译文，1 条暂不可安全应用",
+      "可安全应用 1/2 条匹配译文，1 条暂不可安全应用",
     );
   });
 
@@ -694,6 +694,10 @@ describe("describePluginLocalizationStatus", () => {
       },
       submission: {
         ...baseSubmission,
+        pluginId: "generic",
+        pluginVersion: "1.0.0",
+        catalogDigest: exactIdentity.digest,
+        sourceVersionId: "source",
         localizationDemandStatus: {
           state: "distribution_blocked", sourceVersionId: "source", targetLocale: "zh-CN",
           targetVariant: "default", totalUnitCount: 2, workItemCount: 1,
@@ -711,7 +715,7 @@ describe("describePluginLocalizationStatus", () => {
       "无法公开发布：当前精确版本的公开分发策略不可用",
     );
     expect(status.coverage?.notice).toBe(
-      "已安全应用 1/2 条匹配译文，1 条暂不可安全应用",
+      "可安全应用 1/2 条匹配译文，1 条暂不可安全应用",
     );
   });
 
@@ -734,6 +738,10 @@ describe("describePluginLocalizationStatus", () => {
       },
       submission: {
         ...baseSubmission,
+        pluginId: "generic",
+        pluginVersion: "1.0.0",
+        catalogDigest: exactIdentity.digest,
+        sourceVersionId: "source",
         localizationDemandStatus: {
           state: "distribution_blocked", sourceVersionId: "source", targetLocale: "zh-CN",
           targetVariant: "default", totalUnitCount: 1, workItemCount: 1,
@@ -751,7 +759,7 @@ describe("describePluginLocalizationStatus", () => {
     expect(status.coverage?.headline).toBe(
       "无法公开发布：上游许可证不在当前安全分发范围",
     );
-    expect(status.coverage?.notice).toBe("已安全应用 1/1 条匹配译文");
+    expect(status.coverage?.notice).toBe("可安全应用 1/1 条匹配译文");
   });
 
   it("新权威来源完整覆盖时不沿用旧来源的分发阻断", () => {
@@ -776,8 +784,34 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     });
 
-    expect(status.kind).toBe("localized");
-    expect(status.label).toBe("已本地化 1 条");
+    expect(status.kind).toBe("waiting");
+    expect(status.label).toBe("已获取 1 条缓存译文，等待当前目录匹配");
+  });
+
+  it("提交记录已指向新权威来源时不显示旧译文缓存的分发阻断", () => {
+    const status = describePluginLocalizationStatus({
+      translation: {
+        pluginId: "generic", pluginVersion: "2.0.0", sourceVersionId: "old-source",
+        targetLocale: "zh-CN",
+        entries: [{ pluginId: "generic", source: "Settings", target: "设置" }],
+        pulledAt: "2026-07-30T00:00:00Z",
+      },
+      submission: {
+        ...baseSubmission,
+        sourceVersionId: "current-source",
+        localizationDemandStatus: {
+          state: "distribution_blocked", sourceVersionId: "old-source", targetLocale: "zh-CN",
+          targetVariant: "default", totalUnitCount: 1, workItemCount: 1,
+          nativeUnitCount: 0, queuedCount: 0, runningCount: 0, succeededCount: 1,
+          failedCount: 0, reviewedUnitCount: 0, publishedUnitCount: 0,
+          retryAfterSeconds: 0, failureCode: "PublicDistributionPolicyAmbiguous",
+          failureRetryable: false, updatedAt: "2026-07-29T00:00:00Z",
+        },
+      },
+      targetLocale: "zh-CN",
+    });
+
+    expect(status).toEqual({ kind: "waiting", label: "已获取 1 条缓存译文，等待当前目录匹配" });
   });
 
   it("没有本地目录时仍显示当前来源的分发阻断", () => {
@@ -811,6 +845,8 @@ describe("describePluginLocalizationStatus", () => {
   it.each([
     ["PublicDistributionPolicyPending", "暂无法公开发布：许可证证据已确认，服务端正在生成公开分发策略"],
     ["PublicDistributionLicenseUnsupported", "无法公开发布：上游许可证不在当前安全分发范围"],
+    ["PublicDistributionLicenseRedistributionProhibited", "无法公开发布：当前来源的许可证明确禁止公开分发"],
+    ["PublicDistributionLicenseReviewRequired", "暂无法公开发布：当前来源的许可证需要人工确认"],
     ["PublicDistributionLicenseEvidenceAmbiguous", "无法公开发布：当前来源的许可证证据存在冲突，服务器无法唯一确认许可证"],
     ["PublicDistributionPolicyAmbiguous", "无法公开发布：当前精确版本存在冲突的公开分发策略"],
     ["PublicSourceVersionYanked", "无法公开发布：当前来源版本已下架"],
@@ -942,8 +978,8 @@ describe("describePluginLocalizationStatus", () => {
     expect(status.coverage?.headline).toBe("服务器正在校验当前精确版本的权威来源与许可证");
     expect(status.coverage?.notice).toBe(
       drift
-        ? "已安全应用 1/2 条匹配译文，1 条暂不可安全应用"
-        : "已安全应用 2/2 条匹配译文",
+        ? "可安全应用 1/2 条匹配译文，1 条暂不可安全应用"
+        : "可安全应用 2/2 条匹配译文",
     );
   });
 
@@ -1073,9 +1109,18 @@ describe("describePluginLocalizationStatus", () => {
       kind: "catalog-mismatch",
       label: "本地安装与权威目录的精确制品不一致，已暂停同步",
     });
+    // 贡献未被拒绝时（正常暂停）不提供重试按钮。
     expect(pluginManualRetryKind({
       catalog, submission, targetLocale: "zh-CN",
     })).toBeNull();
+    // 服务端权威摘要可能因规范化变更而陈旧（R-019 follow-up）：本地制品
+    // 与官方 release 一致但被暂停时，贡献已拒绝状态下必须提供手动重试，
+    // 以便提交新观察触发服务端一次性权威恢复（重新获取并核对摘要）。
+    expect(pluginManualRetryKind({
+      catalog,
+      submission: { ...submission, contributionState: "rejected" },
+      targetLocale: "zh-CN",
+    })).toBe("resubmit");
   });
 
   it("有可信来源元数据时展示原生、补充、校订和自动翻译构成", () => {
@@ -1096,8 +1141,8 @@ describe("describePluginLocalizationStatus", () => {
       },
       targetLocale: "zh-CN",
     })).toEqual({
-      kind: "localized",
-      label: "已本地化 4 条；插件自带 1 · 语枢已校对 1 · 语枢校对修正 1 · 语枢机翻 1（未经人工校对）",
+      kind: "waiting",
+      label: "已获取 4 条缓存译文，等待当前目录匹配；插件自带 1 · 语枢已校对 1 · 语枢校对修正 1 · 语枢机翻 1（未经人工校对）",
     });
   });
 
@@ -1157,7 +1202,7 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     });
 
-    expect(status.label).toContain("已发布 1/2 条（50%），1 条尚未发布");
+    expect(status.label).toContain("已获取 1/2 条匹配译文（50%），1 条尚未发布");
     expect(status.label).not.toContain("插件自带");
     expect(status.coverage?.sourceMetrics).toEqual([
       { label: "语枢机翻 1（未经人工校对）", tone: "automatic" },
@@ -1184,9 +1229,9 @@ describe("describePluginLocalizationStatus", () => {
     };
     expect(describePluginLocalizationStatus({ catalog, translation, targetLocale: "zh-CN" })).toEqual({
       kind: "localized",
-      label: "已发布 1/2 条（50%），1 条尚未发布；插件界面 1/2",
+      label: "已获取 1/2 条匹配译文（50%），1 条尚未发布；插件界面 1/2",
       coverage: {
-        headline: "已发布 1/2 条（50%），1 条尚未发布",
+        headline: "已获取 1/2 条匹配译文（50%），1 条尚未发布",
         complete: false,
         scopeMetrics: ["插件界面 1/2"],
         sourceMetrics: [],
@@ -1209,9 +1254,9 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "localized",
-      label: "已发布 1/2 条（50%），1 条尚未发布；插件界面 1/2",
+      label: "已获取 1/2 条匹配译文（50%），1 条尚未发布；插件界面 1/2",
       coverage: {
-        headline: "已发布 1/2 条（50%），1 条尚未发布",
+        headline: "已获取 1/2 条匹配译文（50%），1 条尚未发布",
         complete: false,
         scopeMetrics: ["插件界面 1/2"],
         sourceMetrics: [],
@@ -1234,9 +1279,9 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "waiting",
-      label: "已本地化 1/2 条（50%），1 条等待发布；插件界面 1/2",
+      label: "已准备 1/2 条匹配译文（50%），1 条等待发布；插件界面 1/2",
       coverage: {
-        headline: "已本地化 1/2 条（50%），1 条等待发布",
+        headline: "已准备 1/2 条匹配译文（50%），1 条等待发布",
         complete: false,
         scopeMetrics: ["插件界面 1/2"],
         sourceMetrics: [],
@@ -1267,9 +1312,9 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "localized",
-      label: "已本地化 2/2 条（100%）；插件自带 2 条（范围明细待同步）",
+      label: "已获取 2/2 条匹配译文（100%）；插件自带 2 条（范围明细待同步）",
       coverage: {
-        headline: "已本地化 2/2 条（100%）",
+        headline: "已获取 2/2 条匹配译文（100%）",
         complete: true,
         scopeMetrics: ["插件自带 2 条（范围明细待同步）"],
         sourceMetrics: [],
@@ -1309,7 +1354,7 @@ describe("describePluginLocalizationStatus", () => {
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "已安全应用 1/2 条匹配译文，1 条暂不可安全应用",
+        headline: "可安全应用 1/2 条匹配译文，1 条暂不可安全应用",
         complete: false,
       },
     });
@@ -1353,7 +1398,7 @@ describe("describePluginLocalizationStatus", () => {
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "已安全应用 1350/1683 条匹配译文，333 条暂不可安全应用",
+        headline: "可安全应用 1350/1683 条匹配译文，333 条暂不可安全应用",
         complete: false,
         scopeMetrics: ["插件界面 1350/1402", "名称与说明 0/2", "README 0/290"],
         sourceMetrics: [{ label: "插件自带 1350", tone: "native" }],
@@ -1374,8 +1419,8 @@ describe("describePluginLocalizationStatus", () => {
       },
       targetLocale: "zh-CN",
     })).toEqual({
-      kind: "localized",
-      label: "已本地化 1 条；语枢已校对 1",
+      kind: "waiting",
+      label: "已获取 1 条缓存译文，等待当前目录匹配；语枢已校对 1",
     });
   });
 });

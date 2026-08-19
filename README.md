@@ -1,6 +1,6 @@
 # Trans-Hub Localizer
 
-Make supported Obsidian community plugins feel native in your language.
+Runtime **i18n** and localization for Obsidian community plugins—make eligible plugins feel native in your language without modifying their files.
 
 <p align="center">
   <b>English</b> · <b>简体中文见下方</b>
@@ -9,6 +9,20 @@ Make supported Obsidian community plugins feel native in your language.
 Trans-Hub Localizer applies verified translations to supported community-plugin names, descriptions, settings, commands, and interface text. It changes only Obsidian's presentation layer: third-party plugin files and vault notes remain untouched.
 
 Powered by [Trans-Hub](https://trans-hub.net), an open localization collaboration platform.
+
+## Why Trans-Hub Localizer
+
+### Built for the whole community-plugin ecosystem
+
+This is not a translation pack for a fixed shortlist of plugins. The client discovers your enabled community plugins locally and can process every plugin whose exact version can be bound to the official Obsidian directory and a trusted upstream GitHub source. New eligible plugins follow the same workflow; no per-plugin source-code patch or custom fork is required.
+
+### Server-authoritative, version-aware translations
+
+The client contributes only the plugin identity, exact version, selected language, coverage facts, and cryptographic digests. Trans-Hub independently verifies the official registry, upstream release, and source evidence on the server. Only a published translation export for that exact source version can be applied, which prevents stale caches or locally altered bundles from being treated as authoritative.
+
+### Safe runtime i18n, not file rewriting
+
+Translations are matched and applied at runtime to Obsidian's presentation layer. The plugin never edits third-party plugin files, bundled JavaScript, language packs, or vault notes. It also excludes Markdown editors, reading views, code, scripts, and editable content; turning localization off restores the original presentation immediately.
 
 ## What it does
 
@@ -81,11 +95,25 @@ Apache-2.0. See [LICENSE](LICENSE).
 
 # 语枢 · 插件本地化
 
-让已支持的 Obsidian 社区插件以你选择的语言自然显示。
+面向 Obsidian 社区插件的运行时 **I18n** 与本地化：让符合条件的插件以你选择的语言自然显示，同时不修改插件文件。
 
 语枢 · 插件本地化会为已支持的社区插件应用经校验的译文，覆盖名称、说明、设置、命令和界面文本。它只作用于 Obsidian 的呈现层，不会修改第三方插件文件或你的库（Vault）笔记。
 
 由开放本地化协作平台 [语枢（Trans-Hub）](https://trans-hub.net) 驱动。
+
+## 为什么选择语枢 · 插件本地化
+
+### 面向整个社区插件生态
+
+它不是只为一小批固定插件准备的翻译包。客户端会在本机发现已启用的社区插件；凡是当前精确版本能够绑定到 Obsidian 官方目录和可信上游 GitHub 来源的插件，都能进入同一套本地化流程。新增符合条件的插件无需逐个改源码、维护补丁或分叉仓库。
+
+### 服务端权威、版本精确
+
+客户端只提交插件身份、精确版本、所选语言、覆盖事实和加密摘要。语枢服务端会独立校验官方目录、上游 Release 与来源证据。只有与该精确来源版本对应的已发布译文制品才能被应用，避免把旧缓存或本地被修改过的插件包误当成权威内容。
+
+### 安全的运行时 I18n，而不是改写文件
+
+译文只在 Obsidian 呈现层按精确匹配运行时应用。插件不会改写第三方插件文件、打包 JavaScript、语言包或 Vault 笔记；Markdown 编辑器、阅读视图、代码、脚本和可编辑内容也会被排除。关闭本地化即可立即恢复原始呈现。
 
 ## 能做什么
 

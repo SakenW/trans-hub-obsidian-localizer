@@ -15,6 +15,8 @@ export const CONTROL_PATHS = Object.freeze({
     `/v1/public-client/contributions/${pathSegment(contributionId)}/status`,
   localizationDemandStatus: (contributionId: string) =>
     `/v1/public-client/contributions/${pathSegment(contributionId)}/localization-demand-status`,
+  localizationDemandStatusBatch:
+    "/v1/public-client/localization-demand-status/batch",
   createUploadGrant: (contributionId: string) =>
     `/v1/public-client/contributions/${pathSegment(contributionId)}/upload-grants`,
 });

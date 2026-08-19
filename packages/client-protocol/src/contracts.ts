@@ -642,6 +642,24 @@ export interface LocalizationDemandStatus {
   readonly updatedAt: string;
 }
 
+export interface LocalizationDemandStatusBatchRequest {
+  readonly kind: "localization_demand_status_batch";
+  readonly protocol: ProtocolVersion;
+  readonly contributionIds: readonly string[];
+}
+
+export interface LocalizationDemandStatusBatchItem {
+  readonly contributionId: string;
+  readonly found: boolean;
+  readonly coordinates: readonly LocalizationDemandCoordinateStatus[];
+}
+
+export interface LocalizationDemandStatusBatch {
+  readonly kind: "localization_demand_status_batch";
+  readonly protocol: ProtocolVersion;
+  readonly items: readonly LocalizationDemandStatusBatchItem[];
+}
+
 export interface SourceAttestation {
   readonly kind: "source_attestation";
   readonly protocol: ProtocolVersion;

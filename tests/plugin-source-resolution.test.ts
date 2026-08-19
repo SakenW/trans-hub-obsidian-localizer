@@ -33,6 +33,23 @@ describe("resolvePublishedPluginSource", () => {
     })).toBe(ARTIFACT_DIGEST);
   });
 
+  it("prefers the coverage catalog identity digest over the reused object-version digest", () => {
+    const body = catalog();
+    const authorityIdentity = {
+      ...CATALOG_IDENTITY,
+      artifactDigest: "78".repeat(32),
+      digest: "89".repeat(32),
+    };
+    body.objects[0].versions[0].content_digest = ARTIFACT_DIGEST;
+    body.objects[0].coverage[0].catalog_identity = authorityIdentity;
+
+    expect(resolvePublishedPluginArtifactDigestFromCatalog(body, {
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+    })).toBe(authorityIdentity.artifactDigest);
+  });
+
   it("resolves an exact published Obsidian plugin version and locale", async () => {
     const requestPaths: string[] = [];
     const result = await resolvePublishedPluginSource({
@@ -113,6 +130,35 @@ describe("resolvePublishedPluginSource", () => {
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
     })).resolves.not.toHaveProperty("repository");
+  });
+
+  it("tolerates a reused object-version digest after a same-version adapter rescan", async () => {
+    // Migration 185 reuses the immutable object-version row on a same-version
+    // adapter rescan, so versions[].content_digest can legitimately differ
+    // from the current coverage catalog_identity.artifactDigest.  The client
+    // must use the coverage identity as the authoritative digest instead of
+    // failing with an "identity conflict".
+    const body = catalog();
+    const authorityIdentity = {
+      ...CATALOG_IDENTITY,
+      artifactDigest: "34".repeat(32),
+      digest: "56".repeat(32),
+    };
+    body.objects[0].versions[0].content_digest = ARTIFACT_DIGEST;
+    body.objects[0].coverage[0].catalog_identity = authorityIdentity;
+
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+    })).resolves.toEqual(expect.objectContaining({
+      sourceVersionId: SOURCE_VERSION_ID,
+      catalogIdentityExact: false,
+      artifactDigest: authorityIdentity.artifactDigest,
+      catalogIdentity: authorityIdentity,
+    }));
   });
 
   it("keeps the authoritative source when locale coverage is still zero", async () => {

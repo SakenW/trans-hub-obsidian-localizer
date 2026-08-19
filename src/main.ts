@@ -5,13 +5,18 @@ import { localizedClientName, setClientLocale, translate } from "./client-locali
 import { retireExpiredDerivedCache } from "./derived-cache-migration";
 import { errorMessage } from "./error-message";
 import { openSystemBrowser } from "./external-browser";
+import { PluginManagerView, PLUGIN_MANAGER_VIEW_TYPE } from "./plugin-manager-view";
 import { registerPluginTranslationCommands } from "./plugin-actions";
 import {
   PluginAutomationController,
   type PluginScanResult,
 } from "./plugin-automation";
 import type { PluginSourceSnapshot } from "./plugin-picker-source";
-import { synchronizeConfiguredPluginTranslations, type PluginSyncSummary } from "./plugin-sync";
+import {
+  refreshConfiguredPluginStatuses,
+  synchronizeConfiguredPluginTranslations,
+  type PluginSyncSummary,
+} from "./plugin-sync";
 import {
   describePluginSelectionProcessing,
   MAX_PENDING_TRANSLATION_QUICK_RETRIES,
@@ -67,6 +72,7 @@ export default class TransHubObsidianPlugin extends Plugin {
   private pendingRetryAttempt = 0;
   private readonly pendingRetryPluginIds = new Set<string>();
   private readonly pluginProcessingQueue = new PluginProcessingQueue();
+  private automaticPluginTranslationInFlight: Promise<void> | null = null;
   private targetLocaleRevision = 0;
   private resetPluginLocalizationDerivedCache = false;
 
@@ -106,7 +112,7 @@ export default class TransHubObsidianPlugin extends Plugin {
           });
           new Notice(translate("语枢已连接，此设备以后会自动恢复连接。"));
           this.settingTab.reportCommandStatus(translate("连接成功，正在同步所选插件…"), false);
-          await this.runAutomaticPluginTranslation();
+          await this.runAutomaticPluginTranslation(true);
         } catch (error) {
           const message = error instanceof Error ? error.message : translate("语枢连接失败。");
           new Notice(message, 10_000);
@@ -125,16 +131,44 @@ export default class TransHubObsidianPlugin extends Plugin {
     });
     this.settingTab = new TransHubSettingTab(this.app, this);
     this.addSettingTab(this.settingTab);
+    this.registerView(
+      PLUGIN_MANAGER_VIEW_TYPE,
+      (leaf) => new PluginManagerView(leaf, this.settingTab),
+    );
+    this.addCommand({
+      id: "open-plugin-localization-manager",
+      name: translate("打开插件本地化管理器"),
+      callback: () => { void this.openPluginManager(); },
+    });
     this.register(() => this.pluginAutomation.stop());
     this.register(() => this.clearPendingTranslationRetry());
     this.pluginAutomation.start();
+    // Apply persisted translations immediately so settings windows and the
+    // sidebar are localized from the stored state without waiting for the
+    // first full scan+sync pass to finish.
+    this.pluginAutomation.applyCachedTranslations();
     // Community-plugin reloads can occur after Obsidian has already emitted
     // layout-ready, so do not leave the persisted catalog stale until the
     // periodic pass runs.
-    void this.runAutomaticPluginTranslation();
+    void this.runAutomaticPluginTranslation(true);
     this.app.workspace.onLayoutReady(() => {
+      // All community plugins are registered by layout-ready; re-apply the
+      // display names captured at onload so manifests loaded after ours are
+      // localized too, and refresh an already-open settings window.
+      this.pluginAutomation.applyPluginDisplayNames();
+      this.pluginAutomation.localizeSettingsWindowNavigation();
+      this.pluginAutomation.observeSettingsWindow();
       void this.runAutomaticPluginTranslation();
     });
+    // Obsidian 1.13 keeps the settings window alive without workspace window
+    // events, and its sidebar does not re-render from the manifest registry.
+    // A lightweight tick keeps late-registered plugins and the open settings
+    // window consistent without waiting for the next scan.
+    this.registerInterval(window.setInterval(() => {
+      this.pluginAutomation.applyPluginDisplayNames();
+      this.pluginAutomation.localizeSettingsWindowNavigation();
+      this.pluginAutomation.observeSettingsWindow();
+    }, 2_000));
     this.registerInterval(window.setInterval(() => { void this.runAutomaticPluginTranslation(); }, AUTOMATION_INTERVAL_MS));
     registerPluginTranslationCommands(this, {
       scan: () => this.scanInstalledPluginStrings(),
@@ -178,6 +212,36 @@ export default class TransHubObsidianPlugin extends Plugin {
   getPluginState(): PluginState { return this.state; }
   getPluginSourceSnapshot(): PluginSourceSnapshot { return this.pluginAutomation.getSourceSnapshot(); }
 
+  async openPluginManager(): Promise<void> {
+    const existingLeaf = this.app.workspace.getLeavesOfType(PLUGIN_MANAGER_VIEW_TYPE)[0];
+    try {
+      const leaf = this.app.workspace.openPopoutLeaf({
+        size: { width: 960, height: 760 },
+      });
+      await leaf.setViewState({ type: PLUGIN_MANAGER_VIEW_TYPE, active: true });
+      existingLeaf?.detach();
+      await this.app.workspace.revealLeaf(leaf);
+    } catch (error) {
+      if (existingLeaf !== undefined) {
+        await this.app.workspace.revealLeaf(existingLeaf);
+        return;
+      }
+      const leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: PLUGIN_MANAGER_VIEW_TYPE, active: true });
+      await this.app.workspace.revealLeaf(leaf);
+      console.warn("[Trans-Hub] failed to open the plugin manager in a separate window", error);
+      new Notice(translate("此设备无法打开独立窗口，已在工作区中打开插件管理器。"), 10_000);
+    }
+  }
+
+  refreshPluginManager(): void { this.settingTab.refreshPluginManager(); }
+
+  updateObsidianPluginNavigationNames(
+    plugins: Parameters<TransHubSettingTab["updateObsidianPluginNavigationNames"]>[0],
+  ): void {
+    this.settingTab.updateObsidianPluginNavigationNames(plugins);
+  }
+
   applyClientLocale(locale: TransHubPluginSettings["targetLocale"]): void {
     setClientLocale(locale);
     this.manifest.name = localizedClientName();
@@ -206,7 +270,18 @@ export default class TransHubObsidianPlugin extends Plugin {
     return this.pluginAutomation.scanInstalledPlugins(onlyPluginIds);
   }
   applyCachedPluginTranslations(): void { this.pluginAutomation.applyCachedTranslations(); }
+  applyThirdPartyPluginFileTranslations(pluginIds: readonly string[]): Promise<{ readonly applied: number; readonly skipped: number; readonly conflicts: number }> {
+    return this.pluginAutomation.applyThirdPartyFilePatches(pluginIds);
+  }
+  restoreThirdPartyPluginFiles(pluginIds?: readonly string[], force = false): Promise<{ readonly restored: number; readonly conflicts: number }> {
+    return this.pluginAutomation.restoreThirdPartyFilePatches(pluginIds, force);
+  }
+  pluginFilePatchStates(pluginIds: readonly string[]): Promise<ReadonlyMap<string, boolean>> {
+    return this.pluginAutomation.pluginFilePatchStates(pluginIds);
+  }
   refreshPluginTranslationRuntime(): void { this.pluginAutomation.refreshRuntime(); }
+  refreshPluginDisplayNames(): void { this.pluginAutomation.applyPluginDisplayNames(); }
+  refreshSettingsWindowLocalization(): void { this.pluginAutomation.localizeSettingsWindowNavigation(); }
 
   processSelectedPlugins(
     resubmitRecoverableAuthorityObservations = false,
@@ -280,7 +355,7 @@ export default class TransHubObsidianPlugin extends Plugin {
   }): Promise<void> {
     const catalog = this.state.pluginCatalogs[input.pluginId];
     if (catalog === undefined || catalog.pluginVersion !== input.pluginVersion) {
-      throw new Error(translate("插件目录已变化，请先重新处理该插件。"));
+      throw new Error(translate("插件目录已变化，请先在插件管理器中重新同步该插件。"));
     }
     const { client, bootstrap } = await this.activation.client({
       apiBaseUrl: TRANS_HUB_API_BASE_URL,
@@ -314,6 +389,23 @@ export default class TransHubObsidianPlugin extends Plugin {
         undefined,
         selectablePluginIds,
       );
+    });
+  }
+
+
+  /** R-028/Phase 3: zero-write batch status refresh (never submits work). */
+  async refreshPluginStatusBatch(onlyPluginIds?: readonly string[]): Promise<PluginSyncSummary> {
+    const targetLocale = this.settings.targetLocale;
+    if (targetLocale === OBSIDIAN_SOURCE_LOCALE) {
+      return emptyPluginSyncSummary();
+    }
+    return refreshConfiguredPluginStatuses({
+      apiBaseUrl: TRANS_HUB_API_BASE_URL,
+      targetLocale,
+      excludedPluginIds: this.settings.excludedPluginIds,
+      ...(onlyPluginIds === undefined ? {} : { onlyPluginIds }),
+      activationStore: this.activation,
+      getState: () => this.state,
     });
   }
 
@@ -357,15 +449,35 @@ export default class TransHubObsidianPlugin extends Plugin {
       : parsedState;
   }
 
-  private async runAutomaticPluginTranslation(): Promise<void> {
+  private runAutomaticPluginTranslation(announce = false): Promise<void> {
+    if (this.automaticPluginTranslationInFlight !== null) {
+      return this.automaticPluginTranslationInFlight;
+    }
+    const operation = this.runAutomaticPluginTranslationNow(announce);
+    this.automaticPluginTranslationInFlight = operation;
+    void operation.finally(() => {
+      if (this.automaticPluginTranslationInFlight === operation) {
+        this.automaticPluginTranslationInFlight = null;
+      }
+    });
+    return operation;
+  }
+
+  private async runAutomaticPluginTranslationNow(announce: boolean): Promise<void> {
     try {
       const result = await this.processSelectedPlugins();
-      this.settingTab.reportCommandStatus(describePluginSelectionProcessing(result), false);
+      if (announce) {
+        this.settingTab.reportCommandStatus(describePluginSelectionProcessing(result), false);
+      } else {
+        // Periodic synchronization updates cards and persisted state, but it is
+        // not a new user action and must not replace the last announced summary.
+        this.settingTab.refreshPluginCards();
+      }
     }
     catch (error) {
       const message = errorMessage(error);
       console.warn("[Trans-Hub] 插件自动翻译暂未完成", error);
-      this.settingTab.reportCommandStatus(message, true);
+      if (announce) this.settingTab.reportCommandStatus(message, true);
     }
   }
 
@@ -412,12 +524,10 @@ export default class TransHubObsidianPlugin extends Plugin {
       const retryPluginIds = [...this.pendingRetryPluginIds];
       this.pendingRetryPluginIds.clear();
       void this.processPlugins(retryPluginIds)
-        .then((result) => {
-          this.settingTab.reportCommandStatus(
-            describePluginSelectionProcessing(result),
-            false,
-          );
-        })
+        // Keep the last announced summary stable. This background pull still
+        // persists fresh plugin data and refreshes the settings cards, but its
+        // deliberately partial scan must not replace a full-scan summary.
+        .then(() => { this.settingTab.refreshPluginCards(); })
         .catch((error: unknown) => {
           console.warn("[Trans-Hub] 等待译文自动回拉失败", error);
           this.queuePendingTranslationRetry(retryPluginIds);

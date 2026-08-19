@@ -229,11 +229,11 @@ export class TranslationExportClient {
     if (etag === undefined || etag === "")
       throw new Error("translation_manifest_missing_etag");
     const manifest = parseTranslationExportManifest(response.body);
-    if (etag !== manifestEtag(manifest)) {
-      throw new Error("translation_manifest_etag_mismatch");
-    }
     if (manifest.revision !== this.options.endpoint.manifestRevision) {
       throw new Error("translation_manifest_revision_downgrade");
+    }
+    if (etag !== manifestEtag(manifest)) {
+      throw new Error("translation_manifest_etag_mismatch");
     }
     await this.verifyManifest(manifest);
     assertGenerationTransition(previous?.manifest, manifest);

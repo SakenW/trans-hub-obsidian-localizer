@@ -26,9 +26,18 @@ describe("Obsidian public client boundary", () => {
   });
 
   it("pins the exact public observation adapter descriptor", async () => {
-    const artifact = await readFile(`${ROOT}/adapter/obsidian-plugin-ui-v17.json`);
+    const [artifact, releaseProfile] = await Promise.all([
+      readFile(`${ROOT}/adapter/obsidian-plugin-ui-v20.json`),
+      readFile(`${ROOT}/adapter/release-profile.json`, "utf8"),
+    ]);
     expect(createHash("sha256").update(artifact).digest("hex"))
       .toBe(OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex);
+    const descriptor = JSON.parse(artifact.toString("utf8")) as {
+      readonly version?: unknown;
+    };
+    const release = JSON.parse(releaseProfile) as { readonly semanticVersion?: unknown };
+    expect(descriptor.version).toBe(OBSIDIAN_PUBLIC_PROFILE.adapterVersion);
+    expect(release.semanticVersion).toBe(OBSIDIAN_PUBLIC_PROFILE.adapterVersion);
   });
 
   it("persists only installation-scoped credentials and renewal recovery state", async () => {

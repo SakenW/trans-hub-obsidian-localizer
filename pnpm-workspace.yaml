@@ -2,7 +2,12 @@ packages:
   - "."
 
 overrides:
-  "fast-uri@<3.1.4": "3.1.4"
+  "brace-expansion@<1.1.17": "1.1.17"
+  "brace-expansion@>=4.0.0 <5.0.9": "5.0.9"
+  "fast-uri@<3.1.5": "3.1.5"
+  "js-yaml@>=4.0.0 <4.3.1": "4.3.1"
+  "postcss@<8.5.23": "8.5.23"
+  "undici@<7.29.0": "7.29.0"
 
 allowBuilds:
   esbuild: true

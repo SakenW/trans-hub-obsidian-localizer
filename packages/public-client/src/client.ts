@@ -7,6 +7,9 @@ import {
   computeProtocolDigest,
   contributionSigningPayload,
   type InstallationProof,
+  type LocalizationDemandStatus,
+  type LocalizationDemandStatusBatch,
+  type LocalizationDemandStatusBatchRequest,
   type PublicCapability,
   type PublicUploadGrant,
   type PublicUploadGrantRequest,
@@ -16,8 +19,8 @@ import {
   parseBootstrapResponse,
   parseContributionIntent,
   parseContributionStateReceipt,
-  type LocalizationDemandStatus,
   parseLocalizationDemandStatus,
+  parseLocalizationDemandStatusBatch,
   parsePublicUploadGrant,
   parsePublicUploadGrantRequest,
   publicUploadGrantSigningPayload,
@@ -25,6 +28,7 @@ import {
 import type {
   BootstrapInput,
   CreateUploadGrantInput,
+  GetLocalizationDemandStatusBatchInput,
   PrepareBootstrapInput,
   PreparedBootstrap,
   PublicClientControl,
@@ -332,6 +336,47 @@ export class PublicClient implements PublicClientControl {
       );
     }
     return demand;
+  }
+
+  async getLocalizationDemandStatusBatch(
+    input: GetLocalizationDemandStatusBatchInput,
+  ): Promise<LocalizationDemandStatusBatch> {
+    const installation = await this.requireInstallation(
+      "localization-demand-status-batch",
+      "contribution:read_receipt",
+    );
+    if (input.contributionIds.length === 0) {
+      throw publicClientError(
+        "PC_CONFIGURATION",
+        "Batch status read requires at least one contribution",
+        { operation: "localization-demand-status-batch" },
+      );
+    }
+    const request: LocalizationDemandStatusBatchRequest = {
+      kind: "localization_demand_status_batch",
+      protocol: CURRENT_PROTOCOL_VERSION,
+      contributionIds: input.contributionIds,
+    };
+    const response = await this.controlWithRetry({
+      operation: "localization-demand-status-batch",
+      path: CONTROL_PATHS.localizationDemandStatusBatch,
+      method: "POST",
+      body: request,
+      credential: installation.bootstrap.intakeCredential,
+      retryableOperation: true,
+      signal: input.signal,
+    });
+    const batch = protocolBoundary("localization-demand-status-batch", () =>
+      parseLocalizationDemandStatusBatch(response.body),
+    );
+    if (batch.items.length !== input.contributionIds.length) {
+      throw publicClientError(
+        "PC_SCOPE_MISMATCH",
+        "Batch status result count does not match the request",
+        { operation: "localization-demand-status-batch" },
+      );
+    }
+    return batch;
   }
 
   async createUploadGrant(
