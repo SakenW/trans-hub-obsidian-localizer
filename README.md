@@ -4,7 +4,7 @@
   <b>简体中文</b> · <a href="#trans-hub-localizer">English</a>
 </p>
 
-**已有译文直接使用，缺失内容按需进入共享本地化流程。**
+**Trans-Hub Localizer 是一款 Obsidian 插件，为其他社区插件提供 i18n 与界面本地化，覆盖名称、设置、命令和界面文字。已有译文直接使用，缺失内容按需进入共享本地化流程。**
 
 语枢会在服务端准备译文，并按插件、精确版本和语言发布可复用的译文制品。对应译文已经发布时，Trans-Hub Localizer 会直接下载并应用。后来的用户使用相同插件版本和语言时，也能复用这份译文，无需再次调用模型。
 
@@ -160,7 +160,7 @@ Apache-2.0，详见 [LICENSE](LICENSE)。
   <b>English</b> · <b>简体中文见上方</b>
 </p>
 
-**Use published translations immediately. Send missing content into a shared localization workflow on demand.**
+**Trans-Hub Localizer is an Obsidian plugin for i18n and interface localization across community plugins, covering names, settings, commands, and UI text. Use published translations immediately; missing content enters a shared workflow on demand.**
 
 Trans-Hub prepares translations on the server and publishes reusable artifacts for an exact plugin version and language. When a matching translation is available, Trans-Hub Localizer downloads and applies it directly. Later users with the same plugin version and language can reuse that translation without invoking another model.
 
