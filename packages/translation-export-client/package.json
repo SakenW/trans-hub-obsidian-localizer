@@ -22,6 +22,9 @@
     "./package.json": "./package.json"
   },
   "files": ["dist", "LICENSE", "README.md"],
+  "dependencies": {
+    "@trans-hub/client-protocol": "workspace:^"
+  },
   "scripts": {
     "build": "tsup",
     "type-check": "tsc --noEmit",

@@ -43,9 +43,14 @@ export function comparePluginCatalogIdentity(
   catalog: PluginUiCatalog,
   translation: PluginTranslationState,
 ): PluginCatalogIdentityComparison {
-  const currentSources = new Map(catalog.strings.map((item) => [item.source, item.placeholderSignature]));
+  const crossVersion = authorityPluginVersion(translation) !== catalog.pluginVersion;
+  const currentSources = groupCatalogStringsBySource(catalog);
   const safelyAppliedCount = new Set(translation.entries
-    .filter((entry) => isCompatibleEntry(entry, currentSources))
+    .filter((entry) => isCompatibleCatalogEntry(
+      entry,
+      currentSources.get(entry.source),
+      crossVersion,
+    ))
     .map((entry) => entry.source)).size;
   const local = catalog.catalogIdentity;
   const authority = translation.catalogIdentity;
@@ -91,6 +96,12 @@ export function comparePluginCatalogIdentity(
   };
 }
 
+/** Current product coverage excludes documentation, even when the local scan has it. */
+export function isPluginInterfaceString(item: PluginUiCatalog["strings"][number]): boolean {
+  return isCanonicalPluginCatalogString(item)
+    && resolvePluginStringScopes(item.origins).some((scope) => scope === "runtime-ui" || scope === "metadata");
+}
+
 export function calculatePluginTranslationCoverage(
   catalog: PluginUiCatalog | undefined,
   translation: PluginTranslationState | undefined,
@@ -98,23 +109,36 @@ export function calculatePluginTranslationCoverage(
 ): PluginTranslationCoverage | undefined {
   if (catalog === undefined || translation?.targetLocale !== targetLocale) return undefined;
   const effectiveTranslation = mergeCatalogNativeTranslations(catalog, translation);
-  const canonicalStrings = catalog.strings.filter(isCanonicalPluginCatalogString);
-  const currentSources = new Map(canonicalStrings.map((item) => [item.source, item.placeholderSignature]));
+  const canonicalStrings = catalog.strings.filter(isPluginInterfaceString);
+  const currentSources = groupCatalogStringsBySource({ strings: canonicalStrings });
+  const crossVersion = authorityPluginVersion(effectiveTranslation) !== catalog.pluginVersion;
   const authorityIdentity = effectiveTranslation.catalogIdentity;
   // An equal installed artifact does not prove an equal source catalog: the
   // adapter can safely discover additional UI strings without changing
   // main.js. An authority catalog may still describe a deliberately smaller
   // local scan, but it must never hide strings that the current scan found.
   const authorityCatalogCoversLocalCatalog = authorityIdentity !== undefined
-    && effectiveTranslation.pluginVersion === catalog.pluginVersion
+    && authorityPluginVersion(effectiveTranslation) === catalog.pluginVersion
     && effectiveTranslation.sourceUnitCount === authorityIdentity.unitCount
     && (effectiveTranslation.upstreamNativeCount ?? 0) <= authorityIdentity.unitCount
     && authorityIdentity.artifactDigest === catalog.artifactDigest
     && effectiveTranslation.artifactDigest === catalog.artifactDigest
     && authorityIdentity.unitCount >= canonicalStrings.length;
+  // Historical scope totals overlap, so subtracting README would invent a UI
+  // union. Use the authoritative runtime scope as the primary denominator;
+  // keep metadata as a separately reported scope.
+  const authorityIncludesReadme = authorityCatalogCoversLocalCatalog
+    && authorityIdentity.scopes.some((item) => item.scope === "readme" && item.unitCount > 0);
+  const primaryRuntimeScope = authorityIncludesReadme
+    ? authorityIdentity.scopes.find((item) => item.scope === "runtime-ui")
+    : undefined;
   const allCatalogSources = new Set(catalog.strings.map((item) => item.source));
   const translatedSources = new Set(effectiveTranslation.entries
-    .filter((entry) => isCompatibleEntry(entry, currentSources))
+    .filter((entry) => isCompatibleCatalogEntry(
+      entry,
+      currentSources.get(entry.source),
+      crossVersion,
+    ))
     .map((entry) => entry.source));
   const staleCount = new Set(effectiveTranslation.entries
     .map((entry) => entry.source)
@@ -123,7 +147,13 @@ export function calculatePluginTranslationCoverage(
     (entry) => entry.provenanceKind === "th-reviewed-correction"
       && translatedSources.has(entry.source),
   ).length;
-  const effectiveNativeCount = Math.max((effectiveTranslation.upstreamNativeCount ?? 0) - correctionCount, 0);
+  const primarySources = primaryRuntimeScope === undefined ? currentSources
+    : groupCatalogStringsBySource({ strings: canonicalStrings.filter((item) => resolvePluginStringScopes(item.origins).includes("runtime-ui")) });
+  const primaryTranslatedSources = new Set([...translatedSources].filter((source) => primarySources.has(source)));
+  const effectiveNativeCount = primaryRuntimeScope === undefined
+    ? Math.max((effectiveTranslation.upstreamNativeCount ?? 0) - correctionCount, 0)
+    : Math.max(Math.min(effectiveTranslation.upstreamScopeCoverage?.["runtime-ui"] ?? 0, primaryRuntimeScope.unitCount)
+      - effectiveTranslation.entries.filter((entry) => entry.provenanceKind === "th-reviewed-correction" && primaryTranslatedSources.has(entry.source)).length, 0);
   const attributedNativeSources = new Set(effectiveTranslation.entries
     .filter((entry) => entry.provenanceKind === "upstream-native" && translatedSources.has(entry.source))
     .map((entry) => entry.source));
@@ -131,12 +161,16 @@ export function calculatePluginTranslationCoverage(
   // the same catalog cardinality as this local scan and cannot exceed that
   // scan. Otherwise it can belong to an older or broader parser profile and
   // must not inflate current coverage.
-  const nativeCoverageAligned = authorityCatalogCoversLocalCatalog
-    || effectiveTranslation.sourceUnitCount === undefined
-    || effectiveTranslation.sourceUnitCount === currentSources.size
-    && effectiveNativeCount <= currentSources.size;
+  const nativeCoverageAligned = (authorityCatalogCoversLocalCatalog
+      && (!authorityIncludesReadme || primaryRuntimeScope !== undefined))
+    || (canonicalStrings.length === catalog.strings.filter(isCanonicalPluginCatalogString).length
+      && !authorityIdentity?.scopes.some((item) => item.scope === "readme" && item.unitCount > 0)
+      && (effectiveTranslation.sourceUnitCount === undefined
+        || effectiveTranslation.sourceUnitCount === currentSources.size)
+      && effectiveNativeCount <= currentSources.size);
+  const primaryAttributedNativeCount = [...attributedNativeSources].filter((source) => primarySources.has(source)).length;
   const nativeCountWithoutEntries = nativeCoverageAligned
-    ? Math.max(effectiveNativeCount - attributedNativeSources.size, 0)
+    ? Math.max(effectiveNativeCount - primaryAttributedNativeCount, 0)
     : 0;
   const scopedNativeCount = Math.min(
     effectiveTranslation.upstreamScopedNativeCount ?? 0,
@@ -148,14 +182,14 @@ export function calculatePluginTranslationCoverage(
       0,
     )
     : 0;
-  const totalCount = authorityCatalogCoversLocalCatalog
+  const totalCount = primaryRuntimeScope?.unitCount ?? (authorityCatalogCoversLocalCatalog && !authorityIncludesReadme
     ? authorityIdentity.unitCount
-    : currentSources.size;
-  const translatedCount = Math.min(totalCount, translatedSources.size + nativeCountWithoutEntries);
+    : currentSources.size);
+  const translatedCount = Math.min(totalCount, primaryTranslatedSources.size + nativeCountWithoutEntries);
   const authorityScopeTotals = authorityCatalogCoversLocalCatalog
     ? new Map(authorityIdentity.scopes.map((item) => [item.scope, item.unitCount]))
     : undefined;
-  const scopes = (["runtime-ui", "metadata", "readme"] as const).flatMap((scope) => {
+  const scopes = (["runtime-ui", "metadata"] as const).flatMap((scope) => {
     const sources = new Set(canonicalStrings
       .filter((item) => resolvePluginStringScopes(item.origins).includes(scope))
       .map((item) => item.source));
@@ -186,7 +220,7 @@ export function calculatePluginTranslationCoverage(
     missingCount: Math.max(totalCount - translatedCount, 0),
     staleCount,
     percent: totalCount === 0 ? 100 : Math.round((translatedCount / totalCount) * 100),
-    exactPluginVersion: effectiveTranslation.pluginVersion === catalog.pluginVersion,
+    exactPluginVersion: authorityPluginVersion(effectiveTranslation) === catalog.pluginVersion,
     scopes,
     unattributedNativeCount,
   };
@@ -197,18 +231,12 @@ export function mergePublishedPluginTranslation(
   incoming: PluginTranslationState,
   previous: PluginTranslationState | undefined,
 ): PluginTranslationState {
-  if (previous?.targetLocale !== incoming.targetLocale) return incoming;
-  const currentSources = new Map(catalog.strings.map((item) => [item.source, item.placeholderSignature]));
-  const entries = new Map<string, PluginUiTranslation>();
-  for (const entry of previous.entries) {
-    if (isCompatibleEntry(entry, currentSources)) entries.set(entry.source, entry);
-  }
-  for (const entry of incoming.entries) entries.set(entry.source, entry);
-  return {
-    ...incoming,
-    pluginVersion: catalog.pluginVersion,
-    entries: [...entries.values()].sort((left, right) => left.source.localeCompare(right.source)),
-  };
+  void catalog;
+  void previous;
+  // A verified manifest is a complete active generation. Replacing the
+  // dictionary prevents removed rows or an older sourceVersionId from leaking
+  // into runtime state; immutable pack bytes remain independently cached.
+  return incoming;
 }
 
 /**
@@ -282,15 +310,26 @@ export function selectCurrentCatalogTranslations(
 ): readonly PluginUiTranslation[] {
   if (catalog === undefined) return [];
   const catalogBySource = new Map(catalog.strings.map((item) => [item.source, item]));
-  const currentSources = new Map(catalog.strings
-    .filter((item) => includeMetadata || resolvePluginStringScopes(item.origins).includes("runtime-ui"))
-    .map((item) => [item.source, item.placeholderSignature]));
+  const currentSources = groupCatalogStringsBySource({
+    strings: catalog.strings.filter(
+      (item) => includeMetadata || resolvePluginStringScopes(item.origins).includes("runtime-ui"),
+    ),
+  });
+  const crossVersion = authorityPluginVersion(translation) !== catalog.pluginVersion;
   return mergeCatalogNativeTranslations(catalog, translation).entries
-    .filter((entry) => isCompatibleEntry(entry, currentSources))
-    .map((entry) => ({
-      ...entry,
-      scopes: resolvePluginStringScopes(catalogBySource.get(entry.source)?.origins ?? []),
-    }));
+    .filter((entry) => isCompatibleCatalogEntry(
+      entry,
+      currentSources.get(entry.source),
+      crossVersion,
+    ))
+    .map((entry) => {
+      const { sourceCompatibility: compatibilityEvidence, ...runtimeEntry } = entry;
+      void compatibilityEvidence;
+      return {
+        ...runtimeEntry,
+        scopes: resolvePluginStringScopes(catalogBySource.get(entry.source)?.origins ?? []),
+      };
+    });
 }
 
 export function localizedPluginDisplayName(
@@ -304,7 +343,11 @@ export function localizedPluginDisplayName(
   if (nameString === undefined) return officialName;
   const translated = translation.entries.find((entry) =>
     entry.source === nameString.source
-    && isCompatibleEntry(entry, new Map([[nameString.source, nameString.placeholderSignature]])));
+    && isCompatibleCatalogEntry(
+      entry,
+      [nameString],
+      authorityPluginVersion(translation) !== catalog.pluginVersion,
+    ));
   const localizedName = translated?.target.normalize("NFC").trim();
   return localizedName === undefined || localizedName === ""
     ? officialName
@@ -322,7 +365,11 @@ export function localizedPluginDescription(
   if (descriptionString === undefined) return officialDescription;
   const translated = translation.entries.find((entry) =>
     entry.source === descriptionString.source
-    && isCompatibleEntry(entry, new Map([[descriptionString.source, descriptionString.placeholderSignature]])));
+    && isCompatibleCatalogEntry(
+      entry,
+      [descriptionString],
+      authorityPluginVersion(translation) !== catalog.pluginVersion,
+    ));
   const localizedDescription = translated?.target.normalize("NFC").trim();
   return localizedDescription === undefined || localizedDescription === ""
     ? officialDescription
@@ -340,12 +387,40 @@ function findMetadataString(
   return candidates.find((item) => item.source === officialText) ?? candidates[0];
 }
 
-function isCompatibleEntry(
+function isCompatibleCatalogEntry(
   entry: PluginUiTranslation,
-  currentSources: ReadonlyMap<string, string>,
+  candidates: readonly PluginUiCatalog["strings"][number][] | undefined,
+  crossVersion: boolean,
 ): boolean {
-  const expectedSignature = currentSources.get(entry.source);
-  return expectedSignature !== undefined
-    && placeholderSignature(entry.source) === expectedSignature
-    && placeholderSignature(entry.target) === expectedSignature;
+  if (candidates?.length !== 1) return false;
+  const source = candidates[0];
+  if (source === undefined
+    || placeholderSignature(entry.source) !== source.placeholderSignature
+    || placeholderSignature(entry.target) !== source.placeholderSignature) return false;
+  if (!crossVersion || entry.provenanceKind === "upstream-native") return true;
+  const compatibility = entry.sourceCompatibility;
+  const scopes = [...resolvePluginStringScopes(source.origins)].sort();
+  const semanticRole = source.semanticRole ?? resolvePluginStringSemanticRole(source.origins);
+  return compatibility !== undefined
+    && compatibility.semanticRole === semanticRole
+    && compatibility.placeholderSignature === source.placeholderSignature
+    && compatibility.formatSignature === "plain-text-v1"
+    && compatibility.contentScopes.length === scopes.length
+    && compatibility.contentScopes.every((scope, index) => scope === scopes[index]);
+}
+
+function groupCatalogStringsBySource(
+  catalog: Pick<PluginUiCatalog, "strings">,
+): ReadonlyMap<string, readonly PluginUiCatalog["strings"][number][]> {
+  const grouped = new Map<string, PluginUiCatalog["strings"][number][]>();
+  for (const item of catalog.strings) {
+    const candidates = grouped.get(item.source) ?? [];
+    candidates.push(item);
+    grouped.set(item.source, candidates);
+  }
+  return grouped;
+}
+
+function authorityPluginVersion(translation: PluginTranslationState): string {
+  return translation.authorityPluginVersion ?? translation.pluginVersion;
 }

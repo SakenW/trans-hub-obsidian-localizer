@@ -24,7 +24,6 @@ export type ClientType =
 export type PublicCapability =
   | "contribution:submit"
   | "contribution:read_receipt"
-  | "public_upload:write_quarantine"
   | "translation:read";
 
 export type InstallationState =
@@ -400,6 +399,160 @@ export type ContributionIntent =
   | LocalizationObservationIntent
   | ExplicitTranslationCandidateIntent
   | IssueIntent;
+
+/**
+ * A user may identify an entry in an approved public directory, but never
+ * select its repository, bytes, adapter, or execution environment.  This is
+ * intentionally a separate document from the legacy contribution intake: P1
+ * is responsible for accepting it and creating a task.
+ */
+export interface PublicDiscoveryIntent {
+  readonly kind: "public_discovery_intent";
+  readonly protocol: ProtocolVersion;
+  readonly idempotencyKey: string;
+  readonly installationId: string;
+  readonly submittedAt: string;
+  readonly installationProof: InstallationProof;
+  readonly target: {
+    readonly registryKey: string;
+    readonly externalObjectId: string;
+  };
+  readonly targetLocales: readonly PlatformLocale[];
+}
+
+export type PublicDiscoveryClassification =
+  | "pending_registry_verification"
+  | "known_current"
+  | "eligible_for_processing"
+  | "blocked";
+
+export type PublicDiscoveryTaskState =
+  | "discovered"
+  | "verifying_registry"
+  | "materialization_pending"
+  | "result_verified"
+  | "queued_for_parsing"
+  | "blocked";
+
+export type PublicDiscoveryErrorCode =
+  | "registry_entry_unknown"
+  | "registry_projection_stale"
+  | "registry_binding_changed"
+  | "validator_not_approved"
+  | "task_fence_lost";
+
+export type PublicDiscoveryBlockedReasonCode =
+  | "registry_entry_unknown"
+  | "registry_projection_stale"
+  | "registry_binding_changed"
+  | "validator_not_approved"
+  | "executor_retry_exhausted"
+  | "registry_projection_changed"
+  | "source_validation_rejected"
+  | "adapter_validation_rejected"
+  | "result_materialization_rejected"
+  | "legacy_blocked_reason_unavailable"
+  | "executor_authority_superseded";
+
+/** Server-authored acknowledgement of a signed public-directory demand.
+ * It deliberately contains no locator, source bytes, executor, or adapter. */
+export interface PublicDiscoveryReceipt {
+  readonly kind: "public_discovery_receipt";
+  readonly protocol: ProtocolVersion;
+  readonly receiptId: string;
+  readonly discoveryId: string;
+  readonly taskId: string | null;
+  readonly classification: PublicDiscoveryClassification;
+  readonly taskState: PublicDiscoveryTaskState;
+  readonly outcome: "created" | "joined" | "idempotent_replay" | "negative_cached";
+  readonly commandDigest: RequestDigest;
+  readonly credentialEpoch: number;
+  readonly recordedAt: string;
+}
+
+/** Scoped, read-only server projection for one discovery.  It contains only
+ * task progress and immutable receipt evidence, never source or result bytes. */
+export interface PublicDiscoveryStatus {
+  readonly kind: "public_discovery_status";
+  readonly protocol: ProtocolVersion;
+  readonly statusRevision: 2;
+  readonly discoveryId: string;
+  readonly receiptId: string;
+  readonly taskId: string | null;
+  readonly classification: PublicDiscoveryClassification;
+  readonly taskState: PublicDiscoveryTaskState;
+  readonly taskGeneration: number | null;
+  readonly attemptCount: number;
+  readonly outcome: "created" | "joined" | "negative_cached";
+  readonly commandDigest: RequestDigest;
+  readonly credentialEpoch: number;
+  readonly receiptRecordedAt: string;
+  readonly updatedAt: string;
+  readonly retryAfterSeconds: number;
+  readonly retryAllowed: boolean;
+  readonly blockedReasonCode: PublicDiscoveryBlockedReasonCode | null;
+}
+
+export type PublicLocalizationStage =
+  | "discovery"
+  | "validating"
+  | "parsing"
+  | "translating"
+  | "publishing"
+  | "published"
+  | "blocked";
+
+export interface PublicLocalizationStatusQuery {
+  readonly discoveryId: string;
+  readonly targetLocale: PlatformLocale;
+}
+
+/** Versioned, metadata-only projection from one authorized discovery to the
+ * server's current adopted source and public distribution authority. */
+export interface PublicLocalizationStatusProjection {
+  readonly kind: "public_localization_status_projection";
+  readonly protocol: ProtocolVersion;
+  readonly projectionRevision: 1;
+  readonly discoveryId: string;
+  readonly registryKey: string;
+  readonly externalObjectId: string;
+  readonly targetLocale: PlatformLocale;
+  readonly catalogIdentityDigest: LogicalObjectDigest | null;
+  readonly sourceVersionId: string | null;
+  readonly stage: PublicLocalizationStage;
+  readonly updatedAt: string;
+}
+
+export interface PublicLocalizationStatusBatchRequest {
+  readonly kind: "public_localization_status_batch";
+  readonly protocol: ProtocolVersion;
+  readonly queries: readonly PublicLocalizationStatusQuery[];
+}
+
+export interface PublicLocalizationStatusBatchItem
+  extends PublicLocalizationStatusQuery {
+  readonly found: boolean;
+  readonly projection: PublicLocalizationStatusProjection | null;
+}
+
+export interface PublicLocalizationStatusBatch {
+  readonly kind: "public_localization_status_batch";
+  readonly protocol: ProtocolVersion;
+  readonly items: readonly PublicLocalizationStatusBatchItem[];
+}
+
+/** Metadata-only projection. It must never contain a locator, object key,
+ * source payload, translation, release, or adapter-execution instruction. */
+export interface RegistryVerificationProjection {
+  readonly kind: "registry_verification_projection";
+  readonly protocol: ProtocolVersion;
+  readonly registryKey: string;
+  readonly registryRevision: string;
+  readonly generation: number;
+  readonly externalObjectId: string;
+  readonly officialBindingDigest: RegistryDefinitionDigest;
+  readonly validatorAttestationDigest: AttestationPayloadDigest;
+}
 
 export type AcquisitionKind =
   | "single_blob"
@@ -855,6 +1008,11 @@ export type ProtocolDocument =
   | BootstrapRequest
   | BootstrapResponse
   | ContributionIntent
+  | PublicDiscoveryIntent
+  | PublicDiscoveryReceipt
+  | PublicDiscoveryStatus
+  | PublicLocalizationStatusBatch
+  | RegistryVerificationProjection
   | RegistryResolution
   | SourceAcquisitionManifest
   | ContributionStateReceipt

@@ -10,6 +10,7 @@ import { registerPluginTranslationCommands } from "./plugin-actions";
 import {
   PluginAutomationController,
   type PluginScanResult,
+  type PluginFileRestoreSummary,
 } from "./plugin-automation";
 import type { PluginSourceSnapshot } from "./plugin-picker-source";
 import {
@@ -19,6 +20,7 @@ import {
 } from "./plugin-sync";
 import {
   describePluginSelectionProcessing,
+  pluginSelectionNeedsAttention,
   MAX_PENDING_TRANSLATION_QUICK_RETRIES,
   pendingTranslationPluginIds,
   pendingTranslationRetryDelay,
@@ -26,7 +28,6 @@ import {
   processPluginSelection,
   type PluginSelectionProcessingResult,
 } from "./plugin-selection-processing";
-import { resolveCommunityPluginIdentity } from "./plugin-registry";
 import {
   EMPTY_PLUGIN_STATE,
   isPluginLocalizationDerivedCacheCurrent,
@@ -48,10 +49,8 @@ import {
 import { TransHubSettingTab } from "./settings";
 import { DEFAULT_SETTINGS, loadSettings, type TransHubPluginSettings } from "./settings-data";
 import { ObsidianTranslationPackStore } from "./translation-pack-store";
-import {
-  submitObsidianLocalizationIssue,
-  type ObsidianLocalizationIssueKind,
-} from "./submission";
+
+import type { PluginFilePatchState } from "./third-party-plugin-patcher";
 
 const AUTOMATION_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -72,12 +71,21 @@ export default class TransHubObsidianPlugin extends Plugin {
   private pendingRetryAttempt = 0;
   private readonly pendingRetryPluginIds = new Set<string>();
   private readonly pluginProcessingQueue = new PluginProcessingQueue();
+  private readonly pluginFileQueue = new PluginProcessingQueue();
   private automaticPluginTranslationInFlight: Promise<void> | null = null;
   private targetLocaleRevision = 0;
   private resetPluginLocalizationDerivedCache = false;
+  private lastFileRestore: PluginFileRestoreSummary | undefined;
+  private lifecycleRevision = 0;
+  private unloaded = false;
+  private pluginDataWriteTail: Promise<void> = Promise.resolve();
 
   override async onload(): Promise<void> {
-    this.loadPluginData(await this.loadData(), resolveObsidianTargetLocale(getLanguage()));
+    this.unloaded = false;
+    const lifecycleRevision = this.lifecycleRevision;
+    const loadedData: unknown = await this.loadData();
+    if (!this.isLifecycleCurrent(lifecycleRevision)) return;
+    this.loadPluginData(loadedData, resolveObsidianTargetLocale(getLanguage()));
     this.applyClientLocale(this.settings.targetLocale);
     this.activation = new ActivationStore(this.app);
     this.translationPackStore = new ObsidianTranslationPackStore(
@@ -102,6 +110,7 @@ export default class TransHubObsidianPlugin extends Plugin {
     this.registerObsidianProtocolHandler(
       OBSIDIAN_AUTH_CALLBACK_ACTION,
       async (parameters) => {
+        const lifecycleRevision = this.lifecycleRevision;
         try {
           await this.activation.completeBrowserAuthorization({
             apiBaseUrl: TRANS_HUB_API_BASE_URL,
@@ -110,10 +119,12 @@ export default class TransHubObsidianPlugin extends Plugin {
             linkingCode: requiredProtocolParameter(parameters, "linking_code"),
             bindingDigest: requiredProtocolParameter(parameters, "binding_digest"),
           });
+          if (!this.isLifecycleCurrent(lifecycleRevision)) return;
           new Notice(translate("语枢已连接，此设备以后会自动恢复连接。"));
           this.settingTab.reportCommandStatus(translate("连接成功，正在同步所选插件…"), false);
           await this.runAutomaticPluginTranslation(true);
         } catch (error) {
+          if (!this.isLifecycleCurrent(lifecycleRevision)) return;
           const message = error instanceof Error ? error.message : translate("语枢连接失败。");
           new Notice(message, 10_000);
           this.settingTab.reportCommandStatus(message, true);
@@ -127,6 +138,8 @@ export default class TransHubObsidianPlugin extends Plugin {
       state: () => this.state,
       replaceState: (state) => { this.state = state; },
       save: () => this.savePluginData(),
+      lifecycleRevision: () => this.lifecycleRevision,
+      isLifecycleCurrent: (revision) => this.isLifecycleCurrent(revision),
       synchronize: (sourceSelectablePluginIds) => this.autoSyncInstalledPluginTranslations(sourceSelectablePluginIds),
     });
     this.settingTab = new TransHubSettingTab(this.app, this);
@@ -142,7 +155,9 @@ export default class TransHubObsidianPlugin extends Plugin {
     });
     this.register(() => this.pluginAutomation.stop());
     this.register(() => this.clearPendingTranslationRetry());
-    this.pluginAutomation.start();
+    // Reconcile persisted disabled state before any cached runtime projection.
+    // This also restores a file patch left behind by an interrupted prior run.
+    await this.pluginAutomation.refreshRuntime();
     // Apply persisted translations immediately so settings windows and the
     // sidebar are localized from the stored state without waiting for the
     // first full scan+sync pass to finish.
@@ -179,14 +194,31 @@ export default class TransHubObsidianPlugin extends Plugin {
   }
 
   async savePluginData(): Promise<void> {
-    await this.saveData({
+    return this.savePluginDataForLifecycle(this.lifecycleRevision);
+  }
+
+  override onunload(): void {
+    this.unloaded = true;
+    this.lifecycleRevision += 1;
+    this.clearPendingTranslationRetry();
+    this.pluginAutomation?.stop();
+  }
+
+  private savePluginDataForLifecycle(lifecycleRevision: number): Promise<void> {
+    const payload = {
       pluginLocalizationDerivedCacheRevision:
         this.resetPluginLocalizationDerivedCache
           ? undefined
           : PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION,
       settings: this.settings,
       state: this.state,
+    };
+    const write = this.pluginDataWriteTail.then(async () => {
+      if (!this.isLifecycleCurrent(lifecycleRevision)) return;
+      await this.saveData(payload);
     });
+    this.pluginDataWriteTail = write.then(() => undefined, () => undefined);
+    return write;
   }
 
   async connect(): Promise<void> {
@@ -202,10 +234,22 @@ export default class TransHubObsidianPlugin extends Plugin {
     return openSystemBrowser(TRANS_HUB_REGISTRATION_URL);
   }
 
-  disconnect(): void {
+  async disconnect(): Promise<void> {
+    const lifecycleRevision = this.advanceLifecycle();
     this.activation.clear();
+    const failures: string[] = [];
+    // Runtime and local authority records must be cleared even when enumerating
+    // third-party files or writing data.json fails.
     this.state = structuredClone(EMPTY_PLUGIN_STATE);
-    void this.savePluginData();
+    try { this.pluginAutomation.stop(); }
+    catch (error) { failures.push(errorMessage(error)); }
+    try { await this.restoreThirdPartyPluginFiles(); }
+    catch (error) { failures.push(errorMessage(error)); }
+    try { await this.savePluginDataForLifecycle(lifecycleRevision); }
+    catch (error) { failures.push(errorMessage(error)); }
+    if (failures.length > 0) throw new Error(translate("已断开授权；本机清理未全部完成：{message}。请使用高级选项中的恢复操作检查文件。", {
+      message: failures.join("；"),
+    }));
   }
   hasUserSession(): boolean { return this.activation.isConfigured(); }
   requiresReconnect(): boolean { return this.activation.requiresReconnect(); }
@@ -214,18 +258,17 @@ export default class TransHubObsidianPlugin extends Plugin {
 
   async openPluginManager(): Promise<void> {
     const existingLeaf = this.app.workspace.getLeavesOfType(PLUGIN_MANAGER_VIEW_TYPE)[0];
+    if (existingLeaf !== undefined) {
+      await this.app.workspace.revealLeaf(existingLeaf);
+      return;
+    }
     try {
       const leaf = this.app.workspace.openPopoutLeaf({
         size: { width: 960, height: 760 },
       });
       await leaf.setViewState({ type: PLUGIN_MANAGER_VIEW_TYPE, active: true });
-      existingLeaf?.detach();
       await this.app.workspace.revealLeaf(leaf);
     } catch (error) {
-      if (existingLeaf !== undefined) {
-        await this.app.workspace.revealLeaf(existingLeaf);
-        return;
-      }
       const leaf = this.app.workspace.getLeaf("tab");
       await leaf.setViewState({ type: PLUGIN_MANAGER_VIEW_TYPE, active: true });
       await this.app.workspace.revealLeaf(leaf);
@@ -250,19 +293,29 @@ export default class TransHubObsidianPlugin extends Plugin {
   async changeTargetLocale(
     targetLocale: TargetLocale,
   ): Promise<PluginSelectionProcessingResult | null> {
+    const lifecycleRevision = this.lifecycleRevision;
+    const localeChanged = this.settings.targetLocale !== targetLocale;
     const revision = ++this.targetLocaleRevision;
     this.settings.targetLocale = targetLocale;
     this.applyClientLocale(targetLocale);
     return this.pluginProcessingQueue.run(async () => {
-      if (revision !== this.targetLocaleRevision) return null;
-      await this.savePluginData();
-      if (revision !== this.targetLocaleRevision) return null;
-      this.refreshPluginTranslationRuntime();
+      if (!this.isLifecycleCurrent(lifecycleRevision) || revision !== this.targetLocaleRevision) return null;
+      await this.savePluginDataForLifecycle(lifecycleRevision);
+      if (!this.isLifecycleCurrent(lifecycleRevision) || revision !== this.targetLocaleRevision) return null;
+      if (localeChanged) await this.restoreThirdPartyPluginFiles();
+      if (!this.isLifecycleCurrent(lifecycleRevision) || revision !== this.targetLocaleRevision) return null;
+      await this.refreshPluginTranslationRuntime();
+      if (!this.isLifecycleCurrent(lifecycleRevision) || revision !== this.targetLocaleRevision) return null;
       if (!this.activation.isConfigured() && targetLocale !== OBSIDIAN_SOURCE_LOCALE) {
         return null;
       }
-      const result = await this.processPluginsNow(undefined, targetLocale, undefined);
-      return revision === this.targetLocaleRevision ? result : null;
+      const result = await this.processPluginsNow(
+        undefined,
+        targetLocale,
+        undefined,
+        lifecycleRevision,
+      );
+      return this.isLifecycleCurrent(lifecycleRevision) && revision === this.targetLocaleRevision ? result : null;
     });
   }
 
@@ -271,15 +324,26 @@ export default class TransHubObsidianPlugin extends Plugin {
   }
   applyCachedPluginTranslations(): void { this.pluginAutomation.applyCachedTranslations(); }
   applyThirdPartyPluginFileTranslations(pluginIds: readonly string[]): Promise<{ readonly applied: number; readonly skipped: number; readonly conflicts: number }> {
-    return this.pluginAutomation.applyThirdPartyFilePatches(pluginIds);
+    return this.pluginFileQueue.run(() => this.pluginAutomation.applyThirdPartyFilePatches(pluginIds));
   }
-  restoreThirdPartyPluginFiles(pluginIds?: readonly string[], force = false): Promise<{ readonly restored: number; readonly conflicts: number }> {
-    return this.pluginAutomation.restoreThirdPartyFilePatches(pluginIds, force);
+  async restoreThirdPartyPluginFiles(pluginIds?: readonly string[], force = false): Promise<PluginFileRestoreSummary> {
+    const result = await this.pluginFileQueue.run(() => this.pluginAutomation.restoreThirdPartyFilePatches(pluginIds, force));
+    const outstanding = new Set(pluginIds === undefined ? [] : this.lastFileRestore?.conflictPluginIds ?? []);
+    for (const pluginId of pluginIds ?? []) outstanding.delete(pluginId);
+    for (const pluginId of result.conflictPluginIds) outstanding.add(pluginId);
+    if (result.restored > 0 || result.conflicts > 0 || this.lastFileRestore !== undefined) {
+      this.lastFileRestore = { ...result, conflicts: outstanding.size, conflictPluginIds: [...outstanding] };
+    }
+    return result;
   }
-  pluginFilePatchStates(pluginIds: readonly string[]): Promise<ReadonlyMap<string, boolean>> {
+  getFileRestoreResult(): PluginFileRestoreSummary | undefined { return this.lastFileRestore; }
+  pluginFilePatchStates(pluginIds: readonly string[]): Promise<ReadonlyMap<string, PluginFilePatchState>> {
     return this.pluginAutomation.pluginFilePatchStates(pluginIds);
   }
-  refreshPluginTranslationRuntime(): void { this.pluginAutomation.refreshRuntime(); }
+  async refreshPluginTranslationRuntime(): Promise<void> {
+    const result = await this.pluginFileQueue.run(() => this.pluginAutomation.refreshRuntime());
+    if (result !== undefined && (result.restored > 0 || result.conflicts > 0)) this.lastFileRestore = result;
+  }
   refreshPluginDisplayNames(): void { this.pluginAutomation.applyPluginDisplayNames(); }
   refreshSettingsWindowLocalization(): void { this.pluginAutomation.localizeSettingsWindowNavigation(); }
 
@@ -310,12 +374,14 @@ export default class TransHubObsidianPlugin extends Plugin {
     onlyPluginIds?: readonly string[],
     manualResubmitPluginIds?: readonly string[],
   ): Promise<PluginSelectionProcessingResult> {
+    const lifecycleRevision = this.lifecycleRevision;
     const targetLocale = this.settings.targetLocale;
     return this.pluginProcessingQueue.run(
       () => this.processPluginsNow(
         onlyPluginIds,
         targetLocale,
         manualResubmitPluginIds,
+        lifecycleRevision,
       ),
     );
   }
@@ -324,7 +390,11 @@ export default class TransHubObsidianPlugin extends Plugin {
     onlyPluginIds: readonly string[] | undefined,
     targetLocale: TargetLocale,
     manualResubmitPluginIds: readonly string[] | undefined,
+    lifecycleRevision: number,
   ): Promise<PluginSelectionProcessingResult> {
+    if (!this.settings.pluginTranslationEnabled) {
+      return { kind: "empty", scan: { discoveredCount: 0, scannedCount: 0, changedCount: 0, stringCount: 0, selectablePluginIds: [] } };
+    }
     let selectablePluginIds = this.state.enabledPluginIds;
     const result = await processPluginSelection({
       scan: async () => {
@@ -332,47 +402,21 @@ export default class TransHubObsidianPlugin extends Plugin {
         selectablePluginIds = scan.selectablePluginIds;
         return scan;
       },
-      hasSession: () => targetLocale === OBSIDIAN_SOURCE_LOCALE || this.activation.isConfigured(),
+      hasSession: () => this.settings.pluginTranslationEnabled && this.isLifecycleCurrent(lifecycleRevision)
+        && (targetLocale === OBSIDIAN_SOURCE_LOCALE || this.activation.isConfigured()),
       synchronize: () => this.synchronizePluginTranslationsNow(
         onlyPluginIds,
         targetLocale,
         manualResubmitPluginIds,
         selectablePluginIds,
+        lifecycleRevision,
       ),
       applyCached: () => { this.applyCachedPluginTranslations(); },
     });
-    if (targetLocale === this.settings.targetLocale) this.schedulePendingTranslationRetry(result);
-    return result;
-  }
-
-  async reportPluginLocalizationIssue(input: {
-    readonly issueKind: ObsidianLocalizationIssueKind;
-    readonly pluginId: string;
-    readonly pluginVersion: string;
-    readonly sourceText: string;
-    readonly currentTargetText?: string;
-    readonly suggestedTargetText?: string;
-  }): Promise<void> {
-    const catalog = this.state.pluginCatalogs[input.pluginId];
-    if (catalog === undefined || catalog.pluginVersion !== input.pluginVersion) {
-      throw new Error(translate("插件目录已变化，请先在插件管理器中重新同步该插件。"));
+    if (this.isLifecycleCurrent(lifecycleRevision) && targetLocale === this.settings.targetLocale) {
+      this.schedulePendingTranslationRetry(result, lifecycleRevision);
     }
-    const { client, bootstrap } = await this.activation.client({
-      apiBaseUrl: TRANS_HUB_API_BASE_URL,
-    });
-    const identity = await resolveCommunityPluginIdentity(input.pluginId, input.pluginVersion);
-    await submitObsidianLocalizationIssue({
-      client,
-      installationId: bootstrap.installationId,
-      issueKind: input.issueKind,
-      pluginId: input.pluginId,
-      pluginVersion: input.pluginVersion,
-      repository: identity.repository,
-      targetLocale: this.settings.targetLocale,
-      sourceText: input.sourceText,
-      currentTargetText: input.currentTargetText,
-      suggestedTargetText: input.suggestedTargetText,
-    });
+    return result;
   }
 
   async syncInstalledPluginTranslations(
@@ -393,20 +437,25 @@ export default class TransHubObsidianPlugin extends Plugin {
   }
 
 
-  /** R-028/Phase 3: zero-write batch status refresh (never submits work). */
+  /** Status refresh; only an authenticated missing receipt may self-heal with one fresh intent. */
   async refreshPluginStatusBatch(onlyPluginIds?: readonly string[]): Promise<PluginSyncSummary> {
+    const lifecycleRevision = this.lifecycleRevision;
     const targetLocale = this.settings.targetLocale;
     if (targetLocale === OBSIDIAN_SOURCE_LOCALE) {
       return emptyPluginSyncSummary();
     }
-    return refreshConfiguredPluginStatuses({
+    return this.pluginProcessingQueue.run(() => refreshConfiguredPluginStatuses({
       apiBaseUrl: TRANS_HUB_API_BASE_URL,
       targetLocale,
       excludedPluginIds: this.settings.excludedPluginIds,
       ...(onlyPluginIds === undefined ? {} : { onlyPluginIds }),
       activationStore: this.activation,
       getState: () => this.state,
-    });
+        replaceState: (state) => {
+          if (this.isLifecycleCurrent(lifecycleRevision)) this.state = state;
+        },
+        save: () => this.savePluginDataForLifecycle(lifecycleRevision),
+    }));
   }
 
   private async synchronizePluginTranslationsNow(
@@ -414,7 +463,9 @@ export default class TransHubObsidianPlugin extends Plugin {
     targetLocale: TargetLocale,
     manualResubmitPluginIds: readonly string[] | undefined,
     sourceSelectablePluginIds: readonly string[] = this.state.enabledPluginIds,
+    lifecycleRevision = this.lifecycleRevision,
   ): Promise<PluginSyncSummary> {
+    if (!this.settings.pluginTranslationEnabled || !this.isLifecycleCurrent(lifecycleRevision)) return emptyPluginSyncSummary();
     if (targetLocale === OBSIDIAN_SOURCE_LOCALE) {
       this.pluginAutomation.applyCachedTranslations();
       return emptyPluginSyncSummary();
@@ -429,17 +480,39 @@ export default class TransHubObsidianPlugin extends Plugin {
       activationStore: this.activation,
       translationPackStore: this.translationPackStore,
       getState: () => this.state,
-      replaceState: (state) => { this.state = state; },
-      save: () => this.savePluginData(),
+      replaceState: (state) => {
+        if (this.isLifecycleCurrent(lifecycleRevision)) this.state = state;
+      },
+      save: () => this.savePluginDataForLifecycle(lifecycleRevision),
     });
-    this.pluginAutomation.applyCachedTranslations();
+    if (result.withdrawnExportPluginIds?.length) {
+      if (!this.isLifecycleCurrent(lifecycleRevision)) return result;
+      try {
+        const restored = await this.restoreThirdPartyPluginFiles(
+          result.withdrawnExportPluginIds,
+        );
+        if (restored.conflicts > 0) {
+          console.warn(
+            "[Trans-Hub] 已撤回译文的插件文件在本地发生外部修改，未覆盖：",
+            result.withdrawnExportPluginIds,
+          );
+        }
+      } catch (error) {
+        const conflictPluginIds = [...new Set([
+          ...this.lastFileRestore?.conflictPluginIds ?? [], ...result.withdrawnExportPluginIds,
+        ])];
+        this.lastFileRestore = { restored: 0, conflicts: conflictPluginIds.length,
+          restoredPluginIds: [], conflictPluginIds };
+        console.warn("[Trans-Hub] 无法恢复已撤回译文的插件文件；已保留当前文件：", error);
+      }
+    }
+    if (this.isLifecycleCurrent(lifecycleRevision)) this.pluginAutomation.applyCachedTranslations();
     return result;
   }
 
   private loadPluginData(value: unknown, defaultTargetLocale: TransHubPluginSettings["targetLocale"]): void {
     const stored = isRecord(value) ? value as StoredPluginData : {};
-    const legacySettings = isRecord(value) && "apiBaseUrl" in value ? value : stored.settings;
-    this.settings = loadSettings(legacySettings, defaultTargetLocale);
+    this.settings = loadSettings(stored.settings, defaultTargetLocale);
     const parsedState = parsePluginState(stored.state);
     this.resetPluginLocalizationDerivedCache = !isPluginLocalizationDerivedCacheCurrent(
       stored.pluginLocalizationDerivedCacheRevision,
@@ -464,17 +537,24 @@ export default class TransHubObsidianPlugin extends Plugin {
   }
 
   private async runAutomaticPluginTranslationNow(announce: boolean): Promise<void> {
+    const lifecycleRevision = this.lifecycleRevision;
+    if (!this.settings.pluginTranslationEnabled) return;
     try {
       const result = await this.processSelectedPlugins();
+      if (!this.isLifecycleCurrent(lifecycleRevision)) return;
       if (announce) {
-        this.settingTab.reportCommandStatus(describePluginSelectionProcessing(result), false);
+        this.settingTab.reportCommandStatus(describePluginSelectionProcessing(result), pluginSelectionNeedsAttention(result));
       } else {
         // Periodic synchronization updates cards and persisted state, but it is
         // not a new user action and must not replace the last announced summary.
-        this.settingTab.refreshPluginCards();
+        this.settingTab.refreshPluginCards(
+          result.kind === "synchronized" ? result.sync.statusRead : undefined,
+          result.kind === "synchronized" ? result.sync.statusReadPluginIds : undefined,
+        );
       }
     }
     catch (error) {
+      if (!this.isLifecycleCurrent(lifecycleRevision)) return;
       const message = errorMessage(error);
       console.warn("[Trans-Hub] 插件自动翻译暂未完成", error);
       if (announce) this.settingTab.reportCommandStatus(message, true);
@@ -492,6 +572,7 @@ export default class TransHubObsidianPlugin extends Plugin {
 
   private schedulePendingTranslationRetry(
     result: PluginSelectionProcessingResult,
+    lifecycleRevision: number,
   ): void {
     const pluginIds = pendingTranslationPluginIds(result);
     if (pluginIds.length === 0) {
@@ -501,12 +582,13 @@ export default class TransHubObsidianPlugin extends Plugin {
     const retryAfterMs = result.kind === "synchronized"
       ? result.sync.nextRetryAfterMs
       : undefined;
-    this.queuePendingTranslationRetry(pluginIds, retryAfterMs);
+    this.queuePendingTranslationRetry(pluginIds, retryAfterMs, lifecycleRevision);
   }
 
   private queuePendingTranslationRetry(
     pluginIds: readonly string[],
     serverSuggestedMs?: number,
+    lifecycleRevision = this.lifecycleRevision,
   ): void {
     for (const pluginId of pluginIds) this.pendingRetryPluginIds.add(pluginId);
     if (this.pendingRetryTimer !== null) return;
@@ -520,6 +602,7 @@ export default class TransHubObsidianPlugin extends Plugin {
     );
     this.pendingRetryTimer = window.setTimeout(() => {
       this.pendingRetryTimer = null;
+      if (!this.isLifecycleCurrent(lifecycleRevision)) return;
       this.pendingRetryAttempt += 1;
       const retryPluginIds = [...this.pendingRetryPluginIds];
       this.pendingRetryPluginIds.clear();
@@ -527,10 +610,15 @@ export default class TransHubObsidianPlugin extends Plugin {
         // Keep the last announced summary stable. This background pull still
         // persists fresh plugin data and refreshes the settings cards, but its
         // deliberately partial scan must not replace a full-scan summary.
-        .then(() => { this.settingTab.refreshPluginCards(); })
+        .then((result) => {
+          if (this.isLifecycleCurrent(lifecycleRevision)) this.settingTab.refreshPluginCards(
+            result.kind === "synchronized" ? result.sync.statusRead : undefined,
+            result.kind === "synchronized" ? result.sync.statusReadPluginIds : undefined,
+          );
+        })
         .catch((error: unknown) => {
           console.warn("[Trans-Hub] 等待译文自动回拉失败", error);
-          this.queuePendingTranslationRetry(retryPluginIds);
+          this.queuePendingTranslationRetry(retryPluginIds, undefined, lifecycleRevision);
         });
     }, delay);
   }
@@ -540,6 +628,15 @@ export default class TransHubObsidianPlugin extends Plugin {
     this.pendingRetryTimer = null;
     this.pendingRetryAttempt = 0;
     this.pendingRetryPluginIds.clear();
+  }
+
+  private advanceLifecycle(): number {
+    this.lifecycleRevision += 1;
+    return this.lifecycleRevision;
+  }
+
+  private isLifecycleCurrent(lifecycleRevision: number): boolean {
+    return !this.unloaded && this.lifecycleRevision === lifecycleRevision;
   }
 }
 

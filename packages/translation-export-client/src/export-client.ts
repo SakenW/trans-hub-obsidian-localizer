@@ -1,12 +1,18 @@
 import type {
+  AnyTranslationExportManifest,
+  AnyTranslationPackRef,
   DownloadAccessMode,
   DownloadTicket,
   ExportScope,
   HttpResponse,
   LocalPackKey,
+  ManifestForRevision,
+  PackForRevision,
+  PackVerificationPort,
   TranslationExportClientOptions,
   TranslationExportManifest,
-  TranslationPackRef,
+  TranslationExportRevision,
+  TranslationManifestVerificationPort,
   TranslationSyncRequest,
   TranslationSyncResult,
   TranslationSyncState,
@@ -23,16 +29,24 @@ type TicketWire = Readonly<{
   pack_id: unknown;
   object_version: unknown;
   url: unknown;
+  issued_at_epoch_ms?: unknown;
   expires_at_epoch_ms: unknown;
   access_mode?: unknown;
   cache_mode?: unknown;
 }>;
 
-export class TranslationExportClient {
+export class TranslationExportClient<
+  TRevision extends TranslationExportRevision = 1 | 2,
+> {
   private readonly now: () => number;
   private readonly maxCompressedPackBytes: number;
+  private readonly maxContentBytes: number;
+  private readonly maxTotalContentBytes: number;
+  private readonly maxTicketBatchSize: number;
 
-  constructor(private readonly options: TranslationExportClientOptions) {
+  constructor(
+    private readonly options: TranslationExportClientOptions<TRevision>,
+  ) {
     this.now = options.now ?? Date.now;
     this.maxCompressedPackBytes =
       options.maxCompressedPackBytes ?? 16 * 1024 * 1024;
@@ -42,34 +56,61 @@ export class TranslationExportClient {
     ) {
       throw new TypeError("translation_pack_compressed_limit_invalid");
     }
+    this.maxContentBytes = options.maxContentBytes ?? 16 * 1024 * 1024;
     if (
-      options.endpoint.manifestRevision === 2 &&
+      !Number.isSafeInteger(this.maxContentBytes) ||
+      this.maxContentBytes <= 0
+    ) {
+      throw new TypeError("translation_pack_content_limit_invalid");
+    }
+    this.maxTotalContentBytes = options.maxTotalContentBytes ?? 64 * 1024 * 1024;
+    if (
+      !Number.isSafeInteger(this.maxTotalContentBytes) ||
+      this.maxTotalContentBytes <= 0
+    ) {
+      throw new TypeError("translation_pack_total_content_limit_invalid");
+    }
+    this.maxTicketBatchSize = options.maxTicketBatchSize ?? 32;
+    if (
+      !Number.isSafeInteger(this.maxTicketBatchSize) ||
+      this.maxTicketBatchSize <= 0
+    ) {
+      throw new TypeError("translation_ticket_batch_size_invalid");
+    }
+    if (
+      options.endpoint.manifestRevision !== 1 &&
       options.manifestVerifier === undefined
     ) {
       throw new TypeError("translation_manifest_verifier_required");
     }
   }
 
-  async sync(request: TranslationSyncRequest): Promise<TranslationSyncResult> {
+  async sync(
+    request: TranslationSyncRequest<ManifestForRevision<TRevision>>,
+  ): Promise<TranslationSyncResult<ManifestForRevision<TRevision>>> {
     assertRequest(request);
     const previous = await this.validPrevious(request.previous);
     const normalizedRequest =
-      previous === undefined
+      previous.cache === undefined
         ? { ...request, previous: undefined }
-        : { ...request, previous };
+        : { ...request, previous: previous.cache };
     const response = await this.fetchManifest(normalizedRequest);
     if (response.status === 404 || response.status === 410) {
-      await this.removeUnavailablePacks(previous?.manifest);
+      await this.removeUnavailablePacks(previous.history?.manifest);
       throw new Error(`translation_manifest_unavailable:${response.status}`);
     }
-    const resolved = await this.resolveManifest(response, previous);
+    const resolved = await this.resolveManifest(
+      response,
+      previous.cache,
+      previous.history,
+    );
     this.assertManifestRequest(resolved.manifest, normalizedRequest);
 
     const scopeKey = scopeCacheKey(resolved.manifest.scope);
     const reusedPackIds: string[] = [];
-    const missing: TranslationPackRef[] = [];
+    const missing: PackForRevision<TRevision>[] = [];
     const packBytes = new Map<string, Uint8Array>();
-    for (const pack of resolved.manifest.packs) {
+    for (const pack of resolved.manifest.packs as readonly PackForRevision<TRevision>[]) {
       const key = packKey(scopeKey, pack);
       const bytes = await this.options.store.getVerified(key);
       if (bytes === undefined) {
@@ -77,10 +118,7 @@ export class TranslationExportClient {
         continue;
       }
       try {
-        const canonicalBytes = await this.options.verifier.verify({
-          bytes,
-          pack,
-        });
+        const canonicalBytes = await this.verifyPack(bytes, pack);
         reusedPackIds.push(pack.packId);
         packBytes.set(pack.packId, canonicalBytes);
       } catch {
@@ -99,28 +137,37 @@ export class TranslationExportClient {
       const ticket = tickets.get(pack.packId);
       if (ticket === undefined)
         throw new Error(`translation_ticket_missing:${pack.packId}`);
-      this.assertTicket(ticket, pack, resolved.manifest.scope);
-      assertSafeDownloadUrl(ticket.url, this.options.developmentDownloadOrigin);
+      const allowedOrigin = this.allowedDownloadOrigin(resolved.manifest);
+      this.assertTicket(ticket, pack, resolved.manifest);
+      assertSafeDownloadUrl(
+        ticket.url,
+        allowedOrigin,
+        this.options.developmentDownloadOrigin,
+      );
       const bytes = await this.options.downloader.download({
         url: ticket.url,
         objectVersion: ticket.objectVersion,
-        expectedBytes: pack.compressedBytes,
+        expectedBytes: packSizeBytes(pack),
+        allowedOrigin,
       });
-      if (bytes.byteLength !== pack.compressedBytes) {
+      if (bytes.byteLength !== packSizeBytes(pack)) {
         throw new Error(
           `translation_pack_download_size_mismatch:${pack.packId}`,
         );
       }
-      const canonicalBytes = await this.options.verifier.verify({
-        bytes,
-        pack,
-      });
+      const canonicalBytes = await this.verifyPack(bytes, pack);
+      // A verified pack is immutable cache evidence, not the active
+      // translation state. Persist it immediately so a later pack's failure
+      // only retries that later pack; callers still receive no new manifest
+      // state until every pack has been verified.
       await this.options.store.putVerified(packKey(scopeKey, pack), bytes);
       packBytes.set(pack.packId, canonicalBytes);
       downloadedPackIds.push(pack.packId);
     }
 
-    const packs: VerifiedTranslationPack[] = resolved.manifest.packs.map(
+    const packs: VerifiedTranslationPack[] = (
+      resolved.manifest.packs as readonly PackForRevision<TRevision>[]
+    ).map(
       (pack) => {
         const bytes = packBytes.get(pack.packId);
         if (bytes === undefined)
@@ -139,31 +186,40 @@ export class TranslationExportClient {
   }
 
   private async validPrevious(
-    previous: TranslationSyncRequest["previous"],
-  ): Promise<TranslationSyncState | undefined> {
-    if (previous === undefined) return undefined;
+    previous: TranslationSyncRequest<ManifestForRevision<TRevision>>["previous"],
+  ): Promise<Readonly<{
+    cache?: TranslationSyncState<ManifestForRevision<TRevision>>;
+    history?: TranslationSyncState<ManifestForRevision<TRevision>>;
+  }>> {
+    if (previous === undefined) return {};
     try {
       const etag = requiredString(
         previous.etag,
         "translation_manifest_etag_invalid",
       );
-      const manifest = parseStoredTranslationExportManifest(previous.manifest);
-      if (manifest.revision !== this.options.endpoint.manifestRevision) {
-        return undefined;
+      const manifest = parseStoredForRevision(
+        previous.manifest,
+        this.options.endpoint.manifestRevision,
+      );
+      if (etag !== manifestEtag(manifest)) return {};
+      const state = { etag, manifest };
+      try {
+        await this.verifyManifest(manifest);
+        return { cache: state, history: state };
+      } catch {
+        await this.verifyHistoricalManifest(manifest);
+        return { history: state };
       }
-      if (etag !== manifestEtag(manifest)) return undefined;
-      await this.verifyManifest(manifest);
-      return { etag, manifest };
     } catch {
-      // Persisted state is only a cache hint. Corrupt or obsolete state must not
-      // authorize conditional requests or pack reuse; a fresh manifest is the
-      // only safe recovery path.
-      return undefined;
+      // Corrupt or unauthenticated persisted state is neither a cache hint nor
+      // a rollback floor. An expired but authentic proof is retained above as
+      // history while still being excluded from HTTP/cache reuse.
+      return {};
     }
   }
 
   private async removeUnavailablePacks(
-    manifest: TranslationExportManifest | undefined,
+    manifest: ManifestForRevision<TRevision> | undefined,
   ): Promise<void> {
     if (
       manifest === undefined ||
@@ -179,7 +235,7 @@ export class TranslationExportClient {
   }
 
   private fetchManifest(
-    request: TranslationSyncRequest,
+    request: TranslationSyncRequest<ManifestForRevision<TRevision>>,
   ): Promise<HttpResponse<ManifestWireResponse>> {
     const previous = request.previous;
     return this.options.transport.send<ManifestWireResponse>({
@@ -201,12 +257,13 @@ export class TranslationExportClient {
 
   private async resolveManifest(
     response: HttpResponse<ManifestWireResponse>,
-    previous: TranslationSyncRequest["previous"],
+    previous: TranslationSyncRequest<ManifestForRevision<TRevision>>["previous"],
+    history: TranslationSyncRequest<ManifestForRevision<TRevision>>["previous"],
   ): Promise<
     Readonly<{
-      status: TranslationSyncResult["status"];
+      status: TranslationSyncResult<ManifestForRevision<TRevision>>["status"];
       etag: string;
-      manifest: TranslationExportManifest;
+      manifest: ManifestForRevision<TRevision>;
     }>
   > {
     if (response.status === 304) {
@@ -228,91 +285,142 @@ export class TranslationExportClient {
     const etag = header(response.headers, "etag");
     if (etag === undefined || etag === "")
       throw new Error("translation_manifest_missing_etag");
-    const manifest = parseTranslationExportManifest(response.body);
-    if (manifest.revision !== this.options.endpoint.manifestRevision) {
+    if (response.body.revision !== this.options.endpoint.manifestRevision) {
       throw new Error("translation_manifest_revision_downgrade");
     }
+    const manifest = parseForRevision(
+      response.body,
+      this.options.endpoint.manifestRevision,
+    );
     if (etag !== manifestEtag(manifest)) {
       throw new Error("translation_manifest_etag_mismatch");
     }
     await this.verifyManifest(manifest);
-    assertGenerationTransition(previous?.manifest, manifest);
+    assertGenerationTransition(history?.manifest, manifest);
     return { status: "updated", etag, manifest };
   }
 
   private canRevalidate(
-    previous: TranslationSyncRequest["previous"],
-  ): previous is TranslationSyncState {
+    previous: TranslationSyncRequest<ManifestForRevision<TRevision>>["previous"],
+  ): previous is TranslationSyncState<ManifestForRevision<TRevision>> {
     if (previous === undefined) return false;
-    if (previous.manifest.revision !== 2) return true;
+    if (previous.manifest.revision === 1) return true;
     return Date.parse(previous.manifest.serverProof.expiresAt) > this.now();
   }
 
   private async verifyManifest(
-    manifest: TranslationExportManifest,
+    manifest: ManifestForRevision<TRevision>,
   ): Promise<void> {
     if (manifest.revision === 1) return;
     const verifier = this.options.manifestVerifier;
     if (verifier === undefined)
       throw new Error("translation_manifest_verifier_required");
-    await verifier.verify(manifest);
+    await (
+      verifier as TranslationManifestVerificationPort<
+        | (TranslationExportManifest & Readonly<{ revision: 2 }>)
+        | import("./contracts").CanonicalJsonTranslationExportManifest
+      >
+    ).verify(manifest as Extract<AnyTranslationExportManifest, { revision: 2 | 3 }>);
+  }
+
+  private async verifyHistoricalManifest(
+    manifest: ManifestForRevision<TRevision>,
+  ): Promise<void> {
+    if (manifest.revision === 1) return;
+    const verifier = this.options.manifestVerifier;
+    if (verifier?.verifyHistorical === undefined) {
+      throw new Error("translation_manifest_historical_verifier_required");
+    }
+    await (verifier as TranslationManifestVerificationPort<
+      | (TranslationExportManifest & Readonly<{ revision: 2 }>)
+      | import("./contracts").CanonicalJsonTranslationExportManifest
+    >).verifyHistorical?.(
+      manifest as Extract<AnyTranslationExportManifest, { revision: 2 | 3 }>,
+    );
+  }
+
+  private verifyPack(
+    bytes: Uint8Array,
+    pack: PackForRevision<TRevision>,
+  ): Promise<Uint8Array> {
+    return (
+      this.options.verifier as PackVerificationPort<AnyTranslationPackRef>
+    ).verify({ bytes, pack });
+  }
+
+  private allowedDownloadOrigin(
+    manifest: ManifestForRevision<TRevision>,
+  ): string {
+    if (manifest.revision === 1) {
+      throw new Error("translation_manifest_cdn_origin_required");
+    }
+    return manifest.cdnOrigin;
   }
 
   private async fetchTickets(
-    request: TranslationSyncRequest,
-    manifest: TranslationExportManifest,
-    packs: readonly TranslationPackRef[],
+    request: TranslationSyncRequest<ManifestForRevision<TRevision>>,
+    manifest: ManifestForRevision<TRevision>,
+    packs: readonly PackForRevision<TRevision>[],
   ): Promise<Map<string, DownloadTicket>> {
     if (packs.length === 0) return new Map();
-    const response = await this.options.transport.send<
-      { tickets: TicketWire[] },
-      { manifest_id: string; pack_ids: string[] }
-    >({
-      method: "POST",
-      path: this.options.endpoint.downloadTicketsPath(request),
-      headers: this.options.endpoint.authorizationHeaders(),
-      body: {
-        manifest_id: manifest.manifestId,
-        pack_ids: packs.map((pack) => pack.packId),
-      },
-    });
-    if (response.status !== 200)
-      throw new Error(`translation_ticket_failed:${response.status}`);
-    if (!Array.isArray(response.body.tickets)) {
-      throw new Error("translation_ticket_response_invalid");
-    }
-    const requested = new Set(packs.map((pack) => pack.packId));
-    const tickets = new Map(
-      response.body.tickets.map((wire) => {
-        const ticket = ticketFromWire(wire);
-        return [ticket.packId, ticket] as const;
-      }),
-    );
-    if (
-      tickets.size !== packs.length ||
-      response.body.tickets.length !== packs.length ||
-      [...tickets.keys()].some((packId) => !requested.has(packId))
-    ) {
-      throw new Error("translation_ticket_set_mismatch");
+    const tickets = new Map<string, DownloadTicket>();
+    for (const requestedPacks of chunked(packs, this.maxTicketBatchSize)) {
+      const response = await this.options.transport.send<
+        { tickets: TicketWire[] },
+        { manifest_id: string; pack_ids: string[] }
+      >({
+        method: "POST",
+        path: this.options.endpoint.downloadTicketsPath(request),
+        headers: this.options.endpoint.authorizationHeaders(),
+        body: {
+          manifest_id: manifest.manifestId,
+          pack_ids: requestedPacks.map((pack) => pack.packId),
+        },
+      });
+      if (response.status !== 200)
+        throw new Error(`translation_ticket_failed:${response.status}`);
+      if (!Array.isArray(response.body.tickets)) {
+        throw new Error("translation_ticket_response_invalid");
+      }
+      const requested = new Set(requestedPacks.map((pack) => pack.packId));
+      const batchTickets = new Map(
+        response.body.tickets.map((wire) => {
+          const ticket = ticketFromWire(wire);
+          return [ticket.packId, ticket] as const;
+        }),
+      );
+      if (
+        batchTickets.size !== requestedPacks.length ||
+        response.body.tickets.length !== requestedPacks.length ||
+        [...batchTickets.keys()].some((packId) => !requested.has(packId))
+      ) {
+        throw new Error("translation_ticket_set_mismatch");
+      }
+      for (const [packId, ticket] of batchTickets) tickets.set(packId, ticket);
     }
     return tickets;
   }
 
   private assertTicket(
     ticket: DownloadTicket,
-    pack: TranslationPackRef,
-    scope: ExportScope,
+    pack: AnyTranslationPackRef,
+    manifest: AnyTranslationExportManifest,
   ): void {
     if (ticket.objectVersion !== pack.objectVersion) {
       throw new Error(`translation_ticket_version_mismatch:${pack.packId}`);
     }
+    const scope = manifest.scope;
     if (scope.kind === "public") {
+      const requiresShortLivedAuthenticatedTicket = manifest.revision === 3;
       const validPublic =
+        !requiresShortLivedAuthenticatedTicket &&
         ticket.accessMode === "public_immutable" &&
+        ticket.issuedAtEpochMs === null &&
         ticket.expiresAtEpochMs === null;
       const validAuthenticated =
         ticket.accessMode === "authenticated_public" &&
-        ticket.expiresAtEpochMs !== null;
+        ticket.expiresAtEpochMs !== null &&
+        (!requiresShortLivedAuthenticatedTicket || ticket.issuedAtEpochMs !== null);
       if (!validPublic && !validAuthenticated) {
         throw new Error(`translation_public_ticket_invalid:${pack.packId}`);
       }
@@ -323,6 +431,21 @@ export class TranslationExportClient {
       throw new Error(`translation_private_ticket_invalid:${pack.packId}`);
     }
     if (
+      manifest.revision === 3 &&
+      ticket.accessMode === "authenticated_public" &&
+      ticket.issuedAtEpochMs !== null &&
+      ticket.expiresAtEpochMs !== null &&
+      ticket.expiresAtEpochMs - ticket.issuedAtEpochMs !== 300_000
+    ) {
+      throw new Error(`translation_public_ticket_window_invalid:${pack.packId}`);
+    }
+    if (
+      ticket.issuedAtEpochMs !== null &&
+      ticket.issuedAtEpochMs > this.now()
+    ) {
+      throw new Error(`translation_ticket_not_yet_valid:${pack.packId}`);
+    }
+    if (
       ticket.expiresAtEpochMs !== null &&
       ticket.expiresAtEpochMs <= this.now()
     ) {
@@ -331,8 +454,8 @@ export class TranslationExportClient {
   }
 
   private assertManifestRequest(
-    manifest: TranslationExportManifest,
-    request: TranslationSyncRequest,
+    manifest: ManifestForRevision<TRevision>,
+    request: TranslationSyncRequest<ManifestForRevision<TRevision>>,
   ): void {
     if (
       manifest.sourceVersionId !== request.sourceVersionId ||
@@ -348,22 +471,52 @@ export class TranslationExportClient {
     } else if (manifest.scope.workspaceId !== request.authorityScopeId) {
       throw new Error("translation_private_manifest_scope_mismatch");
     }
-    if (
+    if (manifest.revision === 3) {
+      if (
+        manifest.packs.some(
+          (pack) => pack.contentSizeBytes > this.maxContentBytes,
+        )
+      ) {
+        throw new Error("translation_pack_content_limit_exceeded");
+      }
+    } else if (
       manifest.packs.some(
         (pack) => pack.compressedBytes > this.maxCompressedPackBytes,
       )
     ) {
       throw new Error("translation_pack_compressed_limit_exceeded");
     }
+    const totalContentBytes = manifest.packs.reduce(
+      (total, pack) => total + packSizeBytes(pack),
+      0,
+    );
+    if (!Number.isSafeInteger(totalContentBytes) || totalContentBytes > this.maxTotalContentBytes) {
+      throw new Error("translation_pack_total_content_limit_exceeded");
+    }
   }
 }
 
-function manifestEtag(manifest: TranslationExportManifest): string {
+function chunked<T>(items: readonly T[], size: number): readonly (readonly T[])[] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function manifestEtag(manifest: AnyTranslationExportManifest): string {
   return `"${manifest.manifestDigest}"`;
 }
 
 function ticketFromWire(wire: TicketWire): DownloadTicket {
+  const issued = wire.issued_at_epoch_ms ?? null;
   const expires = wire.expires_at_epoch_ms;
+  if (
+    issued !== null &&
+    (!Number.isSafeInteger(issued) || Number(issued) <= 0)
+  ) {
+    throw new Error("translation_ticket_issued_at_invalid");
+  }
   if (
     expires !== null &&
     (!Number.isSafeInteger(expires) || Number(expires) <= 0)
@@ -380,6 +533,7 @@ function ticketFromWire(wire: TicketWire): DownloadTicket {
       "translation_ticket_version_invalid",
     ),
     url: requiredString(wire.url, "translation_ticket_url_invalid"),
+    issuedAtEpochMs: issued === null ? null : Number(issued),
     expiresAtEpochMs: expires === null ? null : Number(expires),
     accessMode,
   };
@@ -404,7 +558,9 @@ function requiredString(value: unknown, code: string): string {
   return value;
 }
 
-function assertRequest(request: TranslationSyncRequest): void {
+function assertRequest(
+  request: TranslationSyncRequest<AnyTranslationExportManifest>,
+): void {
   for (const [value, code] of [
     [request.authorityScopeId, "translation_authority_scope_invalid"],
     [request.sourceVersionId, "translation_source_version_invalid"],
@@ -416,8 +572,8 @@ function assertRequest(request: TranslationSyncRequest): void {
 }
 
 function assertGenerationTransition(
-  previous: TranslationExportManifest | undefined,
-  current: TranslationExportManifest,
+  previous: AnyTranslationExportManifest | undefined,
+  current: AnyTranslationExportManifest,
 ): void {
   if (previous === undefined) return;
   if (current.generationNumber < previous.generationNumber) {
@@ -432,18 +588,63 @@ function assertGenerationTransition(
   }
 }
 
-function scopeCacheKey(scope: ExportScope): string {
+export function scopeCacheKey(scope: ExportScope): string {
   return scope.kind === "public"
     ? `public:${scope.publicScopeId}`
     : `private:${scope.tenantId}:${scope.workspaceId}:${scope.encryptionDomainId}`;
 }
 
-function packKey(scopeKey: string, pack: TranslationPackRef): LocalPackKey {
+export function packKey(scopeKey: string, pack: AnyTranslationPackRef): LocalPackKey {
   return {
     scopeKey,
     logicalObjectDigest: pack.logicalObjectDigest,
     objectVersion: pack.objectVersion,
   };
+}
+
+export function packKeysForManifest(
+  manifest: AnyTranslationExportManifest,
+): readonly LocalPackKey[] {
+  const scopeKey = scopeCacheKey(manifest.scope);
+  return manifest.packs.map((pack) => packKey(scopeKey, pack));
+}
+
+function packSizeBytes(pack: AnyTranslationPackRef): number {
+  return "contentSizeBytes" in pack
+    ? pack.contentSizeBytes
+    : pack.compressedBytes;
+}
+
+function parseForRevision<TRevision extends TranslationExportRevision>(
+  input: unknown,
+  revision: TRevision,
+): ManifestForRevision<TRevision> {
+  if (revision === 3) {
+    return parseTranslationExportManifest(
+      input,
+      3,
+    ) as ManifestForRevision<TRevision>;
+  }
+  return parseTranslationExportManifest(
+    input,
+    revision,
+  ) as ManifestForRevision<TRevision>;
+}
+
+function parseStoredForRevision<TRevision extends TranslationExportRevision>(
+  input: unknown,
+  revision: TRevision,
+): ManifestForRevision<TRevision> {
+  if (revision === 3) {
+    return parseStoredTranslationExportManifest(
+      input,
+      3,
+    ) as ManifestForRevision<TRevision>;
+  }
+  return parseStoredTranslationExportManifest(
+    input,
+    revision,
+  ) as ManifestForRevision<TRevision>;
 }
 
 function header(

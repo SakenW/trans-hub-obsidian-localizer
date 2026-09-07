@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  decodeJsLiteral,
   digestPluginBundle,
+  hasCompatiblePlaceholderSignature,
   normalizePluginBundle,
   normalizePluginBundleV1,
   normalizePluginBundleWithScheme,
@@ -935,5 +937,32 @@ describe("scanPluginUiStrings", () => {
       .toBe("{{th:expr:0}}");
     expect(placeholderSignature('<strong class="name">Value</strong>'))
       .toBe('["<strong class=\\"name\\">","</strong>"]');
+  });
+});
+
+describe("literal and placeholder safety", () => {
+  it("accepts a legal escaped Unicode surrogate pair but rejects isolated halves", () => {
+    expect(decodeJsLiteral('"\\uD83D\\uDE80 Launch"')).toBe("🚀 Launch");
+    expect(decodeJsLiteral('"\\uD83D Launch"')).toBeNull();
+    expect(decodeJsLiteral('"\\uDE80 Launch"')).toBeNull();
+  });
+
+  it("allows only runtime expression slots to change order", () => {
+    expect(hasCompatiblePlaceholderSignature(
+      "From {{th:expr:0}} to {{th:expr:1}}",
+      "从 {{th:expr:1}} 到 {{th:expr:0}}",
+    )).toBe(true);
+    expect(hasCompatiblePlaceholderSignature(
+      "Value {0}",
+      "值 {0}",
+    )).toBe(true);
+    expect(hasCompatiblePlaceholderSignature(
+      "Value {0}",
+      "值 {1}",
+    )).toBe(false);
+    expect(hasCompatiblePlaceholderSignature(
+      "<strong>{{th:expr:0}}</strong>",
+      "{{th:expr:0}}<strong></strong>",
+    )).toBe(false);
   });
 });

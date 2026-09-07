@@ -1,47 +1,55 @@
-import type { ContributionStateReceipt, LocalizationDemandState } from "@trans-hub/client-protocol";
-import type { ScopeAwarePackStore } from "@trans-hub/translation-export-client";
+import type { LocalizationDemandState } from "@trans-hub/client-protocol";
+import {
+  packKeysForManifest,
+  type LocalPackKey,
+  type ScopeAwarePackStore,
+} from "@trans-hub/translation-export-client";
+
+import {
+  refreshPluginStatuses,
+  normalizeDiscoveryLocales,
+  sameTargetLocales,
+  publicDiscoveryFromReceipt,
+  type PluginStatusReadResult,
+} from "./plugin-status-refresh";
+export { refreshConfiguredPluginStatuses } from "./plugin-status-refresh";
+export type { PluginStatusReadResult, PluginStatusReadSource } from "./plugin-status-refresh";
 
 import type { ActivationStore } from "./activation";
 import { ObsidianHttpTransport } from "./http-transport";
 import { mergePublishedPluginTranslation } from "./plugin-catalog-diff";
 import {
-  isUnprocessableMachineTranslationFailure,
-  resolvePluginDemandStatus,
-} from "./plugin-demand-status";
-import {
-  isCommunityPluginNotFoundError,
-  resolveCommunityPluginIdentity,
-} from "./plugin-registry";
-import {
   loadPublishedEcosystemCatalog,
-  normalizeGitHubRepository,
   resolvePublishedPluginArtifactDigestFromCatalog,
   resolvePublishedPluginSourceFromCatalog,
   type PublishedPluginSource,
 } from "./plugin-source-resolution";
-import {
-  placeholderSignature,
-  resolvePluginStringScopes,
-  type PluginUiCatalog,
-} from "./plugin-string-scanner";
+import { type PluginUiCatalog } from "./plugin-string-scanner";
 import {
   deletePluginTranslation,
   getPluginTranslation,
   setPluginTranslation,
   type PluginState,
+  type PublicPluginDiscoveryState,
   type PluginSubmissionState,
-  type PluginTranslationState,
 } from "./plugin-state";
-import { visiblePluginManualRetryKind } from "./plugin-localization-status";
-import type { PluginUiTranslation } from "./plugin-ui-runtime";
+import {
+  isPublicDiscoveryManuallyRetryable,
+  visiblePluginManualRetryKind,
+} from "./plugin-localization-status";
 import type { TargetLocale } from "./product-config";
 import {
   OBSIDIAN_PUBLIC_PROFILE,
-  submitObsidianLocalizationObservation,
   submitObsidianPluginDiscovery,
 } from "./submission";
 import { downloadPluginTranslations } from "./translation-sync";
-import { refreshPluginStatusFromBatch } from "./plugin-status-refresh";
+import { validatePluginTranslations } from "./plugin-translation-validation";
+export { validatePluginTranslations } from "./plugin-translation-validation";
+
+declare const __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__: "development" | "production";
+
+const ALLOW_DEVELOPMENT_DOWNLOAD_ORIGIN =
+  __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__ === "development";
 
 export interface PluginSyncSummary {
   readonly submittedCount: number;
@@ -56,22 +64,16 @@ export interface PluginSyncSummary {
   readonly translationCount: number;
   readonly waitingPluginIds?: readonly string[];
   readonly exportPendingPluginIds?: readonly string[];
+  /** 已明确撤回此前发布的译文；同步层只报告事实，不直接写入插件文件。 */
+  readonly withdrawnExportPluginIds?: readonly string[];
   readonly failedPluginIds?: readonly string[];
+  readonly blockedPluginIds?: readonly string[];
   readonly nextRetryAfterMs?: number;
   readonly demandStateCounts?: Readonly<Partial<Record<LocalizationDemandState, number>>>;
   readonly authorityRefreshingCount?: number;
-}
-
-const MAX_AUTOMATIC_SOURCE_RESUBMISSIONS = 1;
-const SOURCE_ARTIFACT_MISMATCH_CODE = "source_artifact_mismatch";
-
-class SourceArtifactMismatchError extends Error {
-  readonly code = SOURCE_ARTIFACT_MISMATCH_CODE;
-
-  constructor() {
-    super("本地安装与权威目录的精确制品不一致，已暂停同步。");
-    this.name = "SourceArtifactMismatchError";
-  }
+  /** Status-only reads keep cached facts on failure, but must never report them as freshly read. */
+  readonly statusRead?: PluginStatusReadResult;
+  readonly statusReadPluginIds?: readonly string[];
 }
 
 export async function synchronizeConfiguredPluginTranslations(input: {
@@ -104,25 +106,51 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   const sourceSelectablePluginIds = new Set(
     input.sourceSelectablePluginIds ?? catalogs.map((catalog) => catalog.pluginId),
   );
+  const projectionRefresh = await refreshPluginStatuses(
+    input, client, bootstrap.installationId,
+  );
+  const staleStatus = projectionRefresh.summary.statusRead;
+  const stalePluginIds = new Set(staleStatus?.kind === "stale" ? staleStatus.failedPluginIds : []);
   const publishedCatalog = await loadPublishedCatalogForSynchronization(
     transport,
     catalogs,
     input.targetLocale,
   );
   let submittedCount = 0;
-  let requestedCount = 0;
+  const requestedCount = 0;
   let pulledCount = 0;
   let waitingCount = 0;
-  let exportPendingCount = 0;
+  const exportPendingCount = 0;
   let translationCount = 0;
   const waitingPluginIds: string[] = [];
   const exportPendingPluginIds: string[] = [];
+  const withdrawnExportPluginIds: string[] = [];
   const failedPluginIds: string[] = [];
+  const blockedPluginIds: string[] = [];
   const demandStateCounts: Partial<Record<LocalizationDemandState, number>> = {};
-  let authorityRefreshingCount = 0;
+  const authorityRefreshingCount = 0;
   let nextRetryAfterMs: number | undefined;
   for (const catalog of catalogs) {
+    if (stalePluginIds.has(catalog.pluginId)) {
+      if (projectionRefresh.summary.waitingPluginIds?.includes(catalog.pluginId)) {
+        waitingCount += 1;
+        waitingPluginIds.push(catalog.pluginId);
+      }
+      if (projectionRefresh.summary.blockedPluginIds?.includes(catalog.pluginId)) blockedPluginIds.push(catalog.pluginId);
+      if (projectionRefresh.summary.failedPluginIds?.includes(catalog.pluginId)) failedPluginIds.push(catalog.pluginId);
+      continue;
+    }
     try {
+      const authoritativeSourceVersionId = projectionRefresh.sourceVersionIds.get(
+        catalog.pluginId,
+      );
+      if (authoritativeSourceVersionId !== undefined) {
+        await discardSupersededActiveTranslation(
+          input,
+          catalog.pluginId,
+          authoritativeSourceVersionId,
+        );
+      }
       const published = publishedCatalog === undefined
         ? undefined
         : resolvePublishedPluginSourceFromCatalog(publishedCatalog, {
@@ -130,6 +158,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             pluginVersion: catalog.pluginVersion,
             targetLocale: input.targetLocale,
             localCatalogIdentity: catalog.catalogIdentity,
+            authoritativeSourceVersionId,
           });
       // Prefer the resolved coverage identity digest: it is the current
       // authoritative scan digest, which is what the local scanner produces.
@@ -144,7 +173,6 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             }));
       const localArtifactVariant = authoritativeArtifactDigest !== undefined
         && authoritativeArtifactDigest !== catalog.artifactDigest;
-      let publishedDeliverySynchronized = false;
       if (published !== undefined) {
         // A local bundle can legitimately differ from the immutable upstream
         // artifact while retaining the same plugin version.  That only limits
@@ -171,16 +199,17 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           });
           pulledCount += 1;
           translationCount += count;
-          publishedDeliverySynchronized = true;
         } catch (error) {
           if (!isPublishedExportPending(error)) throw error;
+          if (isPublishedExportWithdrawn(error)) {
+            withdrawnExportPluginIds.push(catalog.pluginId);
+          }
           await saveNativeCoverage(
             input,
             catalog,
             published,
             published.upstreamNativeCount,
           );
-          publishedDeliverySynchronized = true;
           const catalogUnitCount = new Set(catalog.strings.map((item) => item.source)).size;
           if (published.upstreamNativeCount >= catalogUnitCount) {
             pulledCount += 1;
@@ -199,342 +228,73 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           if (existingSubmission !== undefined) {
             await saveSubmission(
               input,
-              submissionForCompletedAuthoritativeSource(existingSubmission, sourceVersionId),
+              { ...existingSubmission, sourceVersionId },
             );
           }
           continue;
         }
       }
-      if (published === undefined && localArtifactVariant && !manualResubmit.has(catalog.pluginId)) {
-        // A manual resubmit may still submit the discovery observation: the
-        // authoritative digest can be stale server-side (an object version
-        // acquired before the bundle-normalization change), and the server
-        // reconciles it by re-acquiring the upstream artifact.  Without this
-        // escape hatch the client would stay paused forever and could never
-        // trigger the one-time authority recovery observation.
-        await saveSynchronizationError(
-          input,
-          catalog,
-          bootstrap.installationId,
-          new SourceArtifactMismatchError(),
+      const existingDiscovery = input.getState().publicPluginDiscoveries[catalog.pluginId];
+      {
+        const manualRecoveryDiscovery = manualResubmit.has(catalog.pluginId)
+          && existingDiscovery?.statusRevision === 2
+          && isPublicDiscoveryManuallyRetryable(
+            existingDiscovery,
+            input.targetLocale,
+          );
+        const targetLocales = normalizeDiscoveryLocales(
+          existingDiscovery?.installationId === bootstrap.installationId
+            ? [...existingDiscovery.targetLocales, input.targetLocale]
+            : [input.targetLocale],
         );
+        const requiresSubmission = existingDiscovery === undefined
+          || existingDiscovery.installationId !== bootstrap.installationId
+          || existingDiscovery.sourceDiscoveryEpoch !== OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch
+          || existingDiscovery.catalogIdentityDigest !== catalog.digest
+          || !sameTargetLocales(existingDiscovery.targetLocales, targetLocales)
+          || manualRecoveryDiscovery;
+        if (requiresSubmission) {
+          const retryGeneration = manualRecoveryDiscovery
+            ? (existingDiscovery.retryGeneration ?? 0) + 1
+            : 0;
+          const receipt = await submitObsidianPluginDiscovery({
+            client,
+            installationId: bootstrap.installationId,
+            catalog,
+            targetLocales,
+            ...(retryGeneration === 0 ? {} : { observationGeneration: retryGeneration }),
+          });
+          await savePublicDiscovery(
+            input,
+            catalog.pluginId,
+            publicDiscoveryFromReceipt({
+              receipt, targetLocales, installationId: bootstrap.installationId,
+              retryGeneration, catalogIdentityDigest: catalog.digest,
+            }),
+          );
+          submittedCount += 1;
+          if (receipt.taskState === "blocked" || receipt.classification === "blocked") {
+            blockedPluginIds.push(catalog.pluginId);
+          } else {
+            waitingCount += 1;
+            waitingPluginIds.push(catalog.pluginId);
+          }
+        } else if (existingDiscovery.taskState === "blocked" || existingDiscovery.classification === "blocked") {
+          if (isPublicDiscoveryManuallyRetryable(existingDiscovery, input.targetLocale)) {
+            failedPluginIds.push(catalog.pluginId);
+          } else {
+            blockedPluginIds.push(catalog.pluginId);
+          }
+        } else {
+          waitingCount += 1;
+          waitingPluginIds.push(catalog.pluginId);
+        }
+        // The public directory has either not published this entry yet, or
+        // has no complete translation coverage. New requests end here: never
+        // fall through into the retired URL-based source-discovery or
+        // localization-observation writes.
         continue;
       }
-      let identity: Pick<
-        Awaited<ReturnType<typeof resolveCommunityPluginIdentity>>,
-        "repository" | "candidateLocators"
-      >;
-      if (published !== undefined && published.repository !== undefined) {
-        identity = { repository: published.repository, candidateLocators: [] };
-      } else {
-        try {
-          identity = await resolveCommunityPluginIdentity(
-            catalog.pluginId,
-            catalog.pluginVersion,
-          );
-        } catch (error) {
-          if (published?.catalogIdentityExact === true && isCommunityPluginNotFoundError(error)) {
-            const repository = trustedStoredRepository(
-              input.getState().pluginSubmissions[catalog.pluginId],
-              catalog,
-              published.sourceVersionId,
-            );
-            if (repository === undefined) {
-              throw new Error("权威来源缺少可信 GitHub 仓库定位，无法建立本地化需求。");
-            }
-            identity = { repository, candidateLocators: [] };
-          } else if (published !== undefined && isCommunityPluginNotFoundError(error)) {
-            continue;
-          } else {
-            throw error;
-          }
-        }
-      }
-      const manuallyResubmit = manualResubmit.has(catalog.pluginId);
-      let submission = input.getState().pluginSubmissions[catalog.pluginId];
-      if (published !== undefined) {
-        if (
-          submission !== undefined
-          && submission.registryPolicyRevision
-            !== OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision
-        ) {
-          await submitObsidianPluginDiscovery({
-            client,
-            installationId: bootstrap.installationId,
-            catalog,
-            repository: identity.repository,
-            candidateLocators: identity.candidateLocators,
-          });
-          submittedCount += 1;
-        }
-        submission = authoritativeLocalizationSubmission({
-          catalog,
-          existing: submission,
-          installationId: bootstrap.installationId,
-          manuallyResubmit,
-          repository: identity.repository,
-          sourceVersionId: published.sourceVersionId,
-          targetLocale: input.targetLocale,
-        });
-        await saveSubmission(input, submission);
-      } else if (
-        submission?.installationId !== bootstrap.installationId
-        || submission.catalogDigest !== catalog.digest
-        || submission.pluginVersion !== catalog.pluginVersion
-        || submission.adapterProfileDigest !== OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex
-        || submission.registryPolicyRevision !== OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision
-        || submission.sourceDiscoveryEpoch !== OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch
-        || submission.contributionId === undefined
-      ) {
-        const receipt = await submitObsidianPluginDiscovery({
-          client,
-          installationId: bootstrap.installationId,
-          catalog,
-          repository: identity.repository,
-          candidateLocators: identity.candidateLocators,
-        });
-        submission = submissionFromReceipt(
-          catalog,
-          identity.repository,
-          bootstrap.installationId,
-          receipt,
-        );
-        await saveSubmission(input, submission);
-        submittedCount += 1;
-      } else {
-        if (submission.contributionId === undefined) {
-          throw new Error("来源贡献状态缺少贡献 ID。");
-        }
-        const receipt = await client.getContributionStatus(submission.contributionId);
-        const observationGeneration = submission.observationGeneration ?? 0;
-        if (
-          receipt.state === "rejected"
-          && (
-            manuallyResubmit
-            || observationGeneration < MAX_AUTOMATIC_SOURCE_RESUBMISSIONS
-          )
-        ) {
-          const nextGeneration = observationGeneration + 1;
-          const retryReceipt = await submitObsidianPluginDiscovery({
-            client,
-            installationId: bootstrap.installationId,
-            catalog,
-            repository: identity.repository,
-            candidateLocators: identity.candidateLocators,
-            observationGeneration: nextGeneration,
-          });
-          submission = submissionFromReceipt(
-            catalog,
-            identity.repository,
-            bootstrap.installationId,
-            retryReceipt,
-            nextGeneration,
-          );
-          submittedCount += 1;
-        } else {
-          submission = manuallyResubmit
-            ? prepareManualLocalizationResubmission(
-                submission,
-                receipt.state,
-                observationGeneration + 1,
-              )
-            : {
-                ...submission,
-                contributionState: receipt.state,
-              };
-        }
-        await saveSubmission(input, submission);
-        if (
-          submission.contributionState === "rejected"
-          && (submission.observationGeneration ?? 0)
-            >= MAX_AUTOMATIC_SOURCE_RESUBMISSIONS
-        ) {
-          failedPluginIds.push(catalog.pluginId);
-          continue;
-        }
-      }
-      if (
-        submission.localizationTargetLocale !== input.targetLocale
-        || submission.localizationContributionId === undefined
-      ) {
-        const receipt = await submitObsidianLocalizationObservation({
-          client,
-          installationId: bootstrap.installationId,
-          catalog,
-          repository: identity.repository,
-          targetLocale: input.targetLocale,
-          observationGeneration: submission.observationGeneration,
-        });
-        submission = {
-          ...submission,
-          repository: identity.repository,
-          localizationTargetLocale: input.targetLocale,
-          localizationContributionId: receipt.contributionId,
-          localizationContributionState: receipt.state,
-        };
-        await saveSubmission(input, submission);
-        requestedCount += 1;
-      } else {
-        const status = await client.getLocalizationDemandStatus(
-          submission.localizationContributionId,
-        );
-        const demand = resolvePluginDemandStatus(status, input.targetLocale);
-        if (
-          demand.disposition === "waiting"
-          && demand.coordinate.failureCode === "PublicDistributionAuthorityRefreshing"
-        ) {
-          authorityRefreshingCount += 1;
-        } else {
-          incrementDemandState(demandStateCounts, demand.coordinate.state);
-        }
-        submission = {
-          ...submission,
-          localizationContributionState: status.state,
-          localizationDemandStatus: demand.snapshot,
-          ...(demand.coordinate.sourceVersionId === null
-            ? {}
-            : { sourceVersionId: demand.coordinate.sourceVersionId }),
-        };
-        await saveSubmission(input, submission);
-        const requestsAuthorityRecoveryObservation = manuallyResubmit
-          && demand.coordinate.state === "distribution_blocked"
-          && demand.coordinate.failureCode === "PublicDistributionAuthorityRetryExhausted"
-          && demand.coordinate.sourceVersionId !== null
-          && demand.coordinate.sourceVersionId === submission.sourceVersionId;
-        if (requestsAuthorityRecoveryObservation) {
-          const receipt = await submitObsidianLocalizationObservation({
-            client,
-            installationId: bootstrap.installationId,
-            catalog,
-            repository: identity.repository,
-            targetLocale: input.targetLocale,
-            observationGeneration: submission.observationGeneration,
-          });
-          submission = {
-            ...submission,
-            localizationContributionId: receipt.contributionId,
-            localizationContributionState: receipt.state,
-          };
-          await saveSubmission(input, submission);
-          requestedCount += 1;
-          waitingCount += 1;
-          waitingPluginIds.push(catalog.pluginId);
-          continue;
-        }
-        const demandPublished = publishedCatalog === undefined
-          ? undefined
-          : resolvePublishedPluginSourceFromCatalog(publishedCatalog, {
-              pluginId: catalog.pluginId,
-              pluginVersion: catalog.pluginVersion,
-              targetLocale: input.targetLocale,
-              localCatalogIdentity: catalog.catalogIdentity,
-            });
-        if (demand.disposition === "native") {
-          if (demand.coordinate.sourceVersionId === null) {
-            throw new Error("插件自带语言状态缺少来源版本。");
-          }
-          if (demandPublished?.sourceVersionId !== demand.coordinate.sourceVersionId) {
-            waitingCount += 1;
-            waitingPluginIds.push(catalog.pluginId);
-            continue;
-          }
-          await saveNativeCoverage(
-            input,
-            catalog,
-            demandPublished,
-            demand.coordinate.nativeUnitCount,
-          );
-          pulledCount += 1;
-          continue;
-        }
-        if (demand.disposition === "ready") {
-          if (demand.coordinate.sourceVersionId === null) {
-            throw new Error("已发布译文状态缺少来源版本。");
-          }
-          if (demandPublished?.sourceVersionId !== demand.coordinate.sourceVersionId) {
-            waitingCount += 1;
-            waitingPluginIds.push(catalog.pluginId);
-            continue;
-          }
-          try {
-            const count = await pullPluginTranslation({
-              input,
-              transport,
-              catalog,
-              published: demandPublished,
-              accessToken: bootstrap.intakeCredential.value,
-              authorityWorkspaceId,
-              upstreamNativeCount: demand.coordinate.nativeUnitCount,
-            });
-            pulledCount += 1;
-            translationCount += count;
-            continue;
-          } catch (error) {
-            if (!isPublishedExportPending(error)) throw error;
-          }
-        }
-        if (demand.disposition === "failed") {
-          const failedSourceVersionId = demand.coordinate.sourceVersionId
-            ?? submission.sourceVersionId;
-          const partialPublishedDelivery = demandPublished !== undefined
-            && demandPublished.sourceVersionId === failedSourceVersionId
-            && Math.min(
-              demandPublished.sourceUnitCount,
-              demandPublished.upstreamNativeCount + demandPublished.publishedUnitCount,
-            ) > 0;
-          if (partialPublishedDelivery) {
-            if (!publishedDeliverySynchronized) {
-              try {
-                const count = await pullPluginTranslation({
-                  input,
-                  transport,
-                  catalog,
-                  published: demandPublished,
-                  accessToken: bootstrap.intakeCredential.value,
-                  authorityWorkspaceId,
-                  upstreamNativeCount: demand.coordinate.nativeUnitCount,
-                });
-                pulledCount += 1;
-                translationCount += count;
-              } catch (error) {
-                if (!isPublishedExportPending(error)) throw error;
-                await saveNativeCoverage(
-                  input,
-                  catalog,
-                  demandPublished,
-                  demand.coordinate.nativeUnitCount,
-                );
-                pulledCount += 1;
-              }
-            }
-          } else {
-            await clearPluginDelivery(
-              input,
-              catalog.pluginId,
-              failedSourceVersionId,
-            );
-          }
-          if (!isUnprocessableMachineTranslationFailure(demand.coordinate.failureCode)) {
-            failedPluginIds.push(catalog.pluginId);
-          }
-          continue;
-        }
-        if (demand.disposition === "blocked") continue;
-        if (demand.coordinate.state === "export_pending") {
-          // The machine results are ready, but the server still needs to build
-          // and publish the immutable public distribution package. Keep this
-          // in the ordinary retry loop: no human review is required here.
-          exportPendingCount += 1;
-          exportPendingPluginIds.push(catalog.pluginId);
-          nextRetryAfterMs = mergeRetryAfter(nextRetryAfterMs, demand.retryAfterMs);
-          waitingCount += 1;
-          waitingPluginIds.push(catalog.pluginId);
-          continue;
-        }
-        nextRetryAfterMs = mergeRetryAfter(nextRetryAfterMs, demand.retryAfterMs);
-      }
-      waitingCount += 1;
-      waitingPluginIds.push(catalog.pluginId);
     } catch (error) {
       if (isGlobalSynchronizationError(error)) throw error;
       failedPluginIds.push(catalog.pluginId);
@@ -550,14 +310,24 @@ export async function synchronizeConfiguredPluginTranslations(input: {
     translationCount,
     waitingPluginIds,
     ...(exportPendingPluginIds.length === 0 ? {} : { exportPendingPluginIds }),
+    ...(withdrawnExportPluginIds.length === 0
+      ? {}
+      : { withdrawnExportPluginIds: [...new Set(withdrawnExportPluginIds)] }),
     failedPluginIds: retryableFailedPluginIds(
       input,
       failedPluginIds,
       sourceSelectablePluginIds,
     ),
+    ...(blockedPluginIds.length === 0
+      ? {}
+      : { blockedPluginIds: [...new Set(blockedPluginIds)] }),
     ...(nextRetryAfterMs === undefined ? {} : { nextRetryAfterMs }),
     demandStateCounts,
     ...(authorityRefreshingCount === 0 ? {} : { authorityRefreshingCount }),
+    ...(projectionRefresh.summary.statusReadPluginIds?.length ? {
+      statusRead: projectionRefresh.summary.statusRead,
+      statusReadPluginIds: projectionRefresh.summary.statusReadPluginIds,
+    } : {}),
   };
 }
 
@@ -581,136 +351,6 @@ function retryableFailedPluginIds(
   }) !== null);
 }
 
-function trustedStoredRepository(
-  submission: PluginSubmissionState | undefined,
-  catalog: PluginUiCatalog,
-  sourceVersionId: string,
-): string | undefined {
-  if (
-    submission === undefined
-    || submission.pluginId !== catalog.pluginId
-    || submission.pluginVersion !== catalog.pluginVersion
-    || submission.catalogDigest !== catalog.digest
-    || submission.sourceVersionId !== sourceVersionId
-    || !(
-      submission.sourceAuthority === "published"
-      || submission.contributionId !== undefined
-        && submission.contributionState === "source_attested"
-    )
-    || submission.repository === undefined
-  ) return undefined;
-  return normalizeGitHubRepository(submission.repository);
-}
-
-function submissionForCompletedAuthoritativeSource(
-  submission: PluginSubmissionState,
-  sourceVersionId: string,
-): PluginSubmissionState {
-  const {
-    localizationTargetLocale: discardedTargetLocale,
-    localizationContributionId: discardedContributionId,
-    localizationContributionState: discardedContributionState,
-    localizationDemandStatus: discardedDemandStatus,
-    ...sourceSubmission
-  } = submission;
-  void discardedTargetLocale;
-  void discardedContributionId;
-  void discardedContributionState;
-  void discardedDemandStatus;
-  return { ...sourceSubmission, sourceVersionId };
-}
-
-function authoritativeLocalizationSubmission(input: {
-  readonly catalog: PluginUiCatalog;
-  readonly existing: PluginSubmissionState | undefined;
-  readonly installationId: string;
-  readonly manuallyResubmit: boolean;
-  readonly repository: string;
-  readonly sourceVersionId: string;
-  readonly targetLocale: string;
-}): PluginSubmissionState {
-  const { existing } = input;
-  const sameObservationBase = existing !== undefined
-    && existing.pluginId === input.catalog.pluginId
-    && existing.pluginVersion === input.catalog.pluginVersion
-    && existing.catalogDigest === input.catalog.digest
-    && existing.adapterProfileDigest === OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex
-    && existing.registryPolicyRevision === OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision
-    && existing.sourceDiscoveryEpoch === OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch
-    && existing.installationId === input.installationId
-    && (existing.repository === undefined || existing.repository === input.repository);
-  const sourceChanged = sameObservationBase
-    && existing.sourceVersionId !== input.sourceVersionId;
-  const observationGeneration = input.manuallyResubmit || sourceChanged
-    ? (existing?.observationGeneration ?? 0) + 1
-    : sameObservationBase
-      ? existing.observationGeneration
-      : undefined;
-  const reuseLocalizationDemand = sameObservationBase
-    && !input.manuallyResubmit
-    && !sourceChanged
-    && existing.localizationTargetLocale === input.targetLocale
-    && existing.localizationContributionId !== undefined
-    // A demand receipt is bound to its authoritative source version.  Do not
-    // carry a cached terminal state into a newer authority observation merely
-    // because the submission metadata itself was already updated.
-    && (
-      existing.localizationDemandStatus === undefined
-      || existing.localizationDemandStatus.sourceVersionId === input.sourceVersionId
-    );
-  return {
-    pluginId: input.catalog.pluginId,
-    pluginVersion: input.catalog.pluginVersion,
-    catalogDigest: input.catalog.digest,
-    adapterProfileDigest: OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
-    registryPolicyRevision: OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision,
-    sourceDiscoveryEpoch: OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch,
-    installationId: input.installationId,
-    sourceAuthority: "published",
-    contributionState: "source_attested",
-    ...(observationGeneration === undefined ? {} : { observationGeneration }),
-    repository: input.repository,
-    ...(reuseLocalizationDemand
-      ? {
-          localizationTargetLocale: existing.localizationTargetLocale,
-          localizationContributionId: existing.localizationContributionId,
-          ...(existing.localizationContributionState === undefined
-            ? {}
-            : { localizationContributionState: existing.localizationContributionState }),
-          ...(existing.localizationDemandStatus === undefined
-            ? {}
-            : { localizationDemandStatus: existing.localizationDemandStatus }),
-        }
-      : {}),
-    sourceVersionId: input.sourceVersionId,
-    submittedAt: sameObservationBase ? existing.submittedAt : input.catalog.scannedAt,
-  };
-}
-
-function prepareManualLocalizationResubmission(
-  submission: PluginSubmissionState,
-  contributionState: string,
-  observationGeneration: number,
-): PluginSubmissionState {
-  const {
-    localizationTargetLocale: discardedTargetLocale,
-    localizationContributionId: discardedContributionId,
-    localizationContributionState: discardedContributionState,
-    localizationDemandStatus: discardedDemandStatus,
-    lastError: discardedLastError,
-    ...sourceSubmission
-  } = submission;
-  void discardedTargetLocale;
-  void discardedContributionId;
-  void discardedContributionState;
-  void discardedDemandStatus;
-  void discardedLastError;
-  return {
-    ...sourceSubmission,
-    contributionState,
-    observationGeneration,
-  };
-}
 
 async function pullPluginTranslation(input: {
   readonly input: Parameters<typeof synchronizeConfiguredPluginTranslations>[0];
@@ -735,7 +375,7 @@ async function pullPluginTranslation(input: {
     packStore: input.input.translationPackStore,
     ...(previous === undefined ? {} : { previous }),
     expectedPluginId: input.catalog.pluginId,
-    ...(isLocalHttp(input.input.apiBaseUrl)
+    ...(ALLOW_DEVELOPMENT_DOWNLOAD_ORIGIN && isLocalHttp(input.input.apiBaseUrl)
       ? { developmentDownloadOrigin: input.input.apiBaseUrl }
       : {}),
   });
@@ -747,6 +387,9 @@ async function pullPluginTranslation(input: {
       ...(row.provenanceKind === undefined ? {} : { provenanceKind: row.provenanceKind }),
       ...(row.application === undefined ? {} : { application: row.application }),
       ...(row.nativeTarget === undefined ? {} : { nativeTarget: row.nativeTarget }),
+      ...(row.sourceCompatibility === undefined
+        ? {}
+        : { sourceCompatibility: row.sourceCompatibility }),
     })),
     input.published.sourceVersionId,
     input.input.targetLocale,
@@ -768,7 +411,13 @@ async function pullPluginTranslation(input: {
     },
   }, input.catalog.pluginId, input.input.targetLocale, dictionary);
   input.input.replaceState(nextState);
-  await input.input.save();
+  try {
+    await input.input.save();
+  } catch (error) {
+    if (input.input.getState() === nextState) input.input.replaceState(state);
+    throw error;
+  }
+  await pruneUnreferencedTranslationPacks(input.input, nextState);
   return dictionary.entries.length;
 }
 
@@ -790,6 +439,9 @@ async function saveNativeCoverage(
   }, catalog.pluginId, input.targetLocale, {
     pluginId: catalog.pluginId,
     pluginVersion: catalog.pluginVersion,
+    ...(published.authorityPluginVersion === undefined
+      ? {}
+      : { authorityPluginVersion: published.authorityPluginVersion }),
     sourceVersionId: published.sourceVersionId,
     artifactDigest: published.artifactDigest,
     ...(published.sourceSnapshotDigest === undefined
@@ -813,56 +465,89 @@ async function saveNativeCoverage(
     pulledAt: new Date().toISOString(),
   });
   input.replaceState(nextState);
-  await input.save();
+  try {
+    await input.save();
+  } catch (error) {
+    if (input.getState() === nextState) input.replaceState(state);
+    throw error;
+  }
+  await pruneUnreferencedTranslationPacks(input, nextState);
 }
 
-async function clearPluginDelivery(
-  input: Parameters<typeof synchronizeConfiguredPluginTranslations>[0],
+async function discardSupersededActiveTranslation(
+  input: Pick<
+    Parameters<typeof synchronizeConfiguredPluginTranslations>[0],
+    "targetLocale" | "getState" | "replaceState" | "save" | "translationPackStore"
+  >,
   pluginId: string,
-  sourceVersionId: string | undefined,
+  sourceVersionId: string,
 ): Promise<void> {
-  const state = input.getState();
-  const stateWithoutTranslation = deletePluginTranslation(
-    state,
+  const previousState = input.getState();
+  const active = getPluginTranslation(previousState, pluginId, input.targetLocale);
+  if (active === undefined || active.sourceVersionId === sourceVersionId) return;
+  const withoutActive = deletePluginTranslation(
+    previousState,
     pluginId,
     input.targetLocale,
   );
-  const exportStateKey = sourceVersionId === undefined
-    ? undefined
-    : translationExportStateKey(sourceVersionId, input.targetLocale);
-  const remainingExportStates = Object.fromEntries(
-    Object.entries(state.translationExportStates).filter(([key]) =>
-      exportStateKey === undefined || key !== exportStateKey
+  // A confirmed current-source switch also retires the old manifest reference.
+  // Preserve an exact shared reference if another dictionary still uses it.
+  const oldKey = translationExportStateKey(active.sourceVersionId, input.targetLocale);
+  const stillReferenced = Object.values(withoutActive.pluginTranslations)
+    .some((locales) => Object.values(locales).some((translation) =>
+      translation?.sourceVersionId === active.sourceVersionId
+      && translation.targetLocale === input.targetLocale));
+  const nextState = stillReferenced ? withoutActive : {
+    ...withoutActive,
+    translationExportStates: Object.fromEntries(
+      Object.entries(withoutActive.translationExportStates).filter(([key]) => key !== oldKey),
     ),
-  );
-  input.replaceState({
-    ...stateWithoutTranslation,
-    translationExportStates: remainingExportStates,
-  });
-  await input.save();
+  };
+  input.replaceState(nextState);
+  try {
+    await input.save();
+  } catch (error) {
+    if (input.getState() === nextState) input.replaceState(previousState);
+    throw error;
+  }
+  await pruneUnreferencedTranslationPacks(input, nextState);
 }
 
-function submissionFromReceipt(
-  catalog: PluginUiCatalog,
-  repository: string,
-  installationId: string,
-  receipt: ContributionStateReceipt<"source_discovery">,
-  observationGeneration = 0,
-): PluginSubmissionState {
-  return {
-    pluginId: catalog.pluginId,
-    pluginVersion: catalog.pluginVersion,
-    catalogDigest: catalog.digest,
-    adapterProfileDigest: OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
-    registryPolicyRevision: OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision,
-    sourceDiscoveryEpoch: OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch,
-    installationId,
-    contributionId: receipt.contributionId,
-    contributionState: receipt.state,
-    ...(observationGeneration === 0 ? {} : { observationGeneration }),
-    repository,
-    submittedAt: receipt.recordedAt,
+async function pruneUnreferencedTranslationPacks(
+  input: Pick<Parameters<typeof synchronizeConfiguredPluginTranslations>[0], "translationPackStore">,
+  state: PluginState,
+): Promise<void> {
+  const store = input.translationPackStore as ScopeAwarePackStore & {
+    pruneUnreferenced?: (keep: readonly LocalPackKey[]) => Promise<number>;
   };
+  if (store.pruneUnreferenced === undefined) return;
+  const keep = Object.values(state.translationExportStates)
+    .flatMap((entry) => packKeysForManifest(entry.manifest));
+  try {
+    await store.pruneUnreferenced(keep);
+  } catch (error) {
+    // Cache reclamation is never allowed to turn a verified, persisted active
+    // translation into a failed synchronization. The next completed sync may
+    // retry it with the same reference set.
+    console.warn("[Trans-Hub] 无法回收未引用译文缓存；保留现有缓存：", error);
+  }
+}
+
+
+async function savePublicDiscovery(
+  input: Pick<Parameters<typeof synchronizeConfiguredPluginTranslations>[0], "getState" | "replaceState" | "save">,
+  pluginId: string,
+  discovery: PublicPluginDiscoveryState,
+): Promise<void> {
+  const state = input.getState();
+  input.replaceState({
+    ...state,
+    publicPluginDiscoveries: {
+      ...state.publicPluginDiscoveries,
+      [pluginId]: discovery,
+    },
+  });
+  await input.save();
 }
 
 async function saveSubmission(
@@ -950,12 +635,6 @@ function clearedPluginSubmissions(
   };
 }
 
-function incrementDemandState(
-  counts: Partial<Record<LocalizationDemandState, number>>,
-  state: LocalizationDemandState,
-): void {
-  counts[state] = (counts[state] ?? 0) + 1;
-}
 
 async function loadPublishedCatalogForSynchronization(
   transport: ObsidianHttpTransport,
@@ -974,7 +653,7 @@ async function loadPublishedCatalogForSynchronization(
     );
   } catch (error) {
     if (!isTemporaryPublishedCatalogError(error)) throw error;
-    console.warn("[Trans-Hub] 权威公共目录暂不可用，改由服务器验证来源提交：", error);
+    console.warn("[Trans-Hub] 权威公共目录暂不可用，已提交目录条目等待服务器验证：", error);
     return undefined;
   }
 }
@@ -984,10 +663,6 @@ function isTemporaryPublishedCatalogError(error: unknown): boolean {
   return /^读取 Obsidian 公共目录失败：HTTP (?:408|429|5\d\d)$/u.test(error.message);
 }
 
-function mergeRetryAfter(current: number | undefined, next: number): number {
-  if (!Number.isFinite(next) || next <= 0) return current ?? 5_000;
-  return current === undefined ? next : Math.max(current, next);
-}
 
 function isGlobalSynchronizationError(error: unknown): boolean {
   if (!isDiagnosticError(error)) return false;
@@ -1002,7 +677,6 @@ function isGlobalSynchronizationError(error: unknown): boolean {
 }
 
 function synchronizationErrorCode(error: unknown): string {
-  if (error instanceof SourceArtifactMismatchError) return error.code;
   return isDiagnosticError(error) ? error.code : "plugin_sync_failed";
 }
 
@@ -1050,81 +724,6 @@ function protocolDiagnosticValue(
   return value !== undefined && pattern.test(value) ? `${label}=${value}` : null;
 }
 
-export function validatePluginTranslations(
-  catalog: PluginUiCatalog,
-  rows: readonly {
-    readonly stringKey: string;
-    readonly translatedText: string;
-    readonly provenanceKind?: PluginUiTranslation["provenanceKind"];
-    readonly application?: PluginUiTranslation["application"];
-    readonly nativeTarget?: string;
-  }[],
-  sourceVersionId: string,
-  targetLocale: TargetLocale,
-  upstreamNativeCount = 0,
-  published?: PublishedPluginSource,
-): PluginTranslationState {
-  const sourceByKey = new Map(catalog.strings.map((item) => [item.key, item]));
-  const matchingRows = rows.filter((row) => sourceByKey.has(row.stringKey));
-  if (rows.length > 0 && matchingRows.length === 0) {
-    throw new Error(`插件译文与本地扫描结果没有安全交集：${catalog.pluginId}`);
-  }
-  const entries = matchingRows.map((row) => {
-    const source = sourceByKey.get(row.stringKey);
-    if (source === undefined) throw new Error(`插件译文 string key 无法解析：${row.stringKey}`);
-    const target = row.translatedText.normalize("NFC").trim();
-    if (target === "") throw new Error(`插件译文为空：${row.stringKey}`);
-    if (placeholderSignature(target) !== source.placeholderSignature) {
-      throw new Error(`插件译文占位符不匹配：${catalog.pluginId}:${row.stringKey}`);
-    }
-    const nativeTarget = row.nativeTarget?.normalize("NFC").trim();
-    if (row.application === "correction") {
-      if (row.provenanceKind !== "th-reviewed-correction" || nativeTarget === undefined || nativeTarget === "") {
-        throw new Error(`插件校订缺少已审核的原生目标：${catalog.pluginId}:${row.stringKey}`);
-      }
-      if (placeholderSignature(nativeTarget) !== source.placeholderSignature) {
-        throw new Error(`插件原生目标占位符不匹配：${catalog.pluginId}:${row.stringKey}`);
-      }
-    }
-    return {
-      pluginId: catalog.pluginId,
-      source: source.source,
-      target,
-      scopes: resolvePluginStringScopes(source.origins),
-      ...(row.provenanceKind === undefined ? {} : { provenanceKind: row.provenanceKind }),
-      ...(row.application === undefined ? {} : { application: row.application }),
-      ...(nativeTarget === undefined ? {} : { nativeTarget }),
-    };
-  });
-  return {
-    pluginId: catalog.pluginId,
-    pluginVersion: catalog.pluginVersion,
-    sourceVersionId,
-    ...(published?.sourceSnapshotDigest === undefined
-      ? {}
-      : { sourceSnapshotDigest: published.sourceSnapshotDigest }),
-    ...(published?.artifactDigest === undefined
-      ? {}
-      : { artifactDigest: published.artifactDigest }),
-    ...(published?.catalogIdentity === undefined
-      ? {}
-      : { catalogIdentity: published.catalogIdentity }),
-    targetLocale,
-    ...(published === undefined ? {} : { sourceUnitCount: published.sourceUnitCount }),
-    upstreamNativeCount,
-    ...(published?.upstreamScopedNativeCount === undefined
-      ? {}
-      : { upstreamScopedNativeCount: published.upstreamScopedNativeCount }),
-    ...(published?.upstreamScopeCoverage === undefined
-      ? {}
-      : { upstreamScopeCoverage: published.upstreamScopeCoverage }),
-    ...(published === undefined ? {} : { publishedUnitCount: published.publishedUnitCount }),
-    ...(published === undefined ? {} : { missingUnitCount: published.missingUnitCount }),
-    entries,
-    pulledAt: new Date().toISOString(),
-  };
-}
-
 export function isPublishedExportPending(error: unknown): boolean {
   return error instanceof Error && (
     error.message === "translation_manifest_failed:404"
@@ -1134,63 +733,14 @@ export function isPublishedExportPending(error: unknown): boolean {
   );
 }
 
+function isPublishedExportWithdrawn(error: unknown): boolean {
+  return error instanceof Error && error.message === "translation_manifest_unavailable:410";
+}
+
 function translationExportStateKey(sourceVersionId: string, targetLocale: string): string {
   return `${encodeURIComponent(sourceVersionId)}:${encodeURIComponent(targetLocale)}:default`;
 }
 
 function isLocalHttp(value: string): boolean {
   return /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/u.test(value);
-}
-
-/**
- * R-028 / Phase 3: refresh the client status line with a single zero-write
- * batch read.  No observation, demand, job, retry or authority event is ever
- * submitted here.  Plugins without a mapped contribution are surfaced as
- * unknown (not "processing"), so the UI never misreads an absent item as
- * work in flight.
- */
-export async function refreshConfiguredPluginStatuses(input: {
-  readonly apiBaseUrl: string;
-  readonly targetLocale: TargetLocale;
-  readonly excludedPluginIds: readonly string[];
-  readonly onlyPluginIds?: readonly string[];
-  readonly activationStore: ActivationStore;
-  readonly getState: () => PluginState;
-}): Promise<PluginSyncSummary> {
-  const { client } = await input.activationStore.client({
-    apiBaseUrl: input.apiBaseUrl,
-  });
-  const excluded = new Set(input.excludedPluginIds);
-  const only = input.onlyPluginIds === undefined ? null : new Set(input.onlyPluginIds);
-  const contributionToPlugin = new Map<string, string>();
-  for (const catalog of Object.values(input.getState().pluginCatalogs)) {
-    if (excluded.has(catalog.pluginId) || (only !== null && !only.has(catalog.pluginId))) {
-      continue;
-    }
-    const submission = input.getState().pluginSubmissions[catalog.pluginId];
-    const contributionId = submission?.localizationContributionId;
-    if (contributionId === undefined) {
-      continue;
-    }
-    if (!contributionToPlugin.has(contributionId)) {
-      contributionToPlugin.set(contributionId, catalog.pluginId);
-    }
-  }
-  const contributionIds = [...contributionToPlugin.keys()];
-  if (contributionIds.length === 0) {
-    return {
-      submittedCount: 0,
-      requestedCount: 0,
-      pulledCount: 0,
-      translationCount: 0,
-      waitingCount: 0,
-    };
-  }
-  const batch = await client.getLocalizationDemandStatusBatch({ contributionIds });
-  const summary = refreshPluginStatusFromBatch({
-    batch: batch.items,
-    contributionIdToPluginId: contributionToPlugin,
-    targetLocale: input.targetLocale,
-  });
-  return summary;
 }

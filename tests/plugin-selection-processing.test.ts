@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   describePluginSelectionProcessing,
+  pluginSelectionNeedsAttention,
   describePluginStatusRefresh,
   pendingTranslationPluginIds,
   pendingTranslationRetryDelay,
@@ -132,6 +133,22 @@ describe("processPluginSelection", () => {
     }, 3)).toContain("1 个需要重试");
   });
 
+  it("轻量刷新读取失败时明确显示陈旧结果而不伪装成功", () => {
+    expect(describePluginStatusRefresh({
+      submittedCount: 0,
+      requestedCount: 0,
+      pulledCount: 0,
+      waitingCount: 1,
+      translationCount: 0,
+      waitingPluginIds: ["dataview"],
+      statusRead: {
+        kind: "stale",
+        failedPluginIds: ["dataview"],
+        failedSources: ["public-discovery"],
+      },
+    }, 1)).toBe("状态刷新失败；已保留上次结果，1 个插件的状态可能已过期。");
+  });
+
   it("轻量刷新状态区分处理中与无新译文", () => {
     expect(describePluginStatusRefresh({
       submittedCount: 0,
@@ -204,4 +221,13 @@ describe("processPluginSelection", () => {
       "first:start", "first:save", "second:start", "second:save",
     ]);
   });
+});
+
+it("状态读取失败不能被没有新译文覆盖为成功", () => {
+  const result = { kind: "synchronized" as const, scan: scanResult, sync: {
+    submittedCount: 0, requestedCount: 0, pulledCount: 0, waitingCount: 0, translationCount: 0,
+    statusRead: { kind: "stale" as const, failedPluginIds: ["demo"], failedSources: ["public-discovery" as const] },
+  } };
+  expect(describePluginSelectionProcessing(result)).toContain("状态刷新失败");
+  expect(pluginSelectionNeedsAttention(result)).toBe(true);
 });

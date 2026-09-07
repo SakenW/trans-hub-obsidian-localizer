@@ -168,6 +168,30 @@ describe("ActivationStore browser enrollment", () => {
     expect(secrets.get(SIGNING_KEY_SECRET_ID))
       .toBe("{\"version\":1,\"privateKeyPkcs8Base64\":\"broken\"}");
   });
+
+  it("does not let a late credential store recreate a disconnected session", async () => {
+    const secrets = new Map<string, string>();
+    const app = {
+      secretStorage: {
+        getSecret: (id: string) => secrets.get(id) ?? null,
+        setSecret: (id: string, value: string) => { secrets.set(id, value); },
+      },
+    };
+    const activation = new ActivationStore(app as never);
+    const unsafeActivation = activation as unknown as {
+      storage(authorityWorkspaceId: string, lifecycleRevision: number): {
+        save(record: unknown): Promise<void>;
+      };
+    };
+    const lateStorage = unsafeActivation.storage("workspace-1", 0);
+
+    activation.clear();
+
+    await expect(lateStorage.save({ bootstrap: { stale: true } })).rejects
+      .toThrow("设备授权操作已被新的会话取代");
+    expect(secrets.get(INSTALLATION_SECRET_ID)).toBe("");
+    expect(secrets.get(SIGNING_KEY_SECRET_ID)).toBe("");
+  });
 });
 
 function bindingKeyId(value: string): string {

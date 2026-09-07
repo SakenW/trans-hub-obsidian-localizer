@@ -3,9 +3,8 @@ import {
   computeProtocolDigest,
   createDigest,
   type ContributionStateReceipt,
-  type IssueIntent,
   type LocalizationObservationIntent,
-  type SourceDiscoveryIntent,
+  type PublicDiscoveryReceipt,
 } from "@trans-hub/client-protocol";
 import type { PublicClient } from "@trans-hub/public-client";
 
@@ -14,12 +13,16 @@ import type { PluginUiCatalog } from "./plugin-string-scanner";
 import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 
 export const OBSIDIAN_PUBLIC_PROFILE = {
-  externalRegistry: "obsidian_community_plugins",
+  externalRegistry: "official-directory",
   adapterDefinitionId: "obsidian",
   adapterVersion: "1.4.6",
   adapterBuildDigestHex: "bb81e7a6012cedb88222360f6de3fd85259c99b803066cc86952994206ab2f6d",
-  registryPolicyRevision: 25,
-  sourceDiscoveryEpoch: 22,
+  registryPolicyRevision: 26,
+  // This is a new public-source namespace. It starts after the legacy
+  // discovery runtime was retired, so a persisted v2 receipt cannot be
+  // replayed into the clean intake path.
+  discoveryEpoch: 3,
+  sourceDiscoveryEpoch: 24,
 } as const;
 
 // This is a retry namespace for a failed observation that has no saved
@@ -31,80 +34,30 @@ export async function submitObsidianPluginDiscovery(input: {
   readonly client: PublicClient;
   readonly installationId: string;
   readonly catalog: PluginUiCatalog;
-  readonly repository: string;
-  readonly candidateLocators: readonly string[];
+  readonly targetLocales: readonly string[];
   readonly observationGeneration?: number;
-}): Promise<ContributionStateReceipt<"source_discovery">> {
-  const candidateLocators = discoveryCandidateLocators(input);
-  const observationMaterial = {
-    pluginId: input.catalog.pluginId,
-    pluginVersion: input.catalog.pluginVersion,
-    repository: input.repository,
-    catalogDigest: input.catalog.digest,
-    artifactDigest: input.catalog.artifactDigest,
-    stringCount: input.catalog.strings.length,
-  };
-  const digestPort = {
-    async digest(bytes: Uint8Array): Promise<Uint8Array> {
-      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-      return new Uint8Array(await crypto.subtle.digest("SHA-256", buffer));
-    },
-  };
-  const observationDigest = await computeProtocolDigest("request", observationMaterial, digestPort);
+}): Promise<PublicDiscoveryReceipt> {
+  const targetLocales = [...new Set(input.targetLocales)].sort();
+  if (targetLocales.length === 0) throw new Error("公共发现至少需要一个目标语言。");
   const generationSuffix = observationGenerationSuffix(input.observationGeneration);
-  const idempotencyKey = `obsidian-public-v${OBSIDIAN_PUBLIC_PROFILE.sourceDiscoveryEpoch}${generationSuffix}-${await sha256Hex([
-    input.repository,
-    input.catalog.pluginVersion,
-    input.catalog.artifactDigest,
-    input.catalog.digest,
+  const idempotencyKey = `obsidian-public-discovery-v${OBSIDIAN_PUBLIC_PROFILE.discoveryEpoch}${generationSuffix}-${await sha256Hex([
+    input.catalog.pluginId,
+    targetLocales.join("\u0000"),
     input.catalog.scannedAt,
     OBSIDIAN_CLIENT_VERSION,
-    OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
-    String(OBSIDIAN_PUBLIC_PROFILE.registryPolicyRevision),
-    candidateLocators.join("\u0000"),
   ].join("\u0000"))}`;
-  const payload: Omit<SourceDiscoveryIntent, "installationProof"> = {
-    kind: "contribution_intent",
+  return input.client.submitPublicDiscovery({
+    kind: "public_discovery_intent",
     protocol: CURRENT_PROTOCOL_VERSION,
-    contributionType: "source_discovery",
     idempotencyKey,
     installationId: input.installationId,
     submittedAt: input.catalog.scannedAt,
-    targetHint: {
-      externalRegistry: OBSIDIAN_PUBLIC_PROFILE.externalRegistry,
-      externalObjectId: input.repository,
-      upstreamVersion: input.catalog.pluginVersion,
-      officialArtifactLocator: null,
+    target: {
+      registryKey: OBSIDIAN_PUBLIC_PROFILE.externalRegistry,
+      externalObjectId: input.catalog.pluginId,
     },
-    adapterHint: {
-      definitionId: OBSIDIAN_PUBLIC_PROFILE.adapterDefinitionId,
-      version: OBSIDIAN_PUBLIC_PROFILE.adapterVersion,
-      buildDigest: createDigest("adapter_build", OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex),
-    },
-    provenance: {
-      clientType: "public_plugin",
-      clientVersion: OBSIDIAN_CLIENT_VERSION,
-      userAction: "automatic_observation",
-      observationDigest,
-    },
-    discovery: {
-      candidateLocators,
-      localArtifactDigest: createDigest("transport", input.catalog.artifactDigest),
-    },
-  };
-  return input.client.submitContribution(payload) as Promise<ContributionStateReceipt<"source_discovery">>;
-}
-
-function discoveryCandidateLocators(input: {
-  readonly repository: string;
-  readonly candidateLocators: readonly string[];
-}): readonly string[] {
-  const candidateLocators = [...new Set(input.candidateLocators)];
-  if (candidateLocators.length > 0) return candidateLocators;
-  if (!/^[^/\s]+\/[^/\s]+$/u.test(input.repository)) {
-    throw new Error("可信 GitHub 仓库格式无效，无法提交来源发现。");
-  }
-  return [`https://github.com/${input.repository}`];
+    targetLocales,
+  });
 }
 
 export async function submitObsidianLocalizationObservation(input: {
@@ -180,112 +133,4 @@ function observationGenerationSuffix(generation: number | undefined): string {
     throw new Error("observation_generation_invalid");
   }
   return `-r${generation}`;
-}
-
-export type ObsidianLocalizationIssueKind = "missing" | "inaccurate";
-
-export async function submitObsidianLocalizationIssue(input: {
-  readonly client: PublicClient;
-  readonly installationId: string;
-  readonly issueKind: ObsidianLocalizationIssueKind;
-  readonly pluginId: string;
-  readonly pluginVersion: string;
-  readonly repository: string;
-  readonly targetLocale: string;
-  readonly sourceText: string;
-  readonly currentTargetText?: string;
-  readonly suggestedTargetText?: string;
-  readonly submittedAt?: string;
-}): Promise<ContributionStateReceipt<"issue">> {
-  const sourceText = normalizeMissingUiSourceText(input.sourceText);
-  const currentTargetText = input.issueKind === "inaccurate"
-    ? normalizeReportedTargetText(input.currentTargetText, "请填写当前显示的译文。")
-    : undefined;
-  const suggestedTargetText = normalizeOptionalReportedTargetText(input.suggestedTargetText);
-  const evidence = {
-    issueKind: input.issueKind,
-    pluginId: input.pluginId,
-    pluginVersion: input.pluginVersion,
-    repository: input.repository,
-    targetLocale: input.targetLocale,
-    sourceText,
-    ...(currentTargetText === undefined ? {} : { currentTargetText }),
-    ...(suggestedTargetText === undefined ? {} : { suggestedTargetText }),
-  };
-  const digestPort = {
-    async digest(bytes: Uint8Array): Promise<Uint8Array> {
-      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-      return new Uint8Array(await crypto.subtle.digest("SHA-256", buffer));
-    },
-  };
-  const evidenceDigest = await computeProtocolDigest("request", evidence, digestPort);
-  const idempotencyKey = `obsidian-localization-quality-v2-${await sha256Hex([
-    input.issueKind,
-    input.repository,
-    input.pluginVersion,
-    input.targetLocale,
-    sourceText,
-    currentTargetText ?? "",
-    suggestedTargetText ?? "",
-    OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex,
-  ].join("\u0000"))}`;
-  const payload: Omit<IssueIntent, "installationProof"> = {
-    kind: "contribution_intent",
-    protocol: CURRENT_PROTOCOL_VERSION,
-    contributionType: "issue",
-    idempotencyKey,
-    installationId: input.installationId,
-    submittedAt: input.submittedAt ?? new Date().toISOString(),
-    targetHint: {
-      externalRegistry: OBSIDIAN_PUBLIC_PROFILE.externalRegistry,
-      externalObjectId: input.repository,
-      upstreamVersion: input.pluginVersion,
-      officialArtifactLocator: `https://github.com/${input.repository}`,
-    },
-    adapterHint: {
-      definitionId: OBSIDIAN_PUBLIC_PROFILE.adapterDefinitionId,
-      version: OBSIDIAN_PUBLIC_PROFILE.adapterVersion,
-      buildDigest: createDigest("adapter_build", OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex),
-    },
-    provenance: {
-      clientType: "public_plugin",
-      clientVersion: OBSIDIAN_CLIENT_VERSION,
-      userAction: "explicit_submit",
-      observationDigest: evidenceDigest,
-    },
-    issue: {
-      category: "localization_quality",
-      severity: "info",
-      summary: input.issueKind === "missing"
-        ? `Missing UI localization: ${input.pluginId}@${input.pluginVersion} -> ${input.targetLocale}: ${sourceText}`
-        : `Inaccurate upstream localization: ${input.pluginId}@${input.pluginVersion} -> ${input.targetLocale}: ${sourceText} => ${currentTargetText}${suggestedTargetText === undefined ? "" : `; suggested: ${suggestedTargetText}`}`,
-      evidenceDigest,
-    },
-  };
-  return input.client.submitContribution(payload) as Promise<ContributionStateReceipt<"issue">>;
-}
-
-export function submitObsidianMissingTranslationIssue(
-  input: Omit<Parameters<typeof submitObsidianLocalizationIssue>[0], "issueKind">,
-): Promise<ContributionStateReceipt<"issue">> {
-  return submitObsidianLocalizationIssue({ ...input, issueKind: "missing" });
-}
-
-export function normalizeMissingUiSourceText(value: string): string {
-  const normalized = value.normalize("NFC").replace(/\s+/gu, " ").trim();
-  if (normalized.length < 2) throw new Error("请填写仍显示的原文。");
-  if (normalized.length > 500) throw new Error("原文最多 500 个字符。");
-  return normalized;
-}
-
-export function normalizeReportedTargetText(value: string | undefined, emptyMessage: string): string {
-  const normalized = value?.normalize("NFC").replace(/\s+/gu, " ").trim() ?? "";
-  if (normalized.length < 1) throw new Error(emptyMessage);
-  if (normalized.length > 500) throw new Error("单条译文不能超过 500 个字符。");
-  return normalized;
-}
-
-function normalizeOptionalReportedTargetText(value: string | undefined): string | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  return normalizeReportedTargetText(value, "");
 }

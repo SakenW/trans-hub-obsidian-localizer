@@ -31,7 +31,8 @@ export type ProtocolSignatureDomain =
   | "public_contribution_intake"
   | "public_installation_lifecycle"
   | ServerSignatureEnvelopeDomain
-  | "source_attestation";
+  | "source_attestation"
+  | "translation_export_manifest";
 
 function signatureDomainSeparator(domain: ProtocolSignatureDomain): string {
   return `trans-hub.client-protocol/v1/signature/${domain}\u0000`;
@@ -41,8 +42,22 @@ export function buildProtocolSignatureFrame(
   domain: ProtocolSignatureDomain,
   payload: unknown
 ): Uint8Array {
-  const prefix = new TextEncoder().encode(signatureDomainSeparator(domain));
   const canonicalPayload = canonicalizeProtocolJson(payload);
+  return buildProtocolSignatureFrameFromCanonicalBytes(domain, canonicalPayload);
+}
+
+/**
+ * Frame already-canonical bytes for a protocol signature.
+ *
+ * Some versioned wire contracts have their own documented canonical JSON profile.
+ * Callers must validate and canonicalize those bytes with that contract before using
+ * this framing primitive; this function owns only the shared domain separator.
+ */
+export function buildProtocolSignatureFrameFromCanonicalBytes(
+  domain: ProtocolSignatureDomain,
+  canonicalPayload: Uint8Array,
+): Uint8Array {
+  const prefix = new TextEncoder().encode(signatureDomainSeparator(domain));
   const frame = new Uint8Array(prefix.byteLength + canonicalPayload.byteLength);
   frame.set(prefix, 0);
   frame.set(canonicalPayload, prefix.byteLength);

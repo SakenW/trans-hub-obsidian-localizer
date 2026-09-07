@@ -33,7 +33,8 @@ import {
 import { PluginUiTranslationRuntime, type PluginUiTranslation } from "./plugin-ui-runtime";
 import {
   applyPublishedPluginFilePatch,
-  hasActivePluginFilePatch,
+  inspectPluginFilePatch,
+  type PluginFilePatchState,
   logicalPluginBundle,
   restorePublishedPluginFilePatch,
 } from "./third-party-plugin-patcher";
@@ -44,7 +45,15 @@ export interface PluginAutomationSettings {
   readonly targetLocale: TargetLocale;
   readonly pluginTranslationEnabled: boolean;
   readonly pluginMetadataTranslationEnabled: boolean;
+  readonly thirdPartyFilePatchingEnabled: boolean;
   readonly excludedPluginIds: readonly string[];
+}
+
+export interface PluginFileRestoreSummary {
+  readonly restored: number;
+  readonly conflicts: number;
+  readonly restoredPluginIds: readonly string[];
+  readonly conflictPluginIds: readonly string[];
 }
 
 export interface PluginAutomationSummary {
@@ -82,6 +91,8 @@ export class PluginAutomationController {
     readonly state: () => PluginState;
     readonly replaceState: (state: PluginState) => void;
     readonly save: () => Promise<void>;
+    readonly lifecycleRevision?: () => number;
+    readonly isLifecycleCurrent?: (revision: number) => boolean;
     readonly synchronize: (sourceSelectablePluginIds?: readonly string[]) => Promise<PluginSyncSummary>;
   }) {}
 
@@ -114,11 +125,14 @@ export class PluginAutomationController {
     this.restoreSettingsWindowNavigation();
   }
 
-  refreshRuntime(): void {
+  async refreshRuntime(): Promise<PluginFileRestoreSummary | undefined> {
     // Stop through the controller so workspace listeners are removed too.
     // Calling the runtime directly leaves a stale window-open callback alive
     // after the user disables translation.
     this.stop();
+    if (!this.input.settings().pluginTranslationEnabled) {
+      return this.restoreThirdPartyFilePatches();
+    }
     this.start();
   }
 
@@ -131,6 +145,7 @@ export class PluginAutomationController {
   }
 
   async scanInstalledPlugins(onlyPluginIds?: readonly string[]): Promise<PluginScanResult> {
+    const lifecycleRevision = this.input.lifecycleRevision?.() ?? 0;
     const settings = this.input.settings();
     const excluded = new Set(settings.excludedPluginIds);
     const discovered = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
@@ -201,6 +216,16 @@ export class PluginAutomationController {
       if (!unchanged) changedCount += 1;
       catalogs[plugin.id] = unchanged ? { ...catalog, scannedAt: previous.scannedAt } : catalog;
     }
+    if (this.input.isLifecycleCurrent !== undefined
+      && !this.input.isLifecycleCurrent(lifecycleRevision)) {
+      return {
+        discoveredCount: discovered.length,
+        scannedCount: candidates.length,
+        changedCount,
+        stringCount,
+        selectablePluginIds: enabledPluginIds,
+      };
+    }
     this.input.replaceState({ ...this.input.state(), enabledPluginIds, pluginCatalogs: catalogs });
     await this.input.save();
     return {
@@ -216,7 +241,12 @@ export class PluginAutomationController {
 
   applyCachedTranslations(): PluginAutomationSummary {
     const translations = this.allTranslations();
-    if (this.input.settings().pluginTranslationEnabled) this.runtime.update(translations);
+    // Applying cached state is also the disable/rollback boundary. Clearing the
+    // runtime plan first restores every text/attribute that still equals the
+    // translated value without touching plugin files or persisted manifests.
+    this.runtime.update(
+      this.input.settings().pluginTranslationEnabled ? translations : [],
+    );
     this.applyPluginDisplayNames();
     this.localizeSettingsWindowNavigation();
     this.observeSettingsWindow();
@@ -375,6 +405,9 @@ export class PluginAutomationController {
   }
 
   async applyThirdPartyFilePatches(pluginIds: readonly string[]): Promise<{ readonly applied: number; readonly skipped: number; readonly conflicts: number }> {
+    if (!this.input.settings().thirdPartyFilePatchingEnabled) {
+      return { applied: 0, skipped: pluginIds.length, conflicts: 0 };
+    }
     const plugins = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
     const selectedIds = new Set(pluginIds);
     let applied = 0; let skipped = 0; let conflicts = 0;
@@ -393,28 +426,34 @@ export class PluginAutomationController {
   async restoreThirdPartyFilePatches(
     pluginIds?: readonly string[],
     force = false,
-  ): Promise<{ readonly restored: number; readonly conflicts: number }> {
+  ): Promise<PluginFileRestoreSummary> {
     const plugins = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
     const selectedIds = pluginIds === undefined ? null : new Set(pluginIds);
-    let restored = 0; let conflicts = 0;
+    const restoredPluginIds: string[] = [];
+    const conflictPluginIds: string[] = [];
     for (const plugin of plugins.filter(
       (item) => selectedIds === null || selectedIds.has(item.id),
     )) {
-      const result = await restorePublishedPluginFilePatch(this.input.app.vault, plugin, force);
-      if (result === "restored") restored += 1;
-      if (result === "conflict") conflicts += 1;
+      try {
+        const result = await restorePublishedPluginFilePatch(this.input.app.vault, plugin, force);
+        if (result === "restored") restoredPluginIds.push(plugin.id);
+        if (result === "conflict") conflictPluginIds.push(plugin.id);
+      } catch (error) {
+        conflictPluginIds.push(plugin.id);
+        console.warn(`[Trans-Hub] failed to restore plugin file: ${plugin.id}`, error);
+      }
     }
-    return { restored, conflicts };
+    return { restored: restoredPluginIds.length, conflicts: conflictPluginIds.length, restoredPluginIds, conflictPluginIds };
   }
 
   async pluginFilePatchStates(
     pluginIds: readonly string[],
-  ): Promise<ReadonlyMap<string, boolean>> {
+  ): Promise<ReadonlyMap<string, PluginFilePatchState>> {
     const plugins = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
     const selectedIds = new Set(pluginIds);
-    const states = new Map<string, boolean>();
+    const states = new Map<string, PluginFilePatchState>();
     for (const plugin of plugins.filter((item) => selectedIds.has(item.id))) {
-      states.set(plugin.id, await hasActivePluginFilePatch(this.input.app.vault, plugin));
+      states.set(plugin.id, await inspectPluginFilePatch(this.input.app.vault, plugin));
     }
     return states;
   }

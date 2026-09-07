@@ -37,6 +37,17 @@ describe("buildConflictSafeDictionary", () => {
 });
 
 describe("dynamic UI template replacement", () => {
+  it.each(["$&", "$$", "$`", "$'", "$1", "C:/notes/42"])("preserves literal runtime and exact target values: %s", (value) => {
+    const dynamic = buildRuntimeTranslationPlan([{
+      pluginId: "sample", source: "Count {{th:expr:0}}", target: "数量 {{th:expr:0}}",
+    }]);
+    expect(translatePluginUiValue(`  Count ${value}  `, dynamic)).toBe(`  数量 ${value}  `);
+    const exact = buildRuntimeTranslationPlan([{
+      pluginId: "sample", source: "Count", target: `数量 ${value}`,
+    }]);
+    expect(translatePluginUiValue("  Count  ", exact)).toBe(`  数量 ${value}  `);
+  });
+
   it("preserves runtime values while translating static text", () => {
     const plan = buildRuntimeTranslationPlan([{
       pluginId: "dataview",
@@ -45,6 +56,16 @@ describe("dynamic UI template replacement", () => {
     }]);
     expect(translatePluginUiValue("Currently: 2026-07-18 (42 rows)", plan))
       .toBe("当前：2026-07-18（42 行）");
+  });
+
+  it("permits a target-language reorder of unique runtime expression slots", () => {
+    const plan = buildRuntimeTranslationPlan([{
+      pluginId: "dataview",
+      source: "From {{th:expr:0}} to {{th:expr:1}}",
+      target: "从 {{th:expr:1}} 到 {{th:expr:0}}",
+    }]);
+    expect(translatePluginUiValue("From alpha to beta", plan))
+      .toBe("从 beta 到 alpha");
   });
 
   it("only lets an explicit reviewed correction replace exact upstream-native text", () => {
@@ -90,6 +111,106 @@ describe("dynamic UI template replacement", () => {
 });
 
 describe("runtime DOM boundary", () => {
+  it.each(["text", "metadata", "community", "title", "aria-label", "placeholder"])(
+    "restores the latest host source after repeated %s updates without overwriting later host edits",
+    (kind) => {
+      const runtime = new PluginUiTranslationRuntime();
+      const rows = [{ pluginId: "sample", source: "Count {{th:expr:0}}", target: "数量 {{th:expr:0}}" }];
+      runtime.update(rows);
+      const internal = runtime as unknown as {
+        translateText(node: Text): void;
+        translateAttributes(element: Element): void;
+        restoreDetachedTree(node: Node): void;
+      };
+      const attribute = ["title", "aria-label", "placeholder"].includes(kind);
+      const attributes = new Map<string, string>();
+      const modal = { querySelector: () => ({ getAttribute: () => "sample" }) } as unknown as Element;
+      const element = {
+        closest: (selector: string): Element | null => {
+          if (selector === ".modal.mod-settings") return modal;
+          if (kind === "metadata" && selector.includes(".installed-plugins-container")) return element;
+          if (kind === "community" && selector === ".community-item-name, .community-item-desc") return element;
+          return null;
+        },
+        getAttribute: (name: string) => attributes.get(name) ?? null,
+        setAttribute: (name: string, value: string) => { attributes.set(name, value); },
+        ownerDocument: {
+          createTreeWalker: () => {
+            let visited = false;
+            return { nextNode: () => { if (visited) return null; visited = true; return node; } };
+          },
+        },
+      } as unknown as Element;
+      const node = { nodeType: 3, data: "", parentElement: element } as unknown as Text;
+      const set = (value: string) => { if (attribute) attributes.set(kind, value); else node.data = value; };
+      const get = () => attribute ? attributes.get(kind) : node.data;
+      const translate = () => attribute ? internal.translateAttributes(element) : internal.translateText(node);
+      vi.stubGlobal("NodeFilter", { SHOW_TEXT: 4 });
+      try {
+        for (const end of ["stop", "update", "detach"]) {
+          runtime.update(rows);
+          for (const count of [1, 2, 3]) {
+            set(`Count ${count}`);
+            translate();
+            expect(get()).toBe(`数量 ${count}`);
+            translate(); // MutationObserver sees our own write too.
+          }
+          if (end === "stop") runtime.stop();
+          else if (end === "update") runtime.update([]);
+          else internal.restoreDetachedTree({ contains: () => true } as unknown as Node);
+          expect(get()).toBe("Count 3");
+        }
+        runtime.update(rows);
+        set("Count 4");
+        translate();
+        set("Host replacement");
+        runtime.stop();
+        expect(get()).toBe("Host replacement");
+        runtime.update(rows);
+        set("Count 5");
+        translate();
+        set("Untranslated host value");
+        translate();
+        runtime.stop();
+        expect(get()).toBe("Untranslated host value");
+      } finally {
+        runtime.stop();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it("restores each latest community fragment including an unchanged empty translated fragment", () => {
+    const runtime = new PluginUiTranslationRuntime();
+    runtime.update([{ pluginId: "sample", source: "Count {{th:expr:0}}", target: "数量 {{th:expr:0}}" }]);
+    const internal = runtime as unknown as { translateCommunityField(field: Element): void };
+    const parentElement = { closest: () => null };
+    const nodes = ["Count ", "1"].map((data) => ({ nodeType: 3, data, parentElement })) as unknown as Text[];
+    const field = {
+      closest: () => null,
+      ownerDocument: { createTreeWalker: () => {
+        let index = 0;
+        return { nextNode: () => nodes[index++] ?? null };
+      } },
+    } as unknown as Element;
+    vi.stubGlobal("NodeFilter", { SHOW_TEXT: 4 });
+    try {
+      internal.translateCommunityField(field);
+      expect(nodes.map((node) => node.data)).toEqual(["数量 1", ""]);
+      nodes[0].data = "Count ";
+      nodes[1].data = "2";
+      internal.translateCommunityField(field);
+      expect(nodes.map((node) => node.data)).toEqual(["数量 2", ""]);
+      nodes[0].data = "Count 3";
+      internal.translateCommunityField(field);
+      runtime.stop();
+      expect(nodes.map((node) => node.data)).toEqual(["Count 3", "2"]);
+    } finally {
+      runtime.stop();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("detaches a closed popout root before allowing a replacement observer", () => {
     class MockMutationObserver {
       static instances: MockMutationObserver[] = [];
@@ -181,6 +302,39 @@ describe("runtime DOM boundary", () => {
 
     expect(translatePluginUiValue("Indexing", unsafeRuntime.runtimePlanForElement(settingsBody)!)).toBe("索引");
     expect(unsafeRuntime.runtimePlanForElement(unownedBody)).toBeUndefined();
+  });
+
+  it("does not use an unscoped global plan for a normal workspace node", () => {
+    const runtime = new PluginUiTranslationRuntime();
+    runtime.update([{
+      pluginId: "plugin-a", source: "Rebuild index", target: "重建索引", scopes: ["runtime-ui"],
+    }]);
+    const workspaceNode = {
+      closest: (): Element | null => null,
+    } as unknown as Element;
+    const unsafeRuntime = runtime as unknown as {
+      runtimePlanForElement(element: Element): ReturnType<typeof buildRuntimeTranslationPlan> | undefined;
+    };
+
+    expect(unsafeRuntime.runtimePlanForElement(workspaceNode)).toBeUndefined();
+  });
+
+  it("restores and releases translated nodes removed from an observed tree", () => {
+    const runtime = new PluginUiTranslationRuntime();
+    const detachedText = { data: "设置" } as Text;
+    const unsafeRuntime = runtime as unknown as {
+      restoredText: Map<Text, { original: string; translated: string }>;
+      restoreDetachedTree(root: Node): void;
+    };
+    unsafeRuntime.restoredText.set(detachedText, { original: "Settings", translated: "设置" });
+    const detachedRoot = {
+      contains: (node: Node) => node === detachedText,
+    } as unknown as Node;
+
+    unsafeRuntime.restoreDetachedTree(detachedRoot);
+
+    expect(detachedText.data).toBe("Settings");
+    expect(unsafeRuntime.restoredText).toHaveLength(0);
   });
 
   it("recognizes an active plugin tab that appends settings and version text", () => {

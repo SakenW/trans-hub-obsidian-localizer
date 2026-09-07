@@ -41,6 +41,11 @@ export async function processPluginSelection(input: {
   return { kind: "synchronized", scan, sync };
 }
 
+export function pluginSelectionNeedsAttention(result: PluginSelectionProcessingResult): boolean {
+  return result.kind === "synchronized" && (result.sync.statusRead?.kind === "stale"
+    || (result.sync.failedPluginIds?.length ?? 0) > 0 || (result.sync.blockedPluginIds?.length ?? 0) > 0);
+}
+
 export function describePluginSelectionProcessing(
   result: PluginSelectionProcessingResult,
   scope: PluginSelectionProcessingScope = "full",
@@ -57,7 +62,9 @@ export function describePluginSelectionProcessing(
     });
   }
   const { scan, sync } = result;
+  if (sync.statusRead?.kind === "stale") return describePluginStatusRefresh(sync, scan.scannedCount);
   const failedCount = new Set(sync.failedPluginIds ?? []).size;
+  const blockedCount = new Set(sync.blockedPluginIds ?? []).size;
   const exportPendingCount = sync.exportPendingCount ?? 0;
   if (sync.waitingCount > 0) {
     const detail = describeDemandStateCounts(sync);
@@ -95,6 +102,13 @@ export function describePluginSelectionProcessing(
       failed: failedCount,
     });
   }
+  if (blockedCount > 0) {
+    return translate("{scope} {count} 个插件；{blocked} 个已被服务端阻断，当前不可由客户端重试。", {
+      scope: processingScopeLabel(scope),
+      count: scan.scannedCount,
+      blocked: blockedCount,
+    });
+  }
   if (sync.pulledCount > 0) {
     return translate("{scope}更新 {count} 个插件，本机安全应用 {translations} 条译文。", {
       scope: processingScopeUpdateLabel(scope),
@@ -112,12 +126,24 @@ export function describePluginStatusRefresh(
   sync: PluginSyncSummary,
   count: number,
 ): string {
+  if (sync.statusRead?.kind === "stale") {
+    return translate("状态刷新失败；已保留上次结果，{failed} 个插件的状态可能已过期。", {
+      failed: new Set(sync.statusRead.failedPluginIds).size,
+    });
+  }
   const failedCount = new Set(sync.failedPluginIds ?? []).size;
+  const blockedCount = new Set(sync.blockedPluginIds ?? []).size;
   const exportPendingCount = sync.exportPendingCount ?? 0;
   if (failedCount > 0) {
     return translate("已刷新所选 {count} 个插件状态；{failed} 个需要重试，请点击对应插件的“重试此插件”。", {
       count,
       failed: failedCount,
+    });
+  }
+  if (blockedCount > 0) {
+    return translate("已刷新所选 {count} 个插件状态；{blocked} 个已被服务端阻断，当前不可由客户端重试。", {
+      count,
+      blocked: blockedCount,
     });
   }
   if (sync.waitingCount > 0) {

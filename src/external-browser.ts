@@ -1,5 +1,9 @@
 export type ExternalUrlOpener = (url: string) => Promise<void>;
 
+declare const __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__: "development" | "production";
+
+const ALLOW_LOOPBACK_HTTP = __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__ === "development";
+
 export async function openSystemBrowser(
   rawUrl: string,
   opener: ExternalUrlOpener = electronExternalUrlOpener,
@@ -17,8 +21,11 @@ export async function openSystemBrowser(
 
 function isAllowedExternalProtocol(url: URL): boolean {
   if (url.protocol === "https:") return true;
-  return url.protocol === "http:"
-    && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  return url.protocol === "http:" && ALLOW_LOOPBACK_HTTP && isLoopbackHost(url.hostname);
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
 }
 
 async function electronExternalUrlOpener(url: string): Promise<void> {

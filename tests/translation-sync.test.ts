@@ -142,20 +142,72 @@ describe("parsePluginTranslationPack", () => {
       "sample-plugin",
     )).toThrow("与当前插件不匹配");
   });
+
+  it("parses the additive source compatibility evidence for runtime reuse", () => {
+    const manifest = manifestFixture();
+    const pack = manifest.packs[0];
+    const key = "e".repeat(32);
+    const sourceCompatibility = {
+      schema: "trans-hub.source-compatibility",
+      version: 1,
+      semantic_role: "runtime-ui",
+      content_scopes: ["runtime-ui"],
+      placeholder_signature: "",
+      format_signature: "plain-text-v1",
+      source_content_digest: `sha256:${"f".repeat(64)}`,
+    };
+    const payload = new TextEncoder().encode(JSON.stringify({
+      schema: "trans-hub.translation-pack", version: 1,
+      source_version_id: manifest.sourceVersionId, target_locale: manifest.targetLocale,
+      target_variant: manifest.targetVariant, pack_index: 0,
+      items: [{
+        occurrence_key: key, target_text: "设置",
+        payload_digest: `sha256:${"d".repeat(64)}`,
+        structured_content: { source_compatibility: sourceCompatibility },
+      }],
+    }));
+
+    expect(parsePluginTranslationPack(payload, manifest, pack, "sample-plugin"))
+      .toEqual([expect.objectContaining({
+        stringKey: key,
+        sourceCompatibility: {
+          semanticRole: "runtime-ui",
+          contentScopes: ["runtime-ui"],
+          placeholderSignature: "",
+          formatSignature: "plain-text-v1",
+          sourceContentDigest: `sha256:${"f".repeat(64)}`,
+        },
+      })]);
+  });
 });
 
 function manifestFixture(): TranslationExportManifest {
   const pack: TranslationPackRef = {
-    packId: "pack", packIndex: 0, itemCount: 1, compressedBytes: 1, uncompressedBytes: 1,
-    objectVersion: "v1", transportDigest: "sha256:a",
-    canonicalPayloadDigest: "sha256:b", logicalObjectDigest: "sha256:c",
+    packId: "pack", packIndex: 0, itemCount: 1, contentSizeBytes: 1,
+    objectVersion: "v1", contentSha256: `sha256:${"a".repeat(64)}`,
+    logicalObjectDigest: `sha256:${"c".repeat(64)}`,
   };
   return {
-    schema: "trans-hub.translation-export", revision: 1,
+    schema: "trans-hub.translation-export", revision: 3,
     manifestId: "manifest", generationId: "generation", generationNumber: 1,
     sourceStreamId: "stream", sourceVersionId: "version", targetLocale: "zh-CN",
     targetVariant: "default", scope: { kind: "public", publicScopeId: "scope" },
     manifestDigest: `sha256:${"d".repeat(64)}`,
+    cdnOrigin: "https://cdn.example",
+    serverProof: {
+      domain: "translation_export_manifest",
+      algorithm: "ed25519",
+      keyId: "test-root",
+      keyVersion: 1,
+      payloadDigest: {
+        algorithm: "sha256",
+        domain: "signed_payload",
+        hex: "e".repeat(64),
+      },
+      signedAt: "2026-08-28T00:00:00Z",
+      expiresAt: "2026-08-29T00:00:00Z",
+      signature: "A".repeat(86),
+    },
     packs: [pack],
   };
 }

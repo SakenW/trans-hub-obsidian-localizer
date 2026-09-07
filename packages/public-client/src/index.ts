@@ -1,8 +1,8 @@
 export { PublicClient } from "./client.js";
 export type {
   BootstrapInput,
-  CreateUploadGrantInput,
   GetLocalizationDemandStatusBatchInput,
+  GetPublicLocalizationStatusBatchInput,
   PrepareBootstrapInput,
   PreparedBootstrap,
   PublicClientControl,

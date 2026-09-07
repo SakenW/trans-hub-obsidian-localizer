@@ -9,10 +9,11 @@ import {
 } from "../src/plugin-state";
 
 describe("parsePluginState", () => {
-  it("clears only derived localization caches when the persisted cache revision expires", () => {
+  it("清空退役发现运行态及派生缓存，同时保留本地插件目录", () => {
     expect(isPluginLocalizationDerivedCacheCurrent(undefined)).toBe(false);
     expect(isPluginLocalizationDerivedCacheCurrent(1)).toBe(false);
-    expect(isPluginLocalizationDerivedCacheCurrent(2)).toBe(true);
+    expect(isPluginLocalizationDerivedCacheCurrent(2)).toBe(false);
+    expect(isPluginLocalizationDerivedCacheCurrent(3)).toBe(true);
     const reset = resetPluginLocalizationDerivedState(parsePluginState({
       enabledPluginIds: ["dataview"],
       notes: { note: { noteId: "note" } },
@@ -36,8 +37,115 @@ describe("parsePluginState", () => {
     expect(reset.pendingSubmissions).toHaveProperty("pending");
     expect(reset.generatedTargets).toHaveProperty("target");
     expect(reset.pluginSubmissions).toEqual({});
+    expect(reset.publicPluginDiscoveries).toEqual({});
     expect(reset.pluginTranslations).toEqual({});
     expect(reset.translationExportStates).toEqual({});
+  });
+
+  it("不保留退役公共发现回执，且忽略旧本地化需求字段", () => {
+    const state = parsePluginState({
+      publicPluginDiscoveries: {
+        dataview: {
+          statusRevision: 2,
+          receiptId: "019f0000-0000-7000-8000-000000000003",
+          discoveryId: "019f0000-0000-7000-8000-000000000001",
+          taskId: "019f0000-0000-7000-8000-000000000004",
+          targetLocales: ["ja", "zh-CN", "ja"],
+          classification: "pending_registry_verification",
+          taskState: "verifying_registry",
+          taskGeneration: 1,
+          attemptCount: 0,
+          outcome: "created",
+          commandDigestHex: "a".repeat(64),
+          credentialEpoch: 1,
+          receiptRecordedAt: "2026-08-01T00:00:00.000Z",
+          updatedAt: "2026-08-01T00:00:00.000Z",
+          retryAfterSeconds: 0,
+          retryAllowed: false,
+          retryGeneration: 0,
+          installationId: "019f0000-0000-7000-8000-000000000002",
+          submittedAt: "2026-08-01T00:00:00.000Z",
+          sourceDiscoveryEpoch: 19,
+        },
+      },
+      pluginSubmissions: {
+        dataview: {
+          pluginId: "dataview", pluginVersion: "0.5.68", catalogDigest: "catalog",
+          contributionState: "received", submittedAt: "2026-08-01T00:00:00.000Z",
+          localizationContributionId: "legacy-demand",
+        },
+      },
+    });
+
+    expect(state.publicPluginDiscoveries.dataview?.targetLocales).toEqual(["ja", "zh-CN"]);
+    expect(state.publicPluginDiscoveries.dataview?.sourceDiscoveryEpoch).toBe(19);
+    expect(state.pluginSubmissions.dataview).not.toHaveProperty("localizationContributionId");
+    expect(resetPluginLocalizationDerivedState(state).publicPluginDiscoveries).toEqual({});
+    expect(resetPluginLocalizationDerivedState(state).pluginSubmissions).toEqual({});
+  });
+
+  it("fail-safe 丢弃 revision 2 之前的发现状态但保留已发布译文和 ETag", () => {
+    const translation = {
+      pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
+      targetLocale: "zh-CN", pulledAt: "2026-08-01T00:00:00.000Z",
+      entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
+    };
+    const state = parsePluginState({
+      publicPluginDiscoveries: {
+        dataview: {
+          discoveryId: "019f0000-0000-7000-8000-000000000001",
+          targetLocales: ["zh-CN"], classification: "eligible_for_processing",
+          taskState: "queued_for_parsing", installationId: "installation",
+          submittedAt: "2026-08-01T00:00:00.000Z",
+        },
+      },
+      pluginTranslations: { dataview: { "zh-CN": translation } },
+      translationExportStates: {
+        export: {
+          etag: '"published"',
+          manifest: {
+            schema: "trans-hub.translation-export", revision: 1,
+            manifestId: "manifest", generationId: "generation", generationNumber: 1,
+            sourceStreamId: "stream", sourceVersionId: "source",
+            targetLocale: "zh-CN", targetVariant: "default",
+            scope: { kind: "public", publicScopeId: "scope" },
+            manifestDigest: `sha256:${"a".repeat(64)}`, packs: [],
+          },
+        },
+      },
+    });
+
+    expect(state.publicPluginDiscoveries).toEqual({});
+    expect(getPluginTranslation(state, "dataview", "zh-CN")?.entries[0]?.target).toBe("设置");
+    expect(state.translationExportStates.export?.etag).toBe('"published"');
+  });
+
+  it("persists installed and authority versions with cross-version compatibility evidence", () => {
+    const state = parsePluginState({
+      pluginTranslations: {
+        dataview: {
+          "zh-CN": {
+            pluginId: "dataview", pluginVersion: "0.5.68",
+            authorityPluginVersion: "0.5.70", sourceVersionId: "current-source",
+            targetLocale: "zh-CN", pulledAt: "2026-09-05T00:00:00.000Z",
+            entries: [{
+              pluginId: "dataview", source: "Settings", target: "设置",
+              sourceCompatibility: {
+                semanticRole: "runtime-ui", contentScopes: ["runtime-ui"],
+                placeholderSignature: "", formatSignature: "plain-text-v1",
+                sourceContentDigest: `sha256:${"f".repeat(64)}`,
+              },
+            }],
+          },
+        },
+      },
+    });
+
+    const translation = getPluginTranslation(state, "dataview", "zh-CN");
+    expect(translation?.pluginVersion).toBe("0.5.68");
+    expect(translation?.authorityPluginVersion).toBe("0.5.70");
+    expect(translation?.entries[0]?.sourceCompatibility?.formatSignature)
+      .toBe("plain-text-v1");
   });
 
   it("preserves valid extraction evidence across plugin reloads", () => {
@@ -156,13 +264,15 @@ describe("parsePluginState", () => {
     const valid = parsePluginState({
       pluginTranslations: {
         dataview: {
-          ...base,
-          entries: [{
-            pluginId: "dataview",
-            source: "Settings",
-            target: "设置",
-            scopes: ["runtime-ui", "metadata"],
-          }],
+          "zh-CN": {
+            ...base,
+            entries: [{
+              pluginId: "dataview",
+              source: "Settings",
+              target: "设置",
+              scopes: ["runtime-ui", "metadata"],
+            }],
+          },
         },
       },
     });
@@ -172,20 +282,22 @@ describe("parsePluginState", () => {
     const invalid = parsePluginState({
       pluginTranslations: {
         dataview: {
-          ...base,
-          entries: [{
-            pluginId: "dataview",
-            source: "Settings",
-            target: "设置",
-            scopes: ["unknown"],
-          }],
+          "zh-CN": {
+            ...base,
+            entries: [{
+              pluginId: "dataview",
+              source: "Settings",
+              target: "设置",
+              scopes: ["unknown"],
+            }],
+          },
         },
       },
     });
     expect(invalid.pluginTranslations).toEqual({});
   });
 
-  it("迁移旧平面译文并逐槽隔离新格式中的坏值", () => {
+  it("丢弃退役平面译文，仅接受按语言分槽的当前格式", () => {
     const translation = (targetLocale: string, target: string) => ({
       pluginId: "dataview",
       pluginVersion: "0.5.68",
@@ -198,7 +310,7 @@ describe("parsePluginState", () => {
     const legacy = parsePluginState({
       pluginTranslations: { dataview: translation("ko", "설정") },
     });
-    expect(getPluginTranslation(legacy, "dataview", "ko")?.entries[0]?.target).toBe("설정");
+    expect(legacy.pluginTranslations).toEqual({});
 
     const nested = parsePluginState({
       pluginTranslations: {
@@ -216,7 +328,7 @@ describe("parsePluginState", () => {
     expect(Object.keys(nested.pluginTranslations.dataview ?? {})).toEqual(["ko", "zh-CN"]);
   });
 
-  it("不让旧语言的需求与错误状态冒充当前语言", () => {
+  it("不让旧持久化需求字段影响当前语言的真实同步错误", () => {
     const state = parsePluginState({
       pluginSubmissions: {
         dataview: {
@@ -240,15 +352,16 @@ describe("parsePluginState", () => {
       },
     });
 
-    expect(getPluginSubmissionForLocale(state, "dataview", "zh-CN")).toEqual(
-      expect.objectContaining({ contributionId: "source" }),
-    );
+    expect(getPluginSubmissionForLocale(state, "dataview", "zh-CN"))
+      .toEqual(expect.objectContaining({ contributionId: "source" }));
     expect(getPluginSubmissionForLocale(state, "dataview", "zh-CN")).not.toHaveProperty("lastError");
     expect(getPluginSubmissionForLocale(state, "dataview", "zh-CN")).not.toHaveProperty("localizationContributionId");
     expect(getPluginSubmissionForLocale(state, "dataview", "ko")?.lastError?.message).toBe("ko failed");
+    expect(state.pluginSubmissions.dataview).not.toHaveProperty("localizationTargetLocale");
+    expect(state.pluginSubmissions.dataview).not.toHaveProperty("localizationContributionState");
   });
 
-  it("round-trips an authority-backed demand without a source contribution id", () => {
+  it("保留现役来源身份，并忽略已下架公共分发的旧需求状态", () => {
     const persisted = JSON.parse(JSON.stringify({
       pluginSubmissions: {
         generic: {
@@ -291,8 +404,7 @@ describe("parsePluginState", () => {
     })) as unknown;
 
     const submission = parsePluginState(persisted).pluginSubmissions.generic;
-    const { localizationDemandStatus, ...sourceAndDemand } = submission ?? {};
-    expect(sourceAndDemand).toEqual({
+    expect(submission).toEqual({
       pluginId: "generic",
       pluginVersion: "2.0.0",
       catalogDigest: "catalog",
@@ -303,15 +415,9 @@ describe("parsePluginState", () => {
       sourceAuthority: "published",
       contributionState: "source_attested",
       repository: "owner/generic",
-      localizationTargetLocale: "zh-CN",
-      localizationContributionId: "localization",
-      localizationContributionState: "received",
       sourceVersionId: "source-version",
       submittedAt: "2026-07-29T00:00:00.000Z",
     });
-    expect(localizationDemandStatus).toEqual(expect.objectContaining({
-        state: "distribution_blocked",
-        failureCode: "PublicDistributionPolicyUnavailable",
-      }));
+    expect(submission).not.toHaveProperty("localizationDemandStatus");
   });
 });

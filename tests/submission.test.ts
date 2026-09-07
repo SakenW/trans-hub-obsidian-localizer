@@ -1,33 +1,28 @@
-import type { ContributionSigningPayload, ContributionStateReceipt } from "@trans-hub/client-protocol";
+import type { ContributionSigningPayload, ContributionStateReceipt, PublicDiscoveryIntent, PublicDiscoveryReceipt } from "@trans-hub/client-protocol";
 import type { PublicClient } from "@trans-hub/public-client";
 import { describe, expect, it } from "vitest";
 
 import {
-  normalizeMissingUiSourceText,
-  normalizeReportedTargetText,
-  submitObsidianLocalizationIssue,
   submitObsidianLocalizationObservation,
-  submitObsidianMissingTranslationIssue,
   submitObsidianPluginDiscovery,
 } from "../src/submission";
 
 describe("submitObsidianPluginDiscovery", () => {
   it("submits a source discovery intent without authority mutation", async () => {
-    let payload: ContributionSigningPayload | null = null;
+    let payload: Omit<PublicDiscoveryIntent, "installationProof"> | null = null;
     const client = {
-      submitContribution(value: ContributionSigningPayload) {
+      submitPublicDiscovery(value: Omit<PublicDiscoveryIntent, "installationProof">) {
         payload = value;
         return Promise.resolve({
           contributionId: "019f0000-0000-7000-8000-000000000001",
           state: "received",
-        } as ContributionStateReceipt);
+        } as unknown as PublicDiscoveryReceipt);
       },
     } as PublicClient;
     await submitObsidianPluginDiscovery({
       client,
       installationId: "019f0000-0000-7000-8000-000000000002",
-      repository: "blacksmithgu/obsidian-dataview",
-      candidateLocators: ["https://github.com/blacksmithgu/obsidian-dataview"],
+      targetLocales: ["zh-CN"],
       catalog: {
         pluginId: "dataview",
         pluginName: "Dataview",
@@ -39,29 +34,23 @@ describe("submitObsidianPluginDiscovery", () => {
         strings: [],
       },
     });
-    const captured = payload as ContributionSigningPayload | null;
-    expect(captured?.idempotencyKey).toMatch(/^obsidian-public-v22-[a-f0-9]{64}$/u);
+    const captured = payload as Omit<PublicDiscoveryIntent, "installationProof"> | null;
+    expect(captured?.idempotencyKey).toMatch(/^obsidian-public-discovery-v3-[a-f0-9]{64}$/u);
     expect(captured).toMatchObject({
       submittedAt: "2026-07-17T00:00:00.000Z",
-      contributionType: "source_discovery",
-      targetHint: {
-        externalRegistry: "obsidian_community_plugins",
-        externalObjectId: "blacksmithgu/obsidian-dataview",
-        upstreamVersion: "0.5.68",
-      },
-      provenance: { clientType: "public_plugin" },
-      discovery: {
-        localArtifactDigest: { algorithm: "sha256", domain: "transport", hex: "b".repeat(64) },
-      },
+      kind: "public_discovery_intent",
+      target: { registryKey: "official-directory", externalObjectId: "dataview" },
+      targetLocales: ["zh-CN"],
     });
+    expect(JSON.stringify(captured)).not.toMatch(/repository|candidateLocators|locator|objectKey|executor|adapter/iu);
   });
 
   it("uses a distinct idempotency namespace for a bounded recovery", async () => {
-    let payload: ContributionSigningPayload | null = null;
+    let payload: Omit<PublicDiscoveryIntent, "installationProof"> | null = null;
     const client = {
-      submitContribution(value: ContributionSigningPayload) {
+      submitPublicDiscovery(value: Omit<PublicDiscoveryIntent, "installationProof">) {
         payload = value;
-        return Promise.resolve({ contributionId: "retry", state: "received" } as ContributionStateReceipt);
+        return Promise.resolve({ discoveryId: "retry", taskState: "discovered" } as PublicDiscoveryReceipt);
       },
     } as PublicClient;
     const catalog = {
@@ -71,45 +60,29 @@ describe("submitObsidianPluginDiscovery", () => {
     };
 
     await submitObsidianPluginDiscovery({
-      client, installationId: "installation", repository: "blacksmithgu/obsidian-dataview",
-      candidateLocators: [], catalog, observationGeneration: 1,
+      client, installationId: "installation", targetLocales: ["zh-CN"], catalog, observationGeneration: 1,
     });
-    const recoveryPayload = payload as Extract<
-      ContributionSigningPayload,
-      { readonly contributionType: "source_discovery" }
-    > | null;
+    const recoveryPayload = payload as Omit<PublicDiscoveryIntent, "installationProof"> | null;
     const fallbackIdempotencyKey = recoveryPayload?.idempotencyKey;
     expect(fallbackIdempotencyKey)
-      .toMatch(/^obsidian-public-v22-r1-[a-f0-9]{64}$/u);
-    expect(recoveryPayload?.discovery.candidateLocators).toEqual([
-      "https://github.com/blacksmithgu/obsidian-dataview",
-    ]);
+      .toMatch(/^obsidian-public-discovery-v3-r1-[a-f0-9]{64}$/u);
+    expect(recoveryPayload?.targetLocales).toEqual(["zh-CN"]);
 
     await submitObsidianPluginDiscovery({
-      client, installationId: "installation", repository: "blacksmithgu/obsidian-dataview",
-      candidateLocators: [
-        "https://github.com/blacksmithgu/obsidian-dataview",
-        "https://github.com/blacksmithgu/obsidian-dataview/releases/tag/0.5.68",
-      ],
+      client, installationId: "installation", targetLocales: ["zh-CN", "ja"],
       catalog, observationGeneration: 1,
     });
-    expect((payload as ContributionSigningPayload | null)?.idempotencyKey)
+    expect((payload as Omit<PublicDiscoveryIntent, "installationProof"> | null)?.idempotencyKey)
       .not.toBe(fallbackIdempotencyKey);
 
-    await submitObsidianLocalizationObservation({
-      client, installationId: "installation", repository: "blacksmithgu/obsidian-dataview",
-      targetLocale: "zh-CN", catalog, observationGeneration: 1,
-    });
-    expect((payload as ContributionSigningPayload | null)?.idempotencyKey)
-      .toMatch(/^obsidian-localize-v12-r1-[a-f0-9]{64}$/u);
   });
 
   it("keeps source discovery idempotent for one persisted scan and separates rescans", async () => {
     const idempotencyKeys: string[] = [];
     const client = {
-      submitContribution(value: ContributionSigningPayload) {
+      submitPublicDiscovery(value: Omit<PublicDiscoveryIntent, "installationProof">) {
         idempotencyKeys.push(value.idempotencyKey);
-        return Promise.resolve({ contributionId: "source", state: "received" } as ContributionStateReceipt);
+        return Promise.resolve({ discoveryId: "source", taskState: "discovered" } as PublicDiscoveryReceipt);
       },
     } as PublicClient;
     const catalog = {
@@ -120,8 +93,7 @@ describe("submitObsidianPluginDiscovery", () => {
     const submit = (scannedAt: string) => submitObsidianPluginDiscovery({
       client,
       installationId: "installation",
-      repository: "blacksmithgu/obsidian-dataview",
-      candidateLocators: [],
+      targetLocales: ["zh-CN"],
       catalog: { ...catalog, scannedAt },
     });
 
@@ -131,94 +103,6 @@ describe("submitObsidianPluginDiscovery", () => {
 
     expect(idempotencyKeys[1]).toBe(idempotencyKeys[0]);
     expect(idempotencyKeys[2]).not.toBe(idempotencyKeys[0]);
-  });
-});
-
-describe("submitObsidianMissingTranslationIssue", () => {
-  it("submits an explicit generic localization-quality issue", async () => {
-    let payload: ContributionSigningPayload | null = null;
-    const client = {
-      submitContribution(value: ContributionSigningPayload) {
-        payload = value;
-        return Promise.resolve({
-          contributionId: "019f0000-0000-7000-8000-000000000004",
-          state: "received",
-        } as ContributionStateReceipt);
-      },
-    } as PublicClient;
-
-    await submitObsidianMissingTranslationIssue({
-      client,
-      installationId: "019f0000-0000-7000-8000-000000000002",
-      pluginId: "dataview",
-      pluginVersion: "0.5.68",
-      repository: "blacksmithgu/obsidian-dataview",
-      targetLocale: "zh-CN",
-      sourceText: "  Currently:   2026-07-18  ",
-      submittedAt: "2026-07-18T00:00:00.000Z",
-    });
-
-    const captured = payload as ContributionSigningPayload | null;
-    expect(captured?.idempotencyKey).toMatch(/^obsidian-localization-quality-v2-[a-f0-9]{64}$/u);
-    expect(captured).toMatchObject({
-      contributionType: "issue",
-      targetHint: {
-        externalRegistry: "obsidian_community_plugins",
-        externalObjectId: "blacksmithgu/obsidian-dataview",
-        upstreamVersion: "0.5.68",
-      },
-      provenance: { userAction: "explicit_submit" },
-      issue: {
-        category: "localization_quality",
-        severity: "info",
-        summary: "Missing UI localization: dataview@0.5.68 -> zh-CN: Currently: 2026-07-18",
-      },
-    });
-  });
-
-  it("submits an explicit inaccurate-upstream report without automatic locale ingestion", async () => {
-    let payload: ContributionSigningPayload | null = null;
-    const client = {
-      submitContribution(value: ContributionSigningPayload) {
-        payload = value;
-        return Promise.resolve({
-          contributionId: "019f0000-0000-7000-8000-000000000005",
-          state: "received",
-        } as ContributionStateReceipt);
-      },
-    } as PublicClient;
-
-    await submitObsidianLocalizationIssue({
-      client,
-      installationId: "019f0000-0000-7000-8000-000000000002",
-      issueKind: "inaccurate",
-      pluginId: "dataview",
-      pluginVersion: "0.5.68",
-      repository: "blacksmithgu/obsidian-dataview",
-      targetLocale: "zh-CN",
-      sourceText: "Settings",
-      currentTargetText: "设置项",
-      suggestedTargetText: "设置",
-      submittedAt: "2026-07-18T00:00:00.000Z",
-    });
-
-    const captured = payload as ContributionSigningPayload | null;
-    expect(captured?.idempotencyKey).toMatch(/^obsidian-localization-quality-v2-[a-f0-9]{64}$/u);
-    expect(captured).toMatchObject({
-      provenance: { userAction: "explicit_submit" },
-      issue: {
-        category: "localization_quality",
-        summary: "Inaccurate upstream localization: dataview@0.5.68 -> zh-CN: Settings => 设置项; suggested: 设置",
-      },
-    });
-  });
-
-  it("normalizes safe UI text and rejects empty or oversized input", () => {
-    expect(normalizeMissingUiSourceText("  One\n two ")).toBe("One two");
-    expect(() => normalizeMissingUiSourceText(" ")).toThrow("请填写");
-    expect(() => normalizeMissingUiSourceText("x".repeat(501))).toThrow("500");
-    expect(normalizeReportedTargetText("  设置\n项 ", "required")).toBe("设置 项");
-    expect(() => normalizeReportedTargetText(undefined, "required")).toThrow("required");
   });
 });
 
@@ -255,7 +139,7 @@ describe("submitObsidianLocalizationObservation", () => {
     expect(captured).toMatchObject({
       contributionType: "localization_observation",
       targetHint: {
-        externalRegistry: "obsidian_community_plugins",
+        externalRegistry: "official-directory",
         externalObjectId: "dataview",
         upstreamVersion: "0.5.68",
         officialArtifactLocator: "https://github.com/blacksmithgu/obsidian-dataview",

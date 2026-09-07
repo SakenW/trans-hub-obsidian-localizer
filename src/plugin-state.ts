@@ -1,6 +1,7 @@
 import {
   parseSourceCatalogIdentity,
-  type LocalizationDemandState,
+  parsePublicLocalizationStatusProjection,
+  type PublicLocalizationStatusProjection,
   type SourceCatalogIdentity,
 } from "@trans-hub/client-protocol";
 
@@ -38,6 +39,8 @@ export interface PendingSubmissionState {
 export interface PluginTranslationState {
   readonly pluginId: string;
   readonly pluginVersion: string;
+  /** Server-current version that owns sourceVersionId; defaults to pluginVersion for legacy caches. */
+  readonly authorityPluginVersion?: string;
   readonly sourceVersionId: string;
   readonly sourceSnapshotDigest?: string;
   readonly artifactDigest?: string;
@@ -66,36 +69,9 @@ export interface PluginSubmissionState {
   readonly contributionState: string;
   readonly observationGeneration?: number;
   readonly repository?: string;
-  readonly localizationTargetLocale?: string;
-  readonly localizationContributionId?: string;
-  readonly localizationContributionState?: string;
-  readonly localizationDemandStatus?: PluginLocalizationDemandStatusState;
   readonly sourceVersionId?: string;
   readonly lastError?: PluginSynchronizationErrorState;
   readonly submittedAt: string;
-}
-
-export interface PluginLocalizationDemandStatusState {
-  readonly state: LocalizationDemandState;
-  readonly sourceVersionId?: string;
-  readonly targetLocale?: string;
-  readonly targetVariant?: string;
-  readonly totalUnitCount: number;
-  readonly workItemCount: number;
-  readonly nativeUnitCount: number;
-  readonly queuedCount: number;
-  readonly runningCount: number;
-  readonly succeededCount: number;
-  readonly failedCount: number;
-  readonly reviewedUnitCount: number;
-  readonly publishedUnitCount: number;
-  readonly manifestId?: string;
-  readonly generationNumber?: number;
-  readonly retryAfterSeconds: number;
-  readonly failureCode?: string;
-  readonly failureRetryable: boolean;
-  readonly failureAttemptNumber?: number;
-  readonly updatedAt: string;
 }
 
 export interface PluginSynchronizationErrorState {
@@ -109,6 +85,34 @@ export type PluginTranslationsByLocale = Readonly<
   Record<string, Readonly<Partial<Record<TargetLocale, PluginTranslationState>>>>
 >;
 
+export interface PublicPluginDiscoveryState {
+  readonly statusRevision?: 2;
+  readonly receiptId?: string;
+  readonly discoveryId: string;
+  readonly taskId?: string | null;
+  readonly targetLocales: readonly TargetLocale[];
+  readonly classification: string;
+  readonly taskState: string;
+  readonly taskGeneration?: number | null;
+  readonly attemptCount?: number;
+  readonly outcome?: string;
+  readonly commandDigestHex?: string;
+  readonly credentialEpoch?: number;
+  readonly receiptRecordedAt?: string;
+  readonly updatedAt?: string;
+  readonly retryAfterSeconds?: number;
+  readonly retryAllowed?: boolean;
+  readonly blockedReasonCode?: string;
+  readonly retryGeneration?: number;
+  readonly installationId: string;
+  readonly submittedAt: string;
+  /** Source-discovery contract that created this task; a different epoch is a new task namespace. */
+  readonly sourceDiscoveryEpoch?: number;
+  /** Exact local catalog that caused this discovery submission. */
+  readonly catalogIdentityDigest?: string;
+  readonly localizationProjection?: PublicLocalizationStatusProjection;
+}
+
 export interface PluginState {
   readonly notes: Readonly<Record<string, NoteSubmissionState>>;
   readonly pendingSubmissions: Readonly<Record<string, PendingSubmissionState>>;
@@ -116,14 +120,17 @@ export interface PluginState {
   readonly enabledPluginIds: readonly string[];
   readonly pluginCatalogs: Readonly<Record<string, PluginUiCatalog>>;
   readonly pluginSubmissions: Readonly<Record<string, PluginSubmissionState>>;
+  readonly publicPluginDiscoveries: Readonly<Record<string, PublicPluginDiscoveryState>>;
   readonly pluginTranslations: PluginTranslationsByLocale;
-  readonly translationExportStates: Readonly<Record<string, TranslationSyncState>>;
+  readonly translationExportStates: Readonly<
+    Record<string, TranslationSyncState<AnyTranslationExportManifest>>
+  >;
 }
 
-// v2 invalidates submissions and delivery state produced before adapter 1.4.6.
-// Those entries can have no contribution ID while still claiming `rejected`,
-// which cannot be safely reconciled against the current authority contract.
-export const PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION = 2;
+// v3 removes every locally persisted discovery and delivery reference from
+// the retired public-discovery runtime. A clean source epoch must not poll an
+// old receipt, legacy localization demand, or cached translation package.
+export const PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION = 3;
 
 export function isPluginLocalizationDerivedCacheCurrent(value: unknown): boolean {
   return value === PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION;
@@ -136,6 +143,7 @@ export const EMPTY_PLUGIN_STATE: PluginState = {
   enabledPluginIds: [],
   pluginCatalogs: {},
   pluginSubmissions: {},
+  publicPluginDiscoveries: {},
   pluginTranslations: {},
   translationExportStates: {},
 };
@@ -161,6 +169,9 @@ export function parsePluginState(value: unknown): PluginState {
     pluginSubmissions: isRecord(value.pluginSubmissions)
       ? parseRecord(value.pluginSubmissions, parsePluginSubmission)
       : {},
+    publicPluginDiscoveries: isRecord(value.publicPluginDiscoveries)
+      ? parseRecord(value.publicPluginDiscoveries, parsePublicPluginDiscovery)
+      : {},
     pluginTranslations: parsePluginTranslations(value.pluginTranslations),
     translationExportStates: isRecord(value.translationExportStates)
       ? parseRecord(value.translationExportStates, parseTranslationExportState)
@@ -172,6 +183,7 @@ export function resetPluginLocalizationDerivedState(state: PluginState): PluginS
   return {
     ...state,
     pluginSubmissions: {},
+    publicPluginDiscoveries: {},
     pluginTranslations: {},
     translationExportStates: {},
   };
@@ -242,27 +254,11 @@ export function getPluginSubmissionForLocale(
   const submission = state.pluginSubmissions[pluginId];
   if (submission === undefined) return undefined;
   const {
-    localizationTargetLocale,
-    localizationContributionId,
-    localizationContributionState,
-    localizationDemandStatus,
-    sourceVersionId,
     lastError,
     ...sourceSubmission
   } = submission;
-  if (localizationTargetLocale !== targetLocale) {
-    return {
-      ...sourceSubmission,
-      ...(lastError?.targetLocale === targetLocale ? { lastError } : {}),
-    };
-  }
   return {
     ...sourceSubmission,
-    localizationTargetLocale,
-    ...(localizationContributionId === undefined ? {} : { localizationContributionId }),
-    ...(localizationContributionState === undefined ? {} : { localizationContributionState }),
-    ...(localizationDemandStatus?.targetLocale === targetLocale ? { localizationDemandStatus } : {}),
-    ...(sourceVersionId === undefined ? {} : { sourceVersionId }),
     ...(lastError?.targetLocale === targetLocale ? { lastError } : {}),
   };
 }
@@ -271,11 +267,6 @@ function parsePluginTranslations(value: unknown): PluginTranslationsByLocale {
   if (!isRecord(value)) return {};
   const parsed: Record<string, Partial<Record<TargetLocale, PluginTranslationState>>> = {};
   for (const [pluginId, rawPluginTranslations] of Object.entries(value)) {
-    const legacy = parsePluginTranslation(rawPluginTranslations);
-    if (legacy !== null && legacy.pluginId === pluginId) {
-      parsed[pluginId] = { [legacy.targetLocale]: legacy };
-      continue;
-    }
     if (!isRecord(rawPluginTranslations)) continue;
     for (const [locale, rawTranslation] of Object.entries(rawPluginTranslations)) {
       if (!isTargetLocale(locale)) continue;
@@ -292,12 +283,18 @@ function parsePluginTranslations(value: unknown): PluginTranslationsByLocale {
   return parsed;
 }
 
-function parseTranslationExportState(value: unknown): TranslationSyncState | null {
+function parseTranslationExportState(
+  value: unknown,
+): TranslationSyncState<AnyTranslationExportManifest> | null {
   if (!isRecord(value) || typeof value.etag !== "string" || value.etag === "") return null;
   try {
+    const manifestValue = isRecord(value.manifest) ? value.manifest : undefined;
+    const manifest = manifestValue?.revision === 3
+      ? parseStoredTranslationExportManifest(manifestValue, 3)
+      : parseStoredTranslationExportManifest(manifestValue);
     return {
       etag: value.etag,
-      manifest: parseStoredTranslationExportManifest(value.manifest),
+      manifest,
     };
   } catch {
     return null;
@@ -427,9 +424,6 @@ function parsePluginSubmission(value: unknown): PluginSubmissionState | null {
       || stringValue(value.repository) === null
     )
   ) return null;
-  const localizationDemandStatus = parsePluginLocalizationDemandStatus(
-    value.localizationDemandStatus,
-  );
   const lastError = parsePluginSynchronizationError(value.lastError);
   return {
     pluginId: value.pluginId as string,
@@ -454,54 +448,94 @@ function parsePluginSubmission(value: unknown): PluginSubmissionState | null {
       ? { observationGeneration: value.observationGeneration }
       : {}),
     ...(typeof value.repository === "string" && value.repository !== "" ? { repository: value.repository } : {}),
-    ...(typeof value.localizationTargetLocale === "string" && value.localizationTargetLocale !== "" ? { localizationTargetLocale: value.localizationTargetLocale } : {}),
-    ...(typeof value.localizationContributionId === "string" && value.localizationContributionId !== "" ? { localizationContributionId: value.localizationContributionId } : {}),
-    ...(typeof value.localizationContributionState === "string" && value.localizationContributionState !== "" ? { localizationContributionState: value.localizationContributionState } : {}),
-    ...(localizationDemandStatus === null ? {} : { localizationDemandStatus }),
     ...(typeof value.sourceVersionId === "string" && value.sourceVersionId !== "" ? { sourceVersionId: value.sourceVersionId } : {}),
     ...(lastError === null ? {} : { lastError }),
     submittedAt: value.submittedAt as string,
   };
 }
 
-function parsePluginLocalizationDemandStatus(
-  value: unknown,
-): PluginLocalizationDemandStatusState | null {
-  if (!isRecord(value) || !isLocalizationDemandState(value.state)) return null;
-  const integerFields = [
-    "totalUnitCount", "workItemCount", "nativeUnitCount", "queuedCount",
-    "runningCount", "succeededCount", "failedCount", "reviewedUnitCount",
-    "publishedUnitCount", "retryAfterSeconds",
-  ] as const;
-  if (!integerFields.every((field) => isNonNegativeInteger(value[field]))) return null;
+function parsePublicPluginDiscovery(value: unknown): PublicPluginDiscoveryState | null {
+  if (!isRecord(value)) return null;
+  if (value.statusRevision !== 2) return null;
+  const receiptId = stringValue(value.receiptId);
+  const discoveryId = stringValue(value.discoveryId);
+  const taskId = value.taskId === null ? null : stringValue(value.taskId);
+  const classification = stringValue(value.classification);
+  const taskState = stringValue(value.taskState);
+  const outcome = stringValue(value.outcome);
+  const commandDigestHex = stringValue(value.commandDigestHex);
+  const receiptRecordedAt = stringValue(value.receiptRecordedAt);
   const updatedAt = stringValue(value.updatedAt);
-  if (updatedAt === null || typeof value.failureRetryable !== "boolean") return null;
-  const failureAttemptNumber = value.failureAttemptNumber;
-  if (failureAttemptNumber !== undefined && !isPositiveInteger(failureAttemptNumber)) return null;
-  const generationNumber = value.generationNumber;
-  if (generationNumber !== undefined && !isPositiveInteger(generationNumber)) return null;
-  return {
-    state: value.state,
-    ...(optionalString(value.sourceVersionId, "sourceVersionId")),
-    ...(optionalString(value.targetLocale, "targetLocale")),
-    ...(optionalString(value.targetVariant, "targetVariant")),
-    totalUnitCount: value.totalUnitCount as number,
-    workItemCount: value.workItemCount as number,
-    nativeUnitCount: value.nativeUnitCount as number,
-    queuedCount: value.queuedCount as number,
-    runningCount: value.runningCount as number,
-    succeededCount: value.succeededCount as number,
-    failedCount: value.failedCount as number,
-    reviewedUnitCount: value.reviewedUnitCount as number,
-    publishedUnitCount: value.publishedUnitCount as number,
-    ...(optionalString(value.manifestId, "manifestId")),
-    ...(generationNumber === undefined ? {} : { generationNumber }),
-    retryAfterSeconds: value.retryAfterSeconds as number,
-    ...(optionalString(value.failureCode, "failureCode")),
-    failureRetryable: value.failureRetryable,
-    ...(failureAttemptNumber === undefined ? {} : { failureAttemptNumber }),
-    updatedAt,
-  };
+  const installationId = stringValue(value.installationId);
+  const submittedAt = stringValue(value.submittedAt);
+  const sourceDiscoveryEpoch = value.sourceDiscoveryEpoch === undefined
+    ? undefined
+    : value.sourceDiscoveryEpoch;
+  const catalogIdentityDigest = value.catalogIdentityDigest === undefined
+    ? undefined
+    : stringValue(value.catalogIdentityDigest);
+  if (
+    receiptId === null
+    || discoveryId === null
+    || (value.taskId !== null && taskId === null)
+    || classification === null
+    || taskState === null
+    || outcome === null
+    || commandDigestHex === null
+    || !/^[a-f0-9]{64}$/u.test(commandDigestHex)
+    || !isPositiveInteger(value.credentialEpoch)
+    || receiptRecordedAt === null
+    || updatedAt === null
+    || !isNonNegativeInteger(value.attemptCount)
+    || !isNonNegativeInteger(value.retryAfterSeconds)
+    || typeof value.retryAllowed !== "boolean"
+    || !isNonNegativeInteger(value.retryGeneration)
+    || (value.taskGeneration !== null && !isPositiveInteger(value.taskGeneration))
+    || (taskId === null && value.taskGeneration !== null)
+    || installationId === null
+    || submittedAt === null
+    || (sourceDiscoveryEpoch !== undefined && !isNonNegativeInteger(sourceDiscoveryEpoch))
+    || (
+      value.catalogIdentityDigest !== undefined
+      && !/^[a-f0-9]{64}$/u.test(catalogIdentityDigest ?? "")
+    )
+    || !Array.isArray(value.targetLocales)
+  ) return null;
+  const targetLocales = [...new Set(value.targetLocales.filter(isTargetLocale))];
+  let localizationProjection: PublicLocalizationStatusProjection | undefined;
+  try {
+    localizationProjection = value.localizationProjection === undefined
+      ? undefined
+      : parsePublicLocalizationStatusProjection(
+        value.localizationProjection,
+        "$.localizationProjection",
+      );
+  } catch {
+    return null;
+  }
+  if (
+    localizationProjection !== undefined
+    && (
+      localizationProjection.discoveryId !== discoveryId
+      || !targetLocales.includes(localizationProjection.targetLocale as TargetLocale)
+    )
+  ) return null;
+  return targetLocales.length === 0
+    ? null
+    : {
+      statusRevision: 2, receiptId, discoveryId, taskId, targetLocales,
+      classification, taskState, taskGeneration: value.taskGeneration,
+      attemptCount: value.attemptCount, outcome, commandDigestHex,
+      credentialEpoch: value.credentialEpoch, receiptRecordedAt, updatedAt,
+      retryAfterSeconds: value.retryAfterSeconds, retryAllowed: value.retryAllowed,
+      ...(typeof catalogIdentityDigest === "string" ? { catalogIdentityDigest } : {}),
+      ...(sourceDiscoveryEpoch === undefined ? {} : { sourceDiscoveryEpoch }),
+      ...(typeof value.blockedReasonCode === "string" && value.blockedReasonCode !== ""
+        ? { blockedReasonCode: value.blockedReasonCode }
+        : {}),
+      retryGeneration: value.retryGeneration, installationId, submittedAt,
+      ...(localizationProjection === undefined ? {} : { localizationProjection }),
+    };
 }
 
 function parsePluginSynchronizationError(
@@ -521,21 +555,6 @@ function parsePluginSynchronizationError(
       };
 }
 
-function isLocalizationDemandState(value: unknown): value is LocalizationDemandState {
-  return [
-    "awaiting_source", "rejected", "reconciled", "mt_queued", "mt_running",
-    "mt_failed", "distribution_blocked", "export_pending", "export_ready", "native_complete",
-  ].includes(String(value));
-}
-
-function optionalString<Key extends string>(
-  value: unknown,
-  key: Key,
-): Partial<Record<Key, string>> {
-  const parsed = stringValue(value);
-  return parsed === null ? {} : { [key]: parsed } as Record<Key, string>;
-}
-
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
@@ -548,6 +567,9 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
   if (!isRecord(value) || !Array.isArray(value.entries)) return null;
   const pluginId = stringValue(value.pluginId);
   const pluginVersion = stringValue(value.pluginVersion);
+  const authorityPluginVersion = value.authorityPluginVersion === undefined
+    ? undefined
+    : stringValue(value.authorityPluginVersion);
   const sourceVersionId = stringValue(value.sourceVersionId);
   const targetLocale = isTargetLocale(value.targetLocale) ? value.targetLocale : null;
   const pulledAt = stringValue(value.pulledAt);
@@ -560,7 +582,8 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
   const upstreamScopeCoverage = parseNonNegativeIntegerRecord(value.upstreamScopeCoverage);
   const publishedUnitCount = optionalNonNegativeInteger(value.publishedUnitCount);
   const missingUnitCount = optionalNonNegativeInteger(value.missingUnitCount);
-  if ([pluginId, pluginVersion, sourceVersionId, targetLocale, pulledAt].some((item) => item === null)) return null;
+  if ([pluginId, pluginVersion, sourceVersionId, targetLocale, pulledAt].some((item) => item === null)
+    || (value.authorityPluginVersion !== undefined && authorityPluginVersion === null)) return null;
   let catalogIdentity: SourceCatalogIdentity | undefined;
   try {
     catalogIdentity = value.catalogIdentity === undefined
@@ -589,7 +612,9 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
       ? entry.nativeTarget
       : undefined;
     const scopes = parsePluginTranslationScopes(entry.scopes);
+    const sourceCompatibility = parsePluginSourceCompatibility(entry.sourceCompatibility);
     if (entry.scopes !== undefined && scopes === undefined) return null;
+    if (entry.sourceCompatibility !== undefined && sourceCompatibility === undefined) return null;
     if (
       (application === "correction" && (provenanceKind !== "th-reviewed-correction" || nativeTarget === undefined))
       || (provenanceKind === "th-reviewed-correction" && application !== "correction")
@@ -605,13 +630,16 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
         ...(provenanceKind === undefined ? {} : { provenanceKind }),
         ...(application === undefined ? {} : { application }),
         ...(scopes === undefined ? {} : { scopes }),
+        ...(sourceCompatibility === undefined ? {} : { sourceCompatibility }),
         ...(nativeTarget === undefined ? {} : { nativeTarget }),
       }
       : null;
   });
   if (entries.some((entry) => entry === null)) return null;
   return {
-    pluginId: pluginId!, pluginVersion: pluginVersion!, sourceVersionId: sourceVersionId!,
+    pluginId: pluginId!, pluginVersion: pluginVersion!,
+    ...(typeof authorityPluginVersion === "string" ? { authorityPluginVersion } : {}),
+    sourceVersionId: sourceVersionId!,
     ...(sourceSnapshotDigest === undefined ? {} : { sourceSnapshotDigest }),
     ...(artifactDigest === undefined ? {} : { artifactDigest }),
     ...(catalogIdentity === undefined ? {} : { catalogIdentity }),
@@ -623,6 +651,31 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
     ...(publishedUnitCount === undefined ? {} : { publishedUnitCount }),
     ...(missingUnitCount === undefined ? {} : { missingUnitCount }),
     entries: entries.filter((entry): entry is PluginUiTranslation => entry !== null),
+  };
+}
+
+function parsePluginSourceCompatibility(
+  value: unknown,
+): import("./plugin-ui-runtime").PluginSourceCompatibility | undefined {
+  if (!isRecord(value)
+    || typeof value.semanticRole !== "string" || value.semanticRole === ""
+    || !Array.isArray(value.contentScopes) || value.contentScopes.length === 0
+    || typeof value.placeholderSignature !== "string"
+    || typeof value.formatSignature !== "string" || value.formatSignature === ""
+    || typeof value.sourceContentDigest !== "string"
+    || !/^sha256:[0-9a-f]{64}$/u.test(value.sourceContentDigest)) return undefined;
+  const contentScopes = value.contentScopes;
+  if (!contentScopes.every((scope): scope is string => typeof scope === "string" && scope !== "")
+    || [...new Set(contentScopes)].length !== contentScopes.length
+    || [...contentScopes].sort().some((scope, index) => scope !== contentScopes[index])) {
+    return undefined;
+  }
+  return {
+    semanticRole: value.semanticRole,
+    contentScopes,
+    placeholderSignature: value.placeholderSignature,
+    formatSignature: value.formatSignature,
+    sourceContentDigest: value.sourceContentDigest,
   };
 }
 
@@ -726,5 +779,6 @@ import { resolvePluginStringSemanticRole } from "./plugin-string-scanner";
 import type { PluginUiTranslation } from "./plugin-ui-runtime";
 import {
   parseStoredTranslationExportManifest,
+  type AnyTranslationExportManifest,
   type TranslationSyncState,
 } from "@trans-hub/translation-export-client";

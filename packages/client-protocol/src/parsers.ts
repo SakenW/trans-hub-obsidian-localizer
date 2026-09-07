@@ -6,6 +6,14 @@ import {
 } from "./bootstrap-parser.js";
 import type { ProtocolDocument } from "./contracts.js";
 import { parseContributionIntent } from "./contribution-parser.js";
+import {
+  parsePublicDiscoveryIntent,
+  parsePublicDiscoveryReceipt,
+  parsePublicDiscoveryStatus,
+  parsePublicLocalizationStatusBatch,
+  parsePublicLocalizationStatusProjection,
+  parseRegistryVerificationProjection,
+} from "./public-discovery-parser.js";
 import { protocolError } from "./errors.js";
 import {
   parsePublicInstallationLifecycleCommand,
@@ -31,6 +39,14 @@ export {
   parsePublicCredentialRenewalResponse,
 } from "./bootstrap-parser.js";
 export { parseContributionIntent } from "./contribution-parser.js";
+export {
+  parsePublicDiscoveryIntent,
+  parsePublicDiscoveryReceipt,
+  parsePublicDiscoveryStatus,
+  parsePublicLocalizationStatusBatch,
+  parsePublicLocalizationStatusProjection,
+  parseRegistryVerificationProjection,
+} from "./public-discovery-parser.js";
 export {
   parseInstallationLifecycleReceipt,
   parseInstallationLifecycleRecoveryRequest,
@@ -76,6 +92,16 @@ export function parseProtocolDocument(input: unknown): ProtocolDocument {
       return parseBootstrapResponse(value);
     case "contribution_intent":
       return parseContributionIntent(value);
+    case "public_discovery_intent":
+      return parsePublicDiscoveryIntent(value);
+    case "public_discovery_receipt":
+      return parsePublicDiscoveryReceipt(value);
+    case "public_discovery_status":
+      return parsePublicDiscoveryStatus(value);
+    case "public_localization_status_batch":
+      return parsePublicLocalizationStatusBatch(value);
+    case "registry_verification_projection":
+      return parseRegistryVerificationProjection(value);
     case "registry_resolution":
       return parseRegistryResolution(value);
     case "source_acquisition_manifest":

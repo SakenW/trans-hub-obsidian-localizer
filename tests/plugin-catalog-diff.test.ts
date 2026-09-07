@@ -33,13 +33,44 @@ const previous = {
   targetLocale: "zh-CN",
   pulledAt: "2026-07-17T00:00:00Z",
   entries: [
-    { pluginId: "sample", source: "Settings", target: "设置" },
+    {
+      pluginId: "sample", source: "Settings", target: "设置",
+      sourceCompatibility: compatibility("readme", ["readme", "runtime-ui"]),
+    },
     { pluginId: "sample", source: "Removed", target: "已移除" },
-    { pluginId: "sample", source: "Rows: {{th:expr:0}}", target: "行数" },
+    {
+      pluginId: "sample", source: "Rows: {{th:expr:0}}", target: "行数",
+      sourceCompatibility: compatibility("runtime-ui", ["runtime-ui"], "{{th:expr:0}}"),
+    },
   ],
 } as const;
 
 describe("plugin catalog version carry-over", () => {
+  it("界面覆盖排除README-only，同时对跨范围原文去重", () => {
+    const uiCatalog = { ...catalog, strings: [
+      { key: "ui", source: "Settings", origins: ["ui-call" as const, "readme" as const, "manifest.name" as const], placeholderSignature: "" },
+      { key: "doc", source: "Read our documentation.", origins: ["readme" as const], placeholderSignature: "" },
+    ] };
+    const translation = { ...previous, pluginVersion: uiCatalog.pluginVersion, entries: [{ pluginId: "sample", source: "Settings", target: "设置" }] };
+    const coverage = calculatePluginTranslationCoverage(uiCatalog, translation, "zh-CN");
+    expect(coverage).toMatchObject({ totalCount: 1, translatedCount: 1, missingCount: 0, percent: 100 });
+    expect(coverage?.scopes.map((item) => item.scope)).toEqual(["runtime-ui", "metadata"]);
+  });
+
+  it("历史权威目录只有文档汇总时不把文档计入界面总量或原生译文", () => {
+    const translation = { ...previous, pluginVersion: catalog.pluginVersion, artifactDigest: catalog.artifactDigest,
+      sourceUnitCount: 100, upstreamNativeCount: 99, entries: [],
+      catalogIdentity: { protocol: "trans-hub.source-catalog-identity" as const, revision: 2 as const,
+        resourceKey: catalog.pluginId, resourceVersion: catalog.pluginVersion, sourceLocale: "en",
+        artifactDigest: catalog.artifactDigest, unitCount: 100, digest: "old-doc-catalog",
+        scopes: [{ scope: "readme", unitCount: 100, digest: "doc" }],
+      },
+    };
+    const coverage = calculatePluginTranslationCoverage(catalog, translation, "zh-CN");
+    expect(coverage).toMatchObject({ totalCount: 4, translatedCount: 0, missingCount: 4 });
+    expect(coverage?.scopes.some((scope) => scope.scope === "readme")).toBe(false);
+  });
+
   it("keeps a README-only translation in the selected runtime application contract", () => {
     const readmeOnlyCatalog = {
       ...catalog,
@@ -88,7 +119,7 @@ describe("plugin catalog version carry-over", () => {
       scopes: [
         { scope: "runtime-ui", totalCount: 2, translatedCount: 1, missingCount: 1, percent: 50 },
         { scope: "metadata", totalCount: 2, translatedCount: 0, missingCount: 2, percent: 0 },
-        { scope: "readme", totalCount: 1, translatedCount: 1, missingCount: 0, percent: 100 },
+
       ],
       unattributedNativeCount: 0,
     });
@@ -119,7 +150,7 @@ describe("plugin catalog version carry-over", () => {
       scopes: [
         { scope: "runtime-ui", totalCount: 2, translatedCount: 2, missingCount: 0, percent: 100 },
         { scope: "metadata", totalCount: 2, translatedCount: 0, missingCount: 2, percent: 0 },
-        { scope: "readme", totalCount: 1, translatedCount: 1, missingCount: 0, percent: 100 },
+
       ],
       unattributedNativeCount: 3,
     });
@@ -165,7 +196,7 @@ describe("plugin catalog version carry-over", () => {
         scopes: [
           { scope: "runtime-ui", totalCount: 2, translatedCount: 1, missingCount: 1, percent: 50 },
           { scope: "metadata", totalCount: 2, translatedCount: 1, missingCount: 1, percent: 50 },
-          { scope: "readme", totalCount: 1, translatedCount: 0, missingCount: 1, percent: 0 },
+
         ],
       }));
   });
@@ -270,15 +301,15 @@ describe("plugin catalog version carry-over", () => {
 
     expect(calculatePluginTranslationCoverage(metadataOnlyCatalog, translation, "zh-CN"))
       .toEqual(expect.objectContaining({
-        totalCount: 1683,
+        totalCount: 1402,
         translatedCount: 1350,
-        missingCount: 333,
-        percent: 80,
+        missingCount: 52,
+        percent: 96,
         unattributedNativeCount: 0,
         scopes: [
           { scope: "runtime-ui", totalCount: 1402, translatedCount: 1350, missingCount: 52, percent: 96 },
           { scope: "metadata", totalCount: 2, translatedCount: 0, missingCount: 2, percent: 0 },
-          { scope: "readme", totalCount: 290, translatedCount: 0, missingCount: 290, percent: 0 },
+
         ],
       }));
     expect(selectCurrentCatalogTranslations(metadataOnlyCatalog, translation)).toEqual([]);
@@ -386,11 +417,16 @@ describe("plugin catalog version carry-over", () => {
     const translation = {
       ...previous,
       entries: [
-        { pluginId: "sample", source: "Settings", target: "设置（语枢机翻）", provenanceKind: "th-automatic" as const },
+        {
+          pluginId: "sample", source: "Settings", target: "设置（语枢机翻）",
+          provenanceKind: "th-automatic" as const,
+          sourceCompatibility: compatibility("readme", ["readme", "runtime-ui"]),
+        },
         {
           pluginId: "sample", source: "Rows: {{th:expr:0}}", target: "行数：{{th:expr:0}}",
           provenanceKind: "th-reviewed-correction" as const, application: "correction" as const,
           nativeTarget: "行：{{th:expr:0}}",
+          sourceCompatibility: compatibility("runtime-ui", ["runtime-ui"], "{{th:expr:0}}"),
         },
       ],
     };
@@ -440,9 +476,18 @@ describe("plugin catalog version carry-over", () => {
       ...previous,
       entries: [
         ...previous.entries,
-        { pluginId: "sample", source: "Sample", target: "示例插件" },
-        { pluginId: "sample", source: "Sample description", target: "示例说明" },
-        { pluginId: "sample", source: "Find sample workflows.", target: "查找示例工作流。" },
+        {
+          pluginId: "sample", source: "Sample", target: "示例插件",
+          sourceCompatibility: compatibility("official-name", ["metadata"]),
+        },
+        {
+          pluginId: "sample", source: "Sample description", target: "示例说明",
+          sourceCompatibility: compatibility("description", ["metadata"]),
+        },
+        {
+          pluginId: "sample", source: "Find sample workflows.", target: "查找示例工作流。",
+          sourceCompatibility: compatibility("description", ["metadata"]),
+        },
       ],
     };
     expect(selectCurrentCatalogTranslations(catalog, translation)).toContainEqual(
@@ -465,7 +510,7 @@ describe("plugin catalog version carry-over", () => {
     );
   });
 
-  it("新发布译文优先，同时保留未变化的旧译文", () => {
+  it("新发布的完整 generation 直接替换旧活动译文", () => {
     const incoming = {
       pluginId: "sample",
       pluginVersion: "2.0.0",
@@ -476,7 +521,20 @@ describe("plugin catalog version carry-over", () => {
     } as const;
     expect(mergePublishedPluginTranslation(catalog, incoming, previous).entries).toEqual([
       { pluginId: "sample", source: "Rows: {{th:expr:0}}", target: "行数：{{th:expr:0}}" },
-      { pluginId: "sample", source: "Settings", target: "设置" },
     ]);
   });
 });
+
+function compatibility(
+  semanticRole: string,
+  contentScopes: readonly string[],
+  placeholderSignature = "",
+) {
+  return {
+    semanticRole,
+    contentScopes,
+    placeholderSignature,
+    formatSignature: "plain-text-v1",
+    sourceContentDigest: `sha256:${"f".repeat(64)}`,
+  } as const;
+}

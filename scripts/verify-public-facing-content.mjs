@@ -27,12 +27,14 @@ if (
   throw new Error("Primary public README must contain inline Simplified Chinese content.");
 }
 for (const required of [
-  "Runtime **i18n** and localization",
+  "Desktop runtime **i18n** and localization",
   "Server-authoritative, version-aware translations",
-  "Safe runtime i18n, not file rewriting",
+  "Safe runtime i18n, not default file rewriting",
   "运行时 **I18n** 与本地化",
   "服务端权威、版本精确",
-  "安全的运行时 I18n，而不是改写文件",
+  "安全的运行时 I18n，而不是默认改写文件",
+  "desktop-only",
+  "桌面端",
 ]) {
   if (!primaryReadmeContent.includes(required)) {
     throw new Error("Primary public README is missing its public trust contract: " + required);

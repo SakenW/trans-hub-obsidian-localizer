@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -15,6 +14,16 @@ describe("Obsidian public client boundary", () => {
     expect(source.join("\n")).not.toContain("secure-client-core");
   });
 
+  it("keeps Connector Host and retired source-submission code out of the public plugin bundle", async () => {
+    const sources = await Promise.all([
+      readFile(`${ROOT}/package.json`, "utf8"),
+      readFile(`${ROOT}/tsconfig.json`, "utf8"),
+      readFile(`${ROOT}/vitest.config.ts`, "utf8"),
+    ]);
+    expect(sources.join("\n")).not.toContain("connector-host-client");
+    expect(sources.join("\n")).not.toContain("source-submission-client");
+  });
+
   it("pins the audited public translation-export root for clean production builds", async () => {
     const source = await readFile(`${ROOT}/esbuild.config.mjs`, "utf8");
     expect(source).not.toContain("obsidian-store-build-verification-placeholder");
@@ -25,19 +34,11 @@ describe("Obsidian public client boundary", () => {
     expect(source).toContain('if (values.some((value) => value === ""))');
   });
 
-  it("pins the exact public observation adapter descriptor", async () => {
-    const [artifact, releaseProfile] = await Promise.all([
-      readFile(`${ROOT}/adapter/obsidian-plugin-ui-v20.json`),
-      readFile(`${ROOT}/adapter/release-profile.json`, "utf8"),
-    ]);
-    expect(createHash("sha256").update(artifact).digest("hex"))
-      .toBe(OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex);
-    const descriptor = JSON.parse(artifact.toString("utf8")) as {
-      readonly version?: unknown;
-    };
-    const release = JSON.parse(releaseProfile) as { readonly semanticVersion?: unknown };
-    expect(descriptor.version).toBe(OBSIDIAN_PUBLIC_PROFILE.adapterVersion);
-    expect(release.semanticVersion).toBe(OBSIDIAN_PUBLIC_PROFILE.adapterVersion);
+  it("keeps executor artifacts out of the public plugin export", async () => {
+    const source = await readFile(`${ROOT}/package.json`, "utf8");
+    expect(source).not.toContain("adapter/");
+    expect(OBSIDIAN_PUBLIC_PROFILE.adapterVersion).toMatch(/^\d+\.\d+\.\d+$/u);
+    expect(OBSIDIAN_PUBLIC_PROFILE.adapterBuildDigestHex).toMatch(/^[0-9a-f]{64}$/u);
   });
 
   it("persists only installation-scoped credentials and renewal recovery state", async () => {

@@ -11,9 +11,11 @@ import {
   type LocalizationDemandStatusBatch,
   type LocalizationDemandStatusBatchRequest,
   type PublicCapability,
-  type PublicUploadGrant,
-  type PublicUploadGrantRequest,
-  type PublicUploadGrantSigningPayload,
+  type PublicDiscoveryIntent,
+  type PublicDiscoveryReceipt,
+  type PublicDiscoveryStatus,
+  type PublicLocalizationStatusBatch,
+  type PublicLocalizationStatusBatchRequest,
   parseBootstrapLinkBinding,
   parseBootstrapRequest,
   parseBootstrapResponse,
@@ -21,19 +23,21 @@ import {
   parseContributionStateReceipt,
   parseLocalizationDemandStatus,
   parseLocalizationDemandStatusBatch,
-  parsePublicUploadGrant,
-  parsePublicUploadGrantRequest,
-  publicUploadGrantSigningPayload,
+  parsePublicDiscoveryIntent,
+  parsePublicDiscoveryReceipt,
+  parsePublicDiscoveryStatus,
+  parsePublicLocalizationStatusBatch,
 } from "@trans-hub/client-protocol";
 import type {
   BootstrapInput,
-  CreateUploadGrantInput,
   GetLocalizationDemandStatusBatchInput,
+  GetPublicLocalizationStatusBatchInput,
   PrepareBootstrapInput,
   PreparedBootstrap,
   PublicClientControl,
   PublicClientOptions,
   PublicClientPorts,
+  PublicDiscoverySubmission,
 } from "./client-contracts.js";
 import {
   normalizeError,
@@ -273,6 +277,177 @@ export class PublicClient implements PublicClientControl {
     return receipt;
   }
 
+  async submitPublicDiscovery(
+    payload: PublicDiscoverySubmission,
+    signal?: AbortSignal,
+  ): Promise<PublicDiscoveryReceipt> {
+    const installation = await this.requireInstallation(
+      "submit-public-discovery",
+      "contribution:submit",
+    );
+    if (payload.installationId !== installation.bootstrap.installationId) {
+      throw publicClientError(
+        "PC_SCOPE_MISMATCH",
+        "Discovery installation does not match",
+        { operation: "submit-public-discovery" },
+      );
+    }
+    assertNotExpired(
+      installation.bootstrap.challengeExpiresAt,
+      this.ports.clock,
+      this.maximumClockSkewMs,
+      "submit-public-discovery",
+    );
+    const requestDigest = await computeProtocolDigest(
+      "request",
+      payload,
+      this.ports.digest,
+    );
+    const signingInput = {
+      requestDigest,
+      challenge: installation.bootstrap.serverChallenge,
+      nonce: this.ports.random.nonce(),
+      credentialEpoch: installation.bootstrap.intakeCredential.credentialEpoch,
+    };
+    let signed: { readonly signedAt: string; readonly signature: string };
+    try {
+      signed = await this.ports.signer.signProof(signingInput, signal);
+    } catch (error) {
+      const normalized = normalizeError(error, "submit-public-discovery");
+      if (normalized.code === "PC_ABORTED") throw normalized;
+      throw publicClientError(
+        "PC_SIGNING_FAILED",
+        "The installation signer could not sign the public discovery",
+        { operation: "submit-public-discovery" },
+        { cause: error },
+      );
+    }
+    const intent = protocolBoundary("submit-public-discovery", () =>
+      parsePublicDiscoveryIntent({
+        ...payload,
+        installationProof: {
+          domain: "public_contribution_intake",
+          algorithm: "ed25519",
+          keyId: this.ports.signer.keyId,
+          ...signingInput,
+          signedAt: signed.signedAt,
+          signature: signed.signature,
+        },
+      }),
+    );
+    const response = await this.controlWithRetry({
+      operation: "submit-public-discovery",
+      path: CONTROL_PATHS.discoveries,
+      method: "POST",
+      body: intent,
+      credential: installation.bootstrap.intakeCredential,
+      retryableOperation: true,
+      signal,
+    });
+    const receipt = protocolBoundary("submit-public-discovery", () =>
+      parsePublicDiscoveryReceipt(response.body),
+    );
+    this.assertHistoricalReceiptEpoch(
+      receipt,
+      installation,
+      "submit-public-discovery",
+    );
+    assertDigestScope(receipt.commandDigest, requestDigest, "submit-public-discovery");
+    return receipt;
+  }
+
+  async getPublicDiscoveryStatus(
+    discoveryId: string,
+    signal?: AbortSignal,
+  ): Promise<PublicDiscoveryStatus> {
+    const installation = await this.requireInstallation(
+      "public-discovery-status",
+      "contribution:read_receipt",
+    );
+    const response = await this.controlWithRetry({
+      operation: "public-discovery-status",
+      path: CONTROL_PATHS.discoveryStatus(discoveryId),
+      method: "GET",
+      body: null,
+      credential: installation.bootstrap.intakeCredential,
+      retryableOperation: true,
+      signal,
+    });
+    const status = protocolBoundary("public-discovery-status", () =>
+      parsePublicDiscoveryStatus(response.body),
+    );
+    if (status.discoveryId !== discoveryId) {
+      throw publicClientError(
+        "PC_SCOPE_MISMATCH",
+        "Discovery status identity does not match",
+        { operation: "public-discovery-status" },
+      );
+    }
+    this.assertHistoricalReceiptEpoch(
+      status,
+      installation,
+      "public-discovery-status",
+    );
+    return status;
+  }
+
+  async getPublicLocalizationStatusBatch(
+    input: GetPublicLocalizationStatusBatchInput,
+  ): Promise<PublicLocalizationStatusBatch> {
+    const installation = await this.requireInstallation(
+      "public-localization-status-batch",
+      "contribution:read_receipt",
+    );
+    if (input.queries.length === 0 || input.queries.length > 100) {
+      throw publicClientError(
+        "PC_CONFIGURATION",
+        "Public localization status batch requires 1 to 100 queries",
+        { operation: "public-localization-status-batch" },
+      );
+    }
+    const identities = new Set(
+      input.queries.map((query) => `${query.discoveryId}\u0000${query.targetLocale}`),
+    );
+    if (identities.size !== input.queries.length) {
+      throw publicClientError(
+        "PC_CONFIGURATION",
+        "Public localization status batch queries must be unique",
+        { operation: "public-localization-status-batch" },
+      );
+    }
+    const request: PublicLocalizationStatusBatchRequest = {
+      kind: "public_localization_status_batch",
+      protocol: CURRENT_PROTOCOL_VERSION,
+      queries: input.queries,
+    };
+    const response = await this.controlWithRetry({
+      operation: "public-localization-status-batch",
+      path: CONTROL_PATHS.publicLocalizationStatusBatch,
+      method: "POST",
+      body: request,
+      credential: installation.bootstrap.intakeCredential,
+      retryableOperation: true,
+      signal: input.signal,
+    });
+    const batch = protocolBoundary("public-localization-status-batch", () =>
+      parsePublicLocalizationStatusBatch(response.body),
+    );
+    if (
+      batch.items.length !== input.queries.length
+      || batch.items.some((item, index) => (
+        item.discoveryId !== input.queries[index]?.discoveryId
+        || item.targetLocale !== input.queries[index]?.targetLocale
+      ))
+    ) {
+      throw publicClientError(
+        "PC_SCOPE_MISMATCH",
+        "Public localization status result does not match the request",
+        { operation: "public-localization-status-batch" },
+      );
+    }
+    return batch;
+  }
+
   async getContributionStatus(
     contributionId: string,
     signal?: AbortSignal,
@@ -379,122 +554,8 @@ export class PublicClient implements PublicClientControl {
     return batch;
   }
 
-  async createUploadGrant(
-    input: CreateUploadGrantInput,
-  ): Promise<PublicUploadGrant> {
-    if (this.ports.serverVerifier === undefined) {
-      throw publicClientError(
-        "PC_CONFIGURATION",
-        "Upload grant creation requires a server key verifier",
-        { operation: "create-upload-grant" },
-      );
-    }
-    const installation = await this.requireInstallation(
-      "create-upload-grant",
-      "public_upload:write_quarantine",
-    );
-    assertNotExpired(
-      installation.bootstrap.challengeExpiresAt,
-      this.ports.clock,
-      this.maximumClockSkewMs,
-      "create-upload-grant",
-    );
-    const unsignedRequest: PublicUploadGrantSigningPayload = {
-      kind: "public_upload_grant_request",
-      protocol: CURRENT_PROTOCOL_VERSION,
-      idempotencyKey: input.idempotencyKey,
-      installationId: installation.bootstrap.installationId,
-      componentRole: input.componentRole,
-      componentName: input.componentName,
-    };
-    const requestDigest = await computeProtocolDigest(
-      "request",
-      unsignedRequest,
-      this.ports.digest,
-    );
-    const signingInput = {
-      requestDigest,
-      challenge: installation.bootstrap.serverChallenge,
-      nonce: this.ports.random.nonce(),
-      credentialEpoch: installation.bootstrap.intakeCredential.credentialEpoch,
-    };
-    let signed: { readonly signedAt: string; readonly signature: string };
-    try {
-      signed = await this.ports.signer.signProof(signingInput, input.signal);
-    } catch (error) {
-      const normalized = normalizeError(error, "create-upload-grant");
-      if (normalized.code === "PC_ABORTED") throw normalized;
-      throw publicClientError(
-        "PC_SIGNING_FAILED",
-        "The installation signer could not sign the upload grant request",
-        { operation: "create-upload-grant" },
-        { cause: error },
-      );
-    }
-    const request = protocolBoundary("create-upload-grant", () =>
-      parsePublicUploadGrantRequest({
-        ...unsignedRequest,
-        installationProof: {
-          domain: "public_contribution_intake",
-          algorithm: "ed25519",
-          keyId: this.ports.signer.keyId,
-          ...signingInput,
-          signedAt: signed.signedAt,
-          signature: signed.signature,
-        },
-      } satisfies PublicUploadGrantRequest),
-    );
-    const expectedSigningPayload = publicUploadGrantSigningPayload(request);
-    const expectedRequestDigest = await computeProtocolDigest(
-      "request",
-      expectedSigningPayload,
-      this.ports.digest,
-    );
-    assertDigestScope(
-      expectedRequestDigest,
-      requestDigest,
-      "create-upload-grant",
-    );
-    const response = await this.controlWithRetry({
-      operation: "create-upload-grant",
-      path: CONTROL_PATHS.createUploadGrant(input.contributionId),
-      method: "POST",
-      body: request,
-      credential: installation.bootstrap.intakeCredential,
-      retryableOperation: true,
-      signal: input.signal,
-    });
-    const grant = protocolBoundary("create-upload-grant", () =>
-      parsePublicUploadGrant(response.body),
-    );
-    await verifyServerDocument(grant, {
-      digest: this.ports.digest,
-      verifier: this.ports.serverVerifier,
-      clock: this.ports.clock,
-      maximumClockSkewMs: this.maximumClockSkewMs,
-      ...(input.signal === undefined ? {} : { signal: input.signal }),
-    });
-    if (
-      grant.installationId !== installation.bootstrap.installationId ||
-      grant.contributionId !== input.contributionId ||
-      grant.credentialEpoch !==
-        installation.bootstrap.intakeCredential.credentialEpoch ||
-      grant.scope.componentRole !== input.componentRole ||
-      grant.scope.componentName !== input.componentName
-    ) {
-      throw publicClientError(
-        "PC_SCOPE_MISMATCH",
-        "Upload grant response scope does not match",
-        {
-          operation: "create-upload-grant",
-        },
-      );
-    }
-    return grant;
-  }
-
   private assertReceiptEpoch(
-    receipt: ContributionStateReceipt,
+    receipt: Pick<ContributionStateReceipt, "credentialEpoch">,
     installation: InstallationRecord,
     operation: string,
   ): void {
@@ -508,6 +569,23 @@ export class PublicClient implements PublicClientControl {
         {
           operation,
         },
+      );
+    }
+  }
+
+  private assertHistoricalReceiptEpoch(
+    receipt: Pick<PublicDiscoveryReceipt, "credentialEpoch">,
+    installation: InstallationRecord,
+    operation: string,
+  ): void {
+    if (
+      receipt.credentialEpoch >
+      installation.bootstrap.intakeCredential.credentialEpoch
+    ) {
+      throw publicClientError(
+        "PC_SCOPE_MISMATCH",
+        "Receipt credential epoch is newer than the active installation",
+        { operation },
       );
     }
   }

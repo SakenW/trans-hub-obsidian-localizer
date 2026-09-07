@@ -20,7 +20,7 @@ export default defineConfig({
     __TRANS_HUB_OBSIDIAN_TRANSFER_TRUST_ROOTS__: JSON.stringify([{
       keyId: "client-transfer-root-1",
       keyVersion: 1,
-      publicKeyBase64Url: "B".repeat(43),
+      publicKeyBase64Url: "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
     }]),
     __TRANS_HUB_OBSIDIAN_WEB_BASE_URL__: JSON.stringify("http://127.0.0.1:3000"),
   },

@@ -5,19 +5,19 @@ import {
   verify as verifySignature,
 } from "node:crypto";
 
+import {
+  buildProtocolDigestFrame,
+  buildProtocolSignatureFrameFromCanonicalBytes,
+} from "@trans-hub/client-protocol";
+
 import { canonicalJson } from "./canonical-json";
 import type {
+  CanonicalJsonTranslationExportManifest,
   TranslationExportManifest,
   TranslationManifestVerificationPort,
 } from "./contracts";
 import { translationManifestSignedPayload } from "./manifest";
 
-const SIGNED_PAYLOAD_PREFIX = new TextEncoder().encode(
-  "trans-hub.client-protocol/v1/signed_payload\u0000",
-);
-const PROOF_PREFIX = new TextEncoder().encode(
-  "trans-hub.client-protocol/v1/signature/translation_export_manifest\u0000",
-);
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 export type TranslationExportTrustRoot = Readonly<{
@@ -64,12 +64,11 @@ export class NodeEd25519ManifestVerifier
   }
 
   async verify(
-    manifest: TranslationExportManifest & Readonly<{ revision: 2 }>,
+    manifest:
+      | (TranslationExportManifest & Readonly<{ revision: 2 }>)
+      | CanonicalJsonTranslationExportManifest,
   ): Promise<void> {
     const proof = manifest.serverProof;
-    const root = this.#roots.get(rootIdentity(proof.keyId, proof.keyVersion));
-    if (root === undefined)
-      throw new Error("translation_manifest_untrusted_key");
     const now = this.#now();
     if (
       Date.parse(proof.signedAt) > now + this.#maximumClockSkewMs ||
@@ -77,12 +76,31 @@ export class NodeEd25519ManifestVerifier
     ) {
       throw new Error("translation_manifest_proof_expired_or_future");
     }
+    this.verifyAuthenticity(manifest);
+  }
+
+  async verifyHistorical(
+    manifest:
+      | (TranslationExportManifest & Readonly<{ revision: 2 }>)
+      | CanonicalJsonTranslationExportManifest,
+  ): Promise<void> {
+    this.verifyAuthenticity(manifest);
+  }
+
+  private verifyAuthenticity(
+    manifest:
+      | (TranslationExportManifest & Readonly<{ revision: 2 }>)
+      | CanonicalJsonTranslationExportManifest,
+  ): void {
+    const proof = manifest.serverProof;
+    const root = this.#roots.get(rootIdentity(proof.keyId, proof.keyVersion));
+    if (root === undefined)
+      throw new Error("translation_manifest_untrusted_key");
     const payloadBytes = encodeCanonical(
       translationManifestSignedPayload(manifest),
     );
     const digest = createHash("sha256")
-      .update(SIGNED_PAYLOAD_PREFIX)
-      .update(payloadBytes)
+      .update(buildProtocolDigestFrame("signed_payload", payloadBytes))
       .digest();
     const claimedDigest = Buffer.from(proof.payloadDigest.hex, "hex");
     if (
@@ -100,10 +118,12 @@ export class NodeEd25519ManifestVerifier
       signedAt: proof.signedAt,
       expiresAt: proof.expiresAt,
     };
-    const frame = Buffer.concat([
-      Buffer.from(PROOF_PREFIX),
-      Buffer.from(encodeCanonical(unsignedProof)),
-    ]);
+    const frame = Buffer.from(
+      buildProtocolSignatureFrameFromCanonicalBytes(
+        "translation_export_manifest",
+        encodeCanonical(unsignedProof),
+      ),
+    );
     const rawPublicKey = Buffer.from(root.publicKeyBase64Url, "base64url");
     const publicKey = createPublicKey({
       key: Buffer.concat([ED25519_SPKI_PREFIX, rawPublicKey]),

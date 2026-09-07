@@ -8,6 +8,8 @@ import type { TransportClient } from "./http-transport";
 export interface PublishedPluginSource {
   readonly sourceVersionId: string;
   readonly objectVersionId: string;
+  /** Version that owns the server-current source; it may differ from the installed plugin. */
+  readonly authorityPluginVersion: string;
   readonly artifactDigest: string;
   readonly repository?: string;
   readonly sourceSnapshotDigest?: string;
@@ -91,17 +93,46 @@ export async function loadPublishedEcosystemCatalog(
   if (coordinates.length === 0 || targetLocale === undefined) {
     throw new Error("Obsidian 公共目录坐标无效。");
   }
+  // The object-list API returns every published version and coverage row for
+  // the selected object.  That is required to map an authenticated current
+  // sourceVersionId to its owning version without sorting version strings.
+  const pluginIds = [...new Set(coordinates.map((coordinate) => coordinate.pluginId))];
   const objects: Record<string, unknown>[] = [];
-  for (let index = 0; index < coordinates.length; index += 100) {
-    const page = await loadPublishedEcosystemCatalogPage(
+  for (let index = 0; index < pluginIds.length; index += 99) {
+    const page = await loadPublishedEcosystemObjectPage(
       transport,
-      coordinates.slice(index, index + 100),
-      targetLocale,
+      pluginIds.slice(index, index + 99),
     );
     if (page === undefined) return undefined;
     objects.push(...page.objects);
   }
   return { objects };
+}
+
+async function loadPublishedEcosystemObjectPage(
+  transport: TransportClient,
+  pluginIds: readonly string[],
+): Promise<PublishedEcosystemCatalog | undefined> {
+  if (pluginIds.length === 0 || pluginIds.length > 99) {
+    throw new Error("Obsidian 公共目录对象选择无效。");
+  }
+  const query = new URLSearchParams({ limit: "99" });
+  for (const pluginId of pluginIds) query.append("object_slug", pluginId);
+  const response = await transport.send<unknown>({
+    method: "GET",
+    path: `/v1/public/ecosystems/obsidian/objects?${query.toString()}`,
+  });
+  if (response.status === 404) return undefined;
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`读取 Obsidian 公共目录失败：HTTP ${response.status}`);
+  }
+  if (!isRecord(response.body) || !Array.isArray(response.body.items)) {
+    throw new Error("Obsidian 公共目录响应格式无效。");
+  }
+  if (!response.body.items.every(isRecord)) {
+    throw new Error("Obsidian 公共目录对象格式无效。");
+  }
+  return { objects: response.body.items };
 }
 
 async function loadPublishedEcosystemCatalogPage(
@@ -146,6 +177,7 @@ export async function resolvePublishedPluginSource(input: {
   readonly pluginVersion: string;
   readonly targetLocale: string;
   readonly localCatalogIdentity?: SourceCatalogIdentity;
+  readonly authoritativeSourceVersionId?: string;
 }): Promise<PublishedPluginSource | undefined> {
   const catalog = await loadPublishedEcosystemCatalog(
     input.transport,
@@ -163,10 +195,13 @@ export function resolvePublishedPluginSourceFromCatalog(
     pluginVersion: string;
     targetLocale: string;
     localCatalogIdentity?: SourceCatalogIdentity;
+    authoritativeSourceVersionId?: string;
   }>,
 ): PublishedPluginSource | undefined {
   const localCatalogIdentity = input.localCatalogIdentity;
-  if (localCatalogIdentity === undefined) return undefined;
+  if (localCatalogIdentity === undefined || input.authoritativeSourceVersionId === undefined) {
+    return undefined;
+  }
   const pluginObjects = catalog.objects.filter(
     (item): item is Record<string, unknown> => isRecord(item) && item.slug === input.pluginId,
   );
@@ -176,22 +211,9 @@ export function resolvePublishedPluginSourceFromCatalog(
   if (!Array.isArray(plugin.versions) || !Array.isArray(plugin.coverage)) {
     throw new Error("Obsidian 插件目录版本响应格式无效。");
   }
-  const versions = plugin.versions.filter(
-    (item): item is Record<string, unknown> => isRecord(item) && item.version_key === input.pluginVersion,
-  );
-  if (versions.length === 0) return undefined;
-  if (versions.length !== 1) {
-    throw new Error(`Obsidian 插件目录存在重复版本：${input.pluginId}@${input.pluginVersion}`);
-  }
-  const objectVersionId = requiredString(versions[0].object_version_id, "插件版本缺少对象版本 ID");
-  const objectVersionDigest = requiredSha256(versions[0].content_digest, "插件版本制品摘要无效");
-  const repository = repositoryFromVerifiedExternalIdentity(
-    versions[0].verified_external_registry_key,
-    versions[0].canonical_external_identity,
-  );
   const published = plugin.coverage.filter((item): item is Record<string, unknown> => (
     isRecord(item)
-    && item.object_version_id === objectVersionId
+    && item.source_version_id === input.authoritativeSourceVersionId
     && item.target_locale === input.targetLocale
     && item.target_variant === "default"
     && typeof item.published_unit_count === "number"
@@ -200,14 +222,38 @@ export function resolvePublishedPluginSourceFromCatalog(
     && typeof item.missing_unit_count === "number"
   ));
   if (published.length === 0) return undefined;
+  if (published.length !== 1) {
+    throw new Error(`Obsidian 插件当前权威源映射不唯一：${input.pluginId}:${input.authoritativeSourceVersionId}`);
+  }
+  const publishedEntry = published[0];
+  if (publishedEntry === undefined) return undefined;
+  const objectVersionId = requiredString(
+    publishedEntry.object_version_id,
+    "译文覆盖缺少对象版本 ID",
+  );
+  const versions = plugin.versions.filter(
+    (item): item is Record<string, unknown> => isRecord(item)
+      && item.object_version_id === objectVersionId,
+  );
+  if (versions.length !== 1) {
+    throw new Error(`Obsidian 插件当前权威版本映射不唯一：${input.pluginId}:${input.authoritativeSourceVersionId}`);
+  }
+  const version = versions[0];
+  if (version === undefined) return undefined;
+  const authorityPluginVersion = requiredString(version.version_key, "插件权威版本缺少版本键");
+  const objectVersionDigest = requiredSha256(version.content_digest, "插件版本制品摘要无效");
+  const repository = repositoryFromVerifiedExternalIdentity(
+    version.verified_external_registry_key,
+    version.canonical_external_identity,
+  );
   const identified = published.flatMap((item) => {
     if (item.catalog_identity === null || item.catalog_identity === undefined) return [];
     const identity = parseSourceCatalogIdentity(item.catalog_identity);
     if (
       identity.resourceKey !== input.pluginId
-      || identity.resourceVersion !== input.pluginVersion
+      || identity.resourceVersion !== authorityPluginVersion
     ) {
-      throw new Error(`Obsidian 插件权威目录身份冲突：${input.pluginId}@${input.pluginVersion}`);
+      throw new Error(`Obsidian 插件权威目录身份冲突：${input.pluginId}@${authorityPluginVersion}`);
     }
     return [{ item, identity }];
   });
@@ -247,6 +293,7 @@ export function resolvePublishedPluginSourceFromCatalog(
   return {
     sourceVersionId: requiredString(sourceVersionIds[0], "译文覆盖缺少源版本 ID"),
     objectVersionId,
+    authorityPluginVersion,
     // The coverage catalog identity is the current authoritative scan digest;
     // the object-version digest is only a fallback for coverage without an
     // identity (same-version rescans reuse the immutable object version row).
@@ -289,7 +336,7 @@ function repositoryFromVerifiedExternalIdentity(
   registryKey: unknown,
   canonicalIdentity: unknown,
 ): string | undefined {
-  if (registryKey !== "obsidian_community_plugins") return undefined;
+  if (registryKey !== "official-directory") return undefined;
   return typeof canonicalIdentity === "string"
     ? normalizeGitHubRepository(canonicalIdentity)
     : undefined;

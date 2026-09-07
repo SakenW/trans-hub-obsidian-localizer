@@ -19,6 +19,7 @@ export class FetchPackDownloader implements PackDownloadPort {
       url: string;
       objectVersion: string;
       expectedBytes: number;
+      allowedOrigin: string;
     }>,
   ): Promise<Uint8Array> {
     if (
@@ -27,20 +28,20 @@ export class FetchPackDownloader implements PackDownloadPort {
     ) {
       throw new Error("translation_pack_expected_size_invalid");
     }
-    assertSafeDownloadUrl(input.url, this.options.developmentOrigin);
+    assertSafeDownloadUrl(
+      input.url,
+      input.allowedOrigin,
+      this.options.developmentOrigin,
+    );
     const response = await this.fetchImpl(input.url, {
       method: "GET",
       redirect: "error",
     });
     if (!response.ok)
       throw new Error(`translation_pack_download_failed:${response.status}`);
-    const contentLength = response.headers.get("content-length");
-    if (
-      contentLength !== null &&
-      Number(contentLength) !== input.expectedBytes
-    ) {
-      throw new Error("translation_pack_download_size_mismatch");
-    }
+    // Fetch exposes decoded response bytes when HTTP Content-Encoding is used.
+    // Content-Length may therefore describe transfer bytes, not the canonical
+    // JSON object. The business contract is enforced against the decoded body.
     if (response.body === null) {
       const bytes = new Uint8Array(await response.arrayBuffer());
       if (bytes.byteLength !== input.expectedBytes) {
@@ -80,6 +81,7 @@ export class FetchPackDownloader implements PackDownloadPort {
 
 export function assertSafeDownloadUrl(
   url: string,
+  allowedOrigin: string,
   developmentOrigin?: string,
 ): void {
   let parsed: URL;
@@ -91,17 +93,38 @@ export function assertSafeDownloadUrl(
   if (parsed.username || parsed.password || parsed.hash) {
     throw new Error("translation_ticket_url_invalid");
   }
+  const allowed = parseOrigin(allowedOrigin, "translation_cdn_origin_invalid");
+  if (parsed.origin !== allowed.origin) {
+    throw new Error("translation_ticket_url_invalid");
+  }
   if (parsed.protocol === "https:") return;
   if (developmentOrigin === undefined)
     throw new Error("translation_ticket_url_invalid");
   const expected = validateDevelopmentOrigin(developmentOrigin);
-  if (
-    parsed.protocol !== "http:" ||
-    parsed.origin !== expected.origin ||
-    !parsed.pathname.startsWith("/v1/dev/object-storage/")
-  ) {
+  if (parsed.protocol !== "http:" || parsed.origin !== expected.origin) {
     throw new Error("translation_ticket_url_invalid");
   }
+}
+
+function parseOrigin(value: string, code: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(code);
+  }
+  if (
+    !["https:", "http:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.origin !== value
+  ) {
+    throw new Error(code);
+  }
+  return parsed;
 }
 
 function validateDevelopmentOrigin(origin: string): URL {

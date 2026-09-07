@@ -1,7 +1,11 @@
 import {
+  TRANSLATION_EXPORT_CANONICAL_JSON_REVISION,
   TRANSLATION_EXPORT_LEGACY_REVISION,
   TRANSLATION_EXPORT_REVISION,
   TRANSLATION_EXPORT_SCHEMA,
+  type AnyTranslationExportManifest,
+  type CanonicalJsonTranslationExportManifest,
+  type CanonicalJsonTranslationPackRef,
   type ExportScope,
   type Sha256Digest,
   type TranslationExportManifest,
@@ -13,18 +17,41 @@ const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 
 export function parseTranslationExportManifest(
   input: unknown,
-): TranslationExportManifest {
+): TranslationExportManifest;
+export function parseTranslationExportManifest(
+  input: unknown,
+  expectedRevision: 1 | 2,
+): TranslationExportManifest;
+export function parseTranslationExportManifest(
+  input: unknown,
+  expectedRevision: 3,
+): CanonicalJsonTranslationExportManifest;
+export function parseTranslationExportManifest(
+  input: unknown,
+  expectedRevision?: 1 | 2 | 3,
+): AnyTranslationExportManifest {
   const value = record(input, "translation_manifest_invalid");
   if (
     value.schema !== TRANSLATION_EXPORT_SCHEMA ||
     (value.revision !== TRANSLATION_EXPORT_LEGACY_REVISION &&
-      value.revision !== TRANSLATION_EXPORT_REVISION)
+      value.revision !== TRANSLATION_EXPORT_REVISION &&
+      value.revision !== TRANSLATION_EXPORT_CANONICAL_JSON_REVISION)
+  ) {
+    throw new TypeError("translation_manifest_revision_unsupported");
+  }
+  if (
+    (expectedRevision === undefined &&
+      value.revision === TRANSLATION_EXPORT_CANONICAL_JSON_REVISION) ||
+    (expectedRevision !== undefined && value.revision !== expectedRevision)
   ) {
     throw new TypeError("translation_manifest_revision_unsupported");
   }
   if (!Array.isArray(value.packs))
     throw new TypeError("translation_manifest_invalid");
-  const packs = value.packs.map(parsePack);
+  const packs =
+    value.revision === TRANSLATION_EXPORT_CANONICAL_JSON_REVISION
+      ? value.packs.map(parseCanonicalJsonPack)
+      : value.packs.map(parsePack);
   packs.forEach((pack, index) => {
     if (pack.packIndex !== index)
       throw new TypeError("translation_pack_index_invalid");
@@ -57,28 +84,57 @@ export function parseTranslationExportManifest(
     ),
     packs,
   };
-  return value.revision === TRANSLATION_EXPORT_LEGACY_REVISION
-    ? { ...common, revision: TRANSLATION_EXPORT_LEGACY_REVISION }
-    : {
-        ...common,
-        revision: TRANSLATION_EXPORT_REVISION,
-        serverProof: parseServerProof(value.server_proof),
-      };
+  if (value.revision === TRANSLATION_EXPORT_LEGACY_REVISION) {
+    return {
+      ...common,
+      revision: TRANSLATION_EXPORT_LEGACY_REVISION,
+      packs: packs as TranslationPackRef[],
+    };
+  }
+  if (value.revision === TRANSLATION_EXPORT_REVISION) {
+    return {
+      ...common,
+      revision: TRANSLATION_EXPORT_REVISION,
+      packs: packs as TranslationPackRef[],
+      cdnOrigin: cdnOrigin(value.cdn_origin),
+      serverProof: parseServerProof(value.server_proof),
+    };
+  }
+  return {
+    ...common,
+    revision: TRANSLATION_EXPORT_CANONICAL_JSON_REVISION,
+    packs: packs as CanonicalJsonTranslationPackRef[],
+    cdnOrigin: cdnOrigin(value.cdn_origin),
+    serverProof: parseServerProof(value.server_proof),
+  };
 }
 
 /** Validate the camelCase form persisted by clients after parsing the wire response. */
 export function parseStoredTranslationExportManifest(
   input: unknown,
-): TranslationExportManifest {
+): TranslationExportManifest;
+export function parseStoredTranslationExportManifest(
+  input: unknown,
+  expectedRevision: 1 | 2,
+): TranslationExportManifest;
+export function parseStoredTranslationExportManifest(
+  input: unknown,
+  expectedRevision: 3,
+): CanonicalJsonTranslationExportManifest;
+export function parseStoredTranslationExportManifest(
+  input: unknown,
+  expectedRevision?: 1 | 2 | 3,
+): AnyTranslationExportManifest {
   const value = record(input, "translation_manifest_invalid");
   const scope = record(value.scope, "translation_scope_invalid");
   const storedProof =
-    value.revision === TRANSLATION_EXPORT_REVISION
+    value.revision === TRANSLATION_EXPORT_REVISION ||
+    value.revision === TRANSLATION_EXPORT_CANONICAL_JSON_REVISION
       ? record(value.serverProof, "translation_manifest_proof_invalid")
       : undefined;
   if (!Array.isArray(value.packs))
     throw new TypeError("translation_manifest_invalid");
-  return parseTranslationExportManifest({
+  const wire = {
     schema: value.schema,
     revision: value.revision,
     manifest_id: value.manifestId,
@@ -98,7 +154,8 @@ export function parseStoredTranslationExportManifest(
             encryption_domain_id: scope.encryptionDomainId,
           },
     manifest_digest: value.manifestDigest,
-    ...(value.revision === TRANSLATION_EXPORT_REVISION
+    ...(value.revision === TRANSLATION_EXPORT_REVISION ||
+    value.revision === TRANSLATION_EXPORT_CANONICAL_JSON_REVISION
       ? {
           server_proof: {
             domain: storedProof?.domain,
@@ -110,27 +167,46 @@ export function parseStoredTranslationExportManifest(
             expiresAt: storedProof?.expiresAt,
             signature: storedProof?.signature,
           },
+          cdn_origin: value.cdnOrigin,
         }
       : {}),
     packs: value.packs.map((item) => {
       const pack = record(item, "translation_pack_invalid");
-      return {
+      const commonPack = {
         pack_id: pack.packId,
         pack_index: pack.packIndex,
         item_count: pack.itemCount,
-        compressed_bytes: pack.compressedBytes,
-        uncompressed_bytes: pack.uncompressedBytes,
         object_version: pack.objectVersion,
-        transport_digest: pack.transportDigest,
-        canonical_payload_digest: pack.canonicalPayloadDigest,
         logical_object_digest: pack.logicalObjectDigest,
       };
+      return value.revision === TRANSLATION_EXPORT_CANONICAL_JSON_REVISION
+        ? {
+            ...commonPack,
+            content_size_bytes: pack.contentSizeBytes,
+            content_sha256: pack.contentSha256,
+          }
+        : {
+            ...commonPack,
+            compressed_bytes: pack.compressedBytes,
+            uncompressed_bytes: pack.uncompressedBytes,
+            transport_digest: pack.transportDigest,
+            canonical_payload_digest: pack.canonicalPayloadDigest,
+          };
     }),
-  });
+  };
+  if (expectedRevision === 3) {
+    return parseTranslationExportManifest(wire, 3);
+  }
+  if (expectedRevision === 1 || expectedRevision === 2) {
+    return parseTranslationExportManifest(wire, expectedRevision);
+  }
+  return parseTranslationExportManifest(wire);
 }
 
 export function translationManifestSignedPayload(
-  manifest: TranslationExportManifest & Readonly<{ revision: 2 }>,
+  manifest:
+    | (TranslationExportManifest & Readonly<{ revision: 2 }>)
+    | CanonicalJsonTranslationExportManifest,
 ): Readonly<Record<string, unknown>> {
   return {
     schema: manifest.schema,
@@ -152,18 +228,52 @@ export function translationManifestSignedPayload(
             encryption_domain_id: manifest.scope.encryptionDomainId,
           },
     manifest_digest: manifest.manifestDigest,
-    packs: manifest.packs.map((pack) => ({
-      pack_id: pack.packId,
-      pack_index: pack.packIndex,
-      item_count: pack.itemCount,
-      compressed_bytes: pack.compressedBytes,
-      uncompressed_bytes: pack.uncompressedBytes,
-      object_version: pack.objectVersion,
-      transport_digest: pack.transportDigest,
-      canonical_payload_digest: pack.canonicalPayloadDigest,
-      logical_object_digest: pack.logicalObjectDigest,
-    })),
+    cdn_origin: manifest.cdnOrigin,
+    packs:
+      manifest.revision === TRANSLATION_EXPORT_CANONICAL_JSON_REVISION
+        ? manifest.packs.map((pack) => ({
+            pack_id: pack.packId,
+            pack_index: pack.packIndex,
+            item_count: pack.itemCount,
+            content_size_bytes: pack.contentSizeBytes,
+            object_version: pack.objectVersion,
+            content_sha256: pack.contentSha256,
+            logical_object_digest: pack.logicalObjectDigest,
+          }))
+        : manifest.packs.map((pack) => ({
+            pack_id: pack.packId,
+            pack_index: pack.packIndex,
+            item_count: pack.itemCount,
+            compressed_bytes: pack.compressedBytes,
+            uncompressed_bytes: pack.uncompressedBytes,
+            object_version: pack.objectVersion,
+            transport_digest: pack.transportDigest,
+            canonical_payload_digest: pack.canonicalPayloadDigest,
+            logical_object_digest: pack.logicalObjectDigest,
+          })),
   };
+}
+
+function cdnOrigin(input: unknown): string {
+  const value = string(input, "translation_cdn_origin_invalid");
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new TypeError("translation_cdn_origin_invalid");
+  }
+  if (
+    !["https:", "http:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.origin !== value
+  ) {
+    throw new TypeError("translation_cdn_origin_invalid");
+  }
+  return value;
 }
 
 function parseServerProof(input: unknown): TranslationExportServerProof {
@@ -236,6 +346,7 @@ function signature(input: unknown): string {
 
 function parsePack(input: unknown): TranslationPackRef {
   const value = record(input, "translation_pack_invalid");
+  rejectFields(value, ["content_size_bytes", "content_sha256"]);
   return {
     packId: string(value.pack_id, "translation_pack_id_invalid"),
     packIndex: integer(value.pack_index, "translation_pack_index_invalid"),
@@ -265,6 +376,48 @@ function parsePack(input: unknown): TranslationPackRef {
       "translation_logical_digest_invalid",
     ),
   };
+}
+
+function parseCanonicalJsonPack(
+  input: unknown,
+): CanonicalJsonTranslationPackRef {
+  const value = record(input, "translation_pack_invalid");
+  rejectFields(value, [
+    "compressed_bytes",
+    "uncompressed_bytes",
+    "transport_digest",
+    "canonical_payload_digest",
+  ]);
+  return {
+    packId: string(value.pack_id, "translation_pack_id_invalid"),
+    packIndex: integer(value.pack_index, "translation_pack_index_invalid"),
+    itemCount: integer(value.item_count, "translation_pack_count_invalid"),
+    contentSizeBytes: positiveInteger(
+      value.content_size_bytes,
+      "translation_pack_content_size_invalid",
+    ),
+    objectVersion: string(
+      value.object_version,
+      "translation_object_version_invalid",
+    ),
+    contentSha256: digest(
+      value.content_sha256,
+      "translation_pack_content_digest_invalid",
+    ),
+    logicalObjectDigest: digest(
+      value.logical_object_digest,
+      "translation_logical_digest_invalid",
+    ),
+  };
+}
+
+function rejectFields(
+  value: Readonly<Record<string, unknown>>,
+  forbidden: readonly string[],
+): void {
+  if (forbidden.some((key) => Object.hasOwn(value, key))) {
+    throw new TypeError("translation_pack_contract_fields_mixed");
+  }
 }
 
 function parseScope(input: unknown): ExportScope {

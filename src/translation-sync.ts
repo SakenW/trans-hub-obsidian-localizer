@@ -1,15 +1,16 @@
 import {
   publicClientTranslationExportEndpoint,
   TranslationExportClient,
+  type CanonicalJsonTranslationExportManifest,
+  type CanonicalJsonTranslationPackRef,
+  type AnyTranslationExportManifest,
   type ScopeAwarePackStore,
-  type TranslationExportManifest,
-  type TranslationPackRef,
   type TranslationManifestVerificationPort,
   type TranslationSyncState,
 } from "@trans-hub/translation-export-client";
 import {
+  NodeCanonicalJsonPackVerifier,
   NodeEd25519ManifestVerifier,
-  NodeZstdPackVerifier,
 } from "@trans-hub/translation-export-client/node";
 
 import type { TransportClient } from "./http-transport";
@@ -18,9 +19,17 @@ import { TRANS_HUB_TRANSLATION_EXPORT_TRUST_ROOTS } from "./product-config";
 import type {
   PluginTranslationApplication,
   PluginTranslationProvenanceKind,
+  PluginSourceCompatibility,
 } from "./plugin-ui-runtime";
 
-export type { TranslationExportManifest, TranslationPackRef };
+export type TranslationExportManifest = CanonicalJsonTranslationExportManifest;
+export type TranslationPackRef = CanonicalJsonTranslationPackRef;
+
+/** Adapter-owned renderer identity; the shared export client only verifies bytes. */
+export const CANONICAL_OCCURRENCE_JSON_RENDERER_PROFILE = Object.freeze({
+  key: "canonical-occurrence-json",
+  revision: 1,
+});
 
 export interface TranslationRow {
   readonly noteId: string;
@@ -37,6 +46,7 @@ export interface PluginTranslationRow {
   readonly provenanceKind?: PluginTranslationProvenanceKind;
   readonly application?: PluginTranslationApplication;
   readonly nativeTarget?: string;
+  readonly sourceCompatibility?: PluginSourceCompatibility;
 }
 
 export interface TranslationSyncOutput<Row> {
@@ -59,9 +69,9 @@ interface DownloadInput {
   readonly sourceVersionId: string;
   readonly targetLocale: string;
   readonly packStore: ScopeAwarePackStore;
-  readonly previous?: TranslationSyncState;
+  readonly previous?: TranslationSyncState<AnyTranslationExportManifest>;
   readonly developmentDownloadOrigin?: string;
-  readonly manifestVerifier?: TranslationManifestVerificationPort;
+  readonly manifestVerifier?: TranslationManifestVerificationPort<CanonicalJsonTranslationExportManifest>;
 }
 
 export async function downloadTranslations(input: DownloadInput & {
@@ -90,6 +100,7 @@ export async function downloadPluginTranslations(input: DownloadInput & {
       translatedText: row.translatedText,
       translationDigest: row.translationDigest,
       ...parseDeliveryProvenance(row.structuredContent),
+      ...parseSourceCompatibility(row.structuredContent),
     };
   });
   assertUnique(rows.map((row) => row.stringKey), "插件译文 occurrence 重复");
@@ -122,6 +133,7 @@ export function parsePluginTranslationPack(
       translatedText: row.translatedText,
       translationDigest: row.translationDigest,
       ...parseDeliveryProvenance(row.structuredContent),
+      ...parseSourceCompatibility(row.structuredContent),
     };
   });
 }
@@ -140,12 +152,18 @@ async function downloadTranslationOccurrences(
   const downloader = new ObsidianPackDownloader({
     ...(input.developmentDownloadOrigin === undefined ? {} : { developmentOrigin: input.developmentDownloadOrigin }),
   });
+  const previous = input.previous?.manifest.revision === 3
+    ? input.previous as TranslationSyncState<CanonicalJsonTranslationExportManifest>
+    : undefined;
   const result = await new TranslationExportClient({
     transport: input.transport,
-    endpoint: publicClientTranslationExportEndpoint({ bearerCredential: input.accessToken }),
+    endpoint: publicClientTranslationExportEndpoint({
+      bearerCredential: input.accessToken,
+      manifestRevision: 3,
+    }),
     store: input.packStore,
     downloader,
-    verifier: new NodeZstdPackVerifier(),
+    verifier: new NodeCanonicalJsonPackVerifier(),
     manifestVerifier: input.manifestVerifier ?? new NodeEd25519ManifestVerifier({
       roots: TRANS_HUB_TRANSLATION_EXPORT_TRUST_ROOTS,
     }),
@@ -157,7 +175,7 @@ async function downloadTranslationOccurrences(
     sourceVersionId: input.sourceVersionId,
     targetLocale: input.targetLocale,
     targetVariant: "default",
-    ...(input.previous === undefined ? {} : { previous: input.previous }),
+    ...(previous === undefined ? {} : { previous }),
   });
   const packs = new Map(result.manifest.packs.map((pack) => [pack.packId, pack]));
   const rows = result.packs.flatMap((verified) => {
@@ -219,6 +237,41 @@ function parseDeliveryProvenance(
   }
   if (nativeTarget !== undefined) throw new Error("translation_delivery_native_target_unexpected");
   return { provenanceKind, application };
+}
+
+function parseSourceCompatibility(
+  structuredContent: Readonly<Record<string, unknown>>,
+): Pick<PluginTranslationRow, "sourceCompatibility"> {
+  const raw = structuredContent.source_compatibility;
+  if (!isRecord(raw)
+    || raw.schema !== "trans-hub.source-compatibility"
+    || raw.version !== 1
+    || typeof raw.semantic_role !== "string"
+    || raw.semantic_role === ""
+    || !Array.isArray(raw.content_scopes)
+    || raw.content_scopes.length === 0
+    || typeof raw.placeholder_signature !== "string"
+    || typeof raw.format_signature !== "string"
+    || raw.format_signature === ""
+    || typeof raw.source_content_digest !== "string"
+    || !/^sha256:[0-9a-f]{64}$/u.test(raw.source_content_digest)) {
+    // Exact-version packs predate this additive field. Cross-version
+    // validation treats absence or malformed evidence as an inapplicable row.
+    return {};
+  }
+  const contentScopes = raw.content_scopes;
+  if (!contentScopes.every((scope): scope is string => typeof scope === "string" && scope !== "")
+    || [...new Set(contentScopes)].length !== contentScopes.length
+    || [...contentScopes].sort().some((scope, index) => scope !== contentScopes[index])) return {};
+  return {
+    sourceCompatibility: {
+      semanticRole: raw.semantic_role,
+      contentScopes,
+      placeholderSignature: raw.placeholder_signature,
+      formatSignature: raw.format_signature,
+      sourceContentDigest: raw.source_content_digest,
+    },
+  };
 }
 
 function isPluginTranslationProvenanceKind(

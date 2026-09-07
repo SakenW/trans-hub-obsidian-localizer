@@ -7,11 +7,13 @@ import {
   selectApplicablePluginTranslations,
 } from "../src/plugin-automation";
 import { EMPTY_PLUGIN_STATE, type PluginState } from "../src/plugin-state";
+import { digestPluginBundle } from "../src/plugin-string-scanner";
 
 const CONTROLLER_SETTINGS = {
   targetLocale: "zh-CN" as const,
   pluginTranslationEnabled: true,
   pluginMetadataTranslationEnabled: true,
+  thirdPartyFilePatchingEnabled: false,
   excludedPluginIds: [],
 };
 
@@ -119,6 +121,67 @@ function settingsDocument(items: readonly FakeNavItem[]): Document {
 }
 
 describe("selectApplicablePluginTranslations", () => {
+  it("refuses a direct third-party file patch request until the user enables it", async () => {
+    const controller = automationController({} as App, EMPTY_PLUGIN_STATE);
+
+    await expect(controller.applyThirdPartyFilePatches(["other-plugin"])).resolves.toEqual({
+      applied: 0,
+      skipped: 1,
+      conflicts: 0,
+    });
+  });
+
+  it("restores an actually patched third-party file when the main localization switch is disabled", async () => {
+    const original = 'setting.setName("Settings");';
+    const patched = 'setting.setName("设置");';
+    const originalDigest = await digestPluginBundle(original);
+    const patchedDigest = await digestPluginBundle(patched);
+    const directory = ".obsidian/plugins/sample-plugin";
+    const backupName = `${originalDigest}.main.js`;
+    const files = new Map<string, string>([
+      [`${directory}/manifest.json`, JSON.stringify({
+        id: "sample-plugin", name: "Sample", version: "1.0.0", description: "",
+      })],
+      [`${directory}/main.js`, patched],
+      [`${directory}/.trans-hub-localizer/${backupName}`, original],
+      [`${directory}/.trans-hub-localizer/patch-receipt.json`, JSON.stringify({
+        version: 2, pluginId: "sample-plugin", pluginVersion: "1.0.0",
+        originalDigest, patchedDigest, digestScheme: "bundle-v2", backupName,
+      })],
+    ]);
+    const adapter = {
+      exists: (path: string) => Promise.resolve(files.has(path) || path === ".obsidian/plugins"),
+      list: () => Promise.resolve({ files: [], folders: [directory] }),
+      read: (path: string) => {
+        const value = files.get(path);
+        if (value === undefined) throw new Error(`missing:${path}`);
+        return Promise.resolve(value);
+      },
+      write: (path: string, value: string) => { files.set(path, value); return Promise.resolve(); },
+      remove: (path: string) => { files.delete(path); return Promise.resolve(); },
+      rename: (from: string, to: string) => {
+        const value = files.get(from);
+        if (value === undefined) throw new Error(`missing:${from}`);
+        files.delete(from); files.set(to, value); return Promise.resolve();
+      },
+    };
+    const app = {
+      vault: { configDir: ".obsidian", adapter },
+      plugins: { enabledPlugins: new Set(["sample-plugin"]) },
+      workspace: { on: () => ({ name: "unused" }), offref: () => {} },
+    } as unknown as App;
+    const controller = automationController(app, EMPTY_PLUGIN_STATE, {
+      ...CONTROLLER_SETTINGS,
+      pluginTranslationEnabled: false,
+      thirdPartyFilePatchingEnabled: true,
+    });
+
+    await controller.refreshRuntime();
+
+    expect(files.get(`${directory}/main.js`)).toBe(original);
+    expect(files.has(`${directory}/.trans-hub-localizer/patch-receipt.json`)).toBe(false);
+  });
+
   it("reuses an unchanged exact catalog instead of rescanning its bundle", () => {
     const catalog = {
       pluginId: "large-plugin",
@@ -179,6 +242,10 @@ describe("selectApplicablePluginTranslations", () => {
     const handlers = new Map<string, unknown>();
     const removed: string[] = [];
     const app = {
+      vault: {
+        configDir: ".obsidian",
+        adapter: { exists: () => Promise.resolve(false) },
+      },
       workspace: {
         on(name: string, callback: unknown) {
           handlers.set(name, callback);
@@ -199,6 +266,7 @@ describe("selectApplicablePluginTranslations", () => {
           targetLocale: "zh-CN",
           pluginTranslationEnabled: true,
           pluginMetadataTranslationEnabled: true,
+          thirdPartyFilePatchingEnabled: false,
           excludedPluginIds: [],
         }),
         state: () => EMPTY_PLUGIN_STATE,
@@ -232,7 +300,7 @@ describe("selectApplicablePluginTranslations", () => {
     }
   });
 
-  it("removes window listeners when the runtime is refreshed while disabled", () => {
+  it("removes window listeners when the runtime is refreshed while disabled", async () => {
     class MockMutationObserver {
       constructor(_callback: MutationCallback) {}
       observe(_target: Node, _options: MutationObserverInit): void {}
@@ -255,6 +323,10 @@ describe("selectApplicablePluginTranslations", () => {
     const removed: string[] = [];
     let enabled = true;
     const app = {
+      vault: {
+        configDir: ".obsidian",
+        adapter: { exists: () => Promise.resolve(false) },
+      },
       workspace: {
         on(name: string, callback: unknown) {
           const ref = { name, callback };
@@ -277,6 +349,7 @@ describe("selectApplicablePluginTranslations", () => {
           targetLocale: "zh-CN",
           pluginTranslationEnabled: enabled,
           pluginMetadataTranslationEnabled: true,
+          thirdPartyFilePatchingEnabled: false,
           excludedPluginIds: [],
         }),
         state: () => EMPTY_PLUGIN_STATE,
@@ -290,7 +363,7 @@ describe("selectApplicablePluginTranslations", () => {
 
       controller.start();
       enabled = false;
-      controller.refreshRuntime();
+      await controller.refreshRuntime();
 
       expect(removed).toEqual(["window-open", "window-close"]);
       expect(handlers.get("window-open")).toBeUndefined();

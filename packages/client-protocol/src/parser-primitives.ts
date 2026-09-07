@@ -17,7 +17,6 @@ export const CLIENT_TYPES = [
 export const PUBLIC_CAPABILITIES = [
   "contribution:submit",
   "contribution:read_receipt",
-  "public_upload:write_quarantine",
   "translation:read",
 ] as const;
 export const CONTRIBUTION_TYPES = [

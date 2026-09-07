@@ -58,10 +58,12 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     });
     expect(result).toEqual({
       sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
+      authorityPluginVersion: "0.5.68",
       artifactDigest: ARTIFACT_DIGEST,
       repository: "blacksmithgu/obsidian-dataview",
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
@@ -73,24 +75,77 @@ describe("resolvePublishedPluginSource", () => {
       missingUnitCount: 0,
     });
     expect(requestPaths[0]).toContain("object_slug=dataview");
-    expect(requestPaths[0]).toContain("version_key=0.5.68");
-    expect(requestPaths[0]).toContain("target_locale=zh-CN");
+    expect(requestPaths[0]).toContain("/v1/public/ecosystems/obsidian/objects?");
+    expect(requestPaths[0]).not.toContain("version_key=");
   });
 
-  it("maps only the verified Obsidian registry owner/repo identity to GitHub", async () => {
+  it("maps the authenticated current source to its authority version without sorting versions", async () => {
     const body = catalog();
-    Object.assign(body.objects[0].versions[0], {
-      verified_external_registry_key: "obsidian_community_plugins",
-      canonical_external_identity: "owner/generic",
+    const currentSource = "019f0000-0000-7000-8000-000000000070";
+    const currentObjectVersion = "019f0000-0000-7000-8000-000000000071";
+    const currentIdentity = {
+      ...CATALOG_IDENTITY,
+      resourceVersion: "0.5.70",
+      artifactDigest: "70".repeat(32),
+      digest: "71".repeat(32),
+    };
+    body.objects[0].versions.unshift({
+      object_version_id: currentObjectVersion,
+      version_key: "0.5.70",
+      content_digest: "70".repeat(32),
+      verified_external_registry_key: "official-directory",
+      canonical_external_identity: "blacksmithgu/obsidian-dataview",
+    });
+    body.objects[0].coverage.unshift({
+      ...body.objects[0].coverage[0],
+      object_version_id: currentObjectVersion,
+      source_version_id: currentSource,
+      catalog_identity: currentIdentity as never,
     });
 
-    await expect(resolvePublishedPluginSource({
+    const resolved = await resolvePublishedPluginSource({
       transport: transport(200, body),
       pluginId: "dataview",
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
-    })).resolves.toEqual(expect.objectContaining({ repository: "owner/generic" }));
+      authoritativeSourceVersionId: currentSource,
+    });
+    expect(resolved?.sourceVersionId).toBe(currentSource);
+    expect(resolved?.objectVersionId).toBe(currentObjectVersion);
+    expect(resolved?.authorityPluginVersion).toBe("0.5.70");
+    expect(resolved?.catalogIdentity).toEqual(currentIdentity);
+    expect(resolved?.catalogIdentityExact).toBe(false);
+  });
+
+  it("fails closed when the current source has no object-list coverage mapping", async () => {
+    const resolved = await resolvePublishedPluginSource({
+      transport: transport(200, catalog()),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: "019f0000-0000-7000-8000-000000000099",
+    });
+    expect(resolved).toBeUndefined();
+  });
+
+  it("maps only the verified Obsidian registry owner/repo identity to GitHub", async () => {
+    const body = catalog();
+    Object.assign(body.objects[0].versions[0], {
+      verified_external_registry_key: "official-directory",
+      canonical_external_identity: "owner/generic",
+    });
+
+    const resolved = await resolvePublishedPluginSource({
+      transport: transport(200, body),
+      pluginId: "dataview",
+      pluginVersion: "0.5.68",
+      targetLocale: "zh-CN",
+      localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
+    });
+    expect(resolved?.repository).toBe("owner/generic");
 
     Object.assign(body.objects[0].versions[0], {
       canonical_external_identity: "owner/generic/releases/latest",
@@ -101,6 +156,7 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.not.toHaveProperty("repository");
 
     for (const identity of [
@@ -116,6 +172,7 @@ describe("resolvePublishedPluginSource", () => {
         pluginVersion: "0.5.68",
         targetLocale: "zh-CN",
         localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
       })).resolves.not.toHaveProperty("repository");
     }
 
@@ -129,6 +186,7 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.not.toHaveProperty("repository");
   });
 
@@ -153,6 +211,7 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.toEqual(expect.objectContaining({
       sourceVersionId: SOURCE_VERSION_ID,
       catalogIdentityExact: false,
@@ -170,9 +229,11 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.toEqual({
       sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
+      authorityPluginVersion: "0.5.68",
       artifactDigest: ARTIFACT_DIGEST,
       repository: "blacksmithgu/obsidian-dataview",
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
@@ -196,9 +257,11 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.toEqual({
       sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
+      authorityPluginVersion: "0.5.68",
       artifactDigest: ARTIFACT_DIGEST,
       repository: "blacksmithgu/obsidian-dataview",
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
@@ -224,6 +287,7 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.toEqual(expect.objectContaining({
       upstreamNativeCount: 15,
       upstreamScopedNativeCount: 15,
@@ -231,7 +295,7 @@ describe("resolvePublishedPluginSource", () => {
     }));
   });
 
-  it("fails closed when one plugin version resolves to multiple source versions", async () => {
+  it("uses the current pointer instead of choosing among source versions", async () => {
     const body = catalog();
     body.objects[0].coverage.push({
       ...body.objects[0].coverage[0],
@@ -244,7 +308,8 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
-    })).rejects.toThrow("不唯一");
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
+    })).resolves.toEqual(expect.objectContaining({ sourceVersionId: SOURCE_VERSION_ID }));
   });
 
   it("fails closed when the authority repeats the same exact coverage coordinate", async () => {
@@ -256,7 +321,8 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
-    })).rejects.toThrow("覆盖行不唯一");
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
+    })).rejects.toThrow("当前权威源映射不唯一");
   });
 
   it("ignores higher-coverage candidates whose catalog identity does not match", async () => {
@@ -275,9 +341,11 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.toEqual({
       sourceVersionId: SOURCE_VERSION_ID,
       objectVersionId: OBJECT_VERSION_ID,
+      authorityPluginVersion: "0.5.68",
       artifactDigest: ARTIFACT_DIGEST,
       repository: "blacksmithgu/obsidian-dataview",
       sourceSnapshotDigest: SNAPSHOT_DIGEST,
@@ -299,6 +367,7 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.toBeUndefined();
   });
 
@@ -314,6 +383,7 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.toEqual(expect.objectContaining({
       sourceVersionId: SOURCE_VERSION_ID,
       catalogIdentityExact: false,
@@ -331,6 +401,7 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.toEqual(expect.objectContaining({
       sourceVersionId: SOURCE_VERSION_ID,
       catalogIdentityExact: false,
@@ -351,6 +422,7 @@ describe("resolvePublishedPluginSource", () => {
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
     })).resolves.toEqual(expect.objectContaining({
       sourceVersionId: SOURCE_VERSION_ID,
       catalogIdentityExact: false,
@@ -359,7 +431,7 @@ describe("resolvePublishedPluginSource", () => {
     }));
   });
 
-  it("fails closed when mismatched authority catalogs are ambiguous", async () => {
+  it("does not let another source version compete with the current pointer", async () => {
     const body = catalog();
     body.objects[0].coverage[0].catalog_identity = {
       ...CATALOG_IDENTITY,
@@ -370,13 +442,16 @@ describe("resolvePublishedPluginSource", () => {
       source_version_id: "019f0000-0000-7000-8000-000000000003",
       catalog_identity: { ...CATALOG_IDENTITY, digest: "98".repeat(32) },
     });
-    await expect(resolvePublishedPluginSource({
+    const resolved = await resolvePublishedPluginSource({
       transport: transport(200, body),
       pluginId: "dataview",
       pluginVersion: "0.5.68",
       targetLocale: "zh-CN",
       localCatalogIdentity: CATALOG_IDENTITY,
-    })).rejects.toThrow("不唯一");
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
+    });
+    expect(resolved?.sourceVersionId).toBe(SOURCE_VERSION_ID);
+    expect(resolved?.catalogIdentity?.digest).toBe("99".repeat(32));
   });
 });
 
@@ -384,7 +459,11 @@ function transport(status: number, body: unknown, paths: string[] = []): Transpo
   return {
     send: <TResponse>(request: { readonly path: string }) => {
       paths.push(request.path);
-      return Promise.resolve({ status, body: body as TResponse, headers: {} });
+      const responseBody = request.path.includes("/objects?")
+        && typeof body === "object" && body !== null && "objects" in body
+        ? { items: (body as { readonly objects: unknown }).objects }
+        : body;
+      return Promise.resolve({ status, body: responseBody as TResponse, headers: {} });
     },
   };
 }
@@ -398,7 +477,7 @@ function catalog() {
         object_version_id: OBJECT_VERSION_ID,
         version_key: "0.5.68",
         content_digest: ARTIFACT_DIGEST,
-        verified_external_registry_key: "obsidian_community_plugins",
+        verified_external_registry_key: "official-directory",
         canonical_external_identity: "blacksmithgu/obsidian-dataview",
       }],
       coverage: [{

@@ -7,7 +7,11 @@ import type {
   LocalizationDemandStatus,
   LocalizationDemandStatusBatch,
   PublicCapability,
-  PublicUploadGrant,
+  PublicDiscoveryIntent,
+  PublicDiscoveryReceipt,
+  PublicDiscoveryStatus,
+  PublicLocalizationStatusBatch,
+  PublicLocalizationStatusQuery,
 } from "@trans-hub/client-protocol";
 
 import type {
@@ -53,6 +57,15 @@ export interface BootstrapInput {
   readonly signal?: AbortSignal;
 }
 
+/** Product adapters accept locale strings at their own boundary. The public
+ * client validates them with the protocol parser before sending the request. */
+export type PublicDiscoverySubmission = Omit<
+  PublicDiscoveryIntent,
+  "installationProof" | "targetLocales"
+> & {
+  readonly targetLocales: readonly string[];
+};
+
 export interface PublicClientControl {
   prepareBootstrap(input: PrepareBootstrapInput): PreparedBootstrap;
   bootstrap(input: BootstrapInput): Promise<BootstrapResponse>;
@@ -60,6 +73,17 @@ export interface PublicClientControl {
     payload: ContributionSigningPayload,
     signal?: AbortSignal,
   ): Promise<ContributionStateReceipt>;
+  submitPublicDiscovery(
+    payload: PublicDiscoverySubmission,
+    signal?: AbortSignal,
+  ): Promise<PublicDiscoveryReceipt>;
+  getPublicDiscoveryStatus(
+    discoveryId: string,
+    signal?: AbortSignal,
+  ): Promise<PublicDiscoveryStatus>;
+  getPublicLocalizationStatusBatch(
+    input: GetPublicLocalizationStatusBatchInput,
+  ): Promise<PublicLocalizationStatusBatch>;
   getContributionStatus(
     contributionId: string,
     signal?: AbortSignal,
@@ -71,18 +95,14 @@ export interface PublicClientControl {
   getLocalizationDemandStatusBatch(
     input: GetLocalizationDemandStatusBatchInput,
   ): Promise<LocalizationDemandStatusBatch>;
-  createUploadGrant(input: CreateUploadGrantInput): Promise<PublicUploadGrant>;
-}
-
-export interface CreateUploadGrantInput {
-  readonly contributionId: string;
-  readonly idempotencyKey: string;
-  readonly componentRole: string;
-  readonly componentName: string;
-  readonly signal?: AbortSignal;
 }
 
 export interface GetLocalizationDemandStatusBatchInput {
   readonly contributionIds: readonly string[];
+  readonly signal?: AbortSignal;
+}
+
+export interface GetPublicLocalizationStatusBatchInput {
+  readonly queries: readonly PublicLocalizationStatusQuery[];
   readonly signal?: AbortSignal;
 }

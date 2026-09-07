@@ -8,6 +8,15 @@ export type PluginTranslationProvenanceKind =
 export type PluginTranslationApplication = "fill" | "correction";
 export type PluginTranslationScope = "runtime-ui" | "metadata" | "readme";
 
+export interface PluginSourceCompatibility {
+  readonly semanticRole: string;
+  readonly contentScopes: readonly string[];
+  readonly placeholderSignature: string;
+  readonly formatSignature: string;
+  /** Server digest over exact raw UTF-8 source bytes; retained as evidence. */
+  readonly sourceContentDigest: string;
+}
+
 export interface PluginUiTranslation {
   readonly pluginId: string;
   readonly source: string;
@@ -15,6 +24,8 @@ export interface PluginUiTranslation {
   readonly provenanceKind?: PluginTranslationProvenanceKind;
   readonly application?: PluginTranslationApplication;
   readonly scopes?: readonly PluginTranslationScope[];
+  /** Required for runtime reuse when the server authority version differs. */
+  readonly sourceCompatibility?: PluginSourceCompatibility;
   /** Exact upstream-native target that an explicitly reviewed correction may replace. */
   readonly nativeTarget?: string;
 }
@@ -102,7 +113,7 @@ export function buildRuntimeTranslationPlan(
     const sourceTemplate = compileTemplate(source);
     if (sourceTemplate === null) continue;
     const targetTokenIndexes = templateTokenIndexes(target);
-    if (targetTokenIndexes.join("\u0000") !== sourceTemplate.tokenIndexes.join("\u0000")) continue;
+    if (!sameRuntimeExpressionMultiset(targetTokenIndexes, sourceTemplate.tokenIndexes)) continue;
     templates.push({ source: sourceTemplate.pattern, target, tokenIndexes: sourceTemplate.tokenIndexes });
     const nativeTarget = compileTemplate(target);
     if (nativeTarget !== null) nativeTargetTemplates.push(nativeTarget.pattern);
@@ -117,7 +128,7 @@ export function translatePluginUiValue(
   if (raw.length > 2_000) return undefined;
   const source = raw.trim();
   const exactTarget = plan.exact.get(source);
-  if (exactTarget !== undefined) return raw.replace(source, exactTarget);
+  if (exactTarget !== undefined) return raw.replace(source, () => exactTarget);
   if (plan.nativeTargetTemplates.some((pattern) => pattern.test(source))) return undefined;
   const candidates = new Set<string>();
   for (const rule of plan.templates) {
@@ -127,7 +138,7 @@ export function translatePluginUiValue(
     candidates.add(rule.target.replace(DYNAMIC_TOKEN, (_token, index: string) => values.get(Number(index)) ?? ""));
   }
   if (candidates.size !== 1) return undefined;
-  return raw.replace(source, [...candidates][0] ?? source);
+  return raw.replace(source, () => [...candidates][0] ?? source);
 }
 
 export function shouldTranslatePluginUiElement(element: Pick<Element, "closest">): boolean {
@@ -255,6 +266,7 @@ export class PluginUiTranslationRuntime {
         if (mutation.type === "attributes" && isElementNode(mutation.target)) {
           this.translateAttributes(mutation.target);
         }
+        for (const node of Array.from(mutation.removedNodes)) this.restoreDetachedTree(node);
         for (const node of Array.from(mutation.addedNodes)) this.translateTree(node);
       }
     });
@@ -314,26 +326,32 @@ export class PluginUiTranslationRuntime {
       return;
     }
     const raw = node.data;
+    if (this.restoredText.get(node)?.translated === raw) return;
+    // The host replaced our output: its latest value is now the restore source.
+    this.restoredText.delete(node);
     const plan = shouldUsePluginMetadataPlan(parent)
       ? this.metadataPlan
       : this.runtimePlanForElement(parent);
     if (plan === undefined) return;
     const translated = translatePluginUiValue(raw, plan);
     if (translated === undefined) return;
-    if (!this.restoredText.has(node)) this.restoredText.set(node, { original: raw, translated });
+    this.restoredText.set(node, { original: raw, translated });
     node.data = translated;
   }
 
   private translateCommunityField(field: Element): void {
     if (field.closest(EXCLUDED_SELECTOR) !== null) return;
     const nodes = communityFieldTextNodes(field);
+    for (const node of nodes) {
+      if (this.restoredText.get(node)?.translated !== node.data) this.restoredText.delete(node);
+    }
+    if (nodes.every((node) => this.restoredText.get(node)?.translated === node.data)) return;
     const translatedParts = translatePluginUiFieldParts(nodes.map((node) => node.data), this.metadataPlan);
     if (translatedParts === undefined) return;
     nodes.forEach((node, index) => {
       const translated = translatedParts[index] ?? "";
-      if (!this.restoredText.has(node)) {
-        this.restoredText.set(node, { original: node.data, translated });
-      }
+      const original = this.restoredText.get(node)?.original ?? node.data;
+      this.restoredText.set(node, { original, translated });
       node.data = translated;
     });
   }
@@ -366,11 +384,13 @@ export class PluginUiTranslationRuntime {
     if (plan === undefined) return;
     for (const attribute of TRANSLATABLE_ATTRIBUTES) {
       const raw = element.getAttribute(attribute);
+      const values = this.restoredAttributes.get(element) ?? new Map<string, { original: string; translated: string }>();
+      if (values.get(attribute)?.translated === raw) continue;
+      values.delete(attribute);
       if (raw === null) continue;
       const translated = translatePluginUiValue(raw, plan);
       if (translated === undefined) continue;
-      const values = this.restoredAttributes.get(element) ?? new Map<string, { original: string; translated: string }>();
-      if (!values.has(attribute)) values.set(attribute, { original: raw, translated });
+      values.set(attribute, { original: raw, translated });
       this.restoredAttributes.set(element, values);
       element.setAttribute(attribute, translated);
     }
@@ -378,7 +398,11 @@ export class PluginUiTranslationRuntime {
 
   private runtimePlanForElement(element: Element): RuntimeTranslationPlan | undefined {
     const settingsModal = element.closest(SETTINGS_MODAL_SELECTOR);
-    if (settingsModal === null) return this.runtimePlan;
+    // A matching source string alone never proves which plugin rendered a
+    // normal workspace node.  The active settings tab has a host-provided
+    // owner identity; every other runtime surface fails closed until the
+    // adapter can supply equivalent ownership evidence.
+    if (settingsModal === null) return undefined;
     if (element.closest(".vertical-tab-nav-item") !== null) return this.metadataPlan;
     const owner = this.settingsPluginOwner(settingsModal);
     return owner === undefined ? undefined : this.runtimePlansByPluginId.get(owner);
@@ -412,6 +436,10 @@ export class PluginUiTranslationRuntime {
     this.restoreWhere(() => true);
   }
 
+  private restoreDetachedTree(root: Node): void {
+    this.restoreWhere((node) => containsNode(root, node));
+  }
+
   private restoreWhere(contains: (node: Node) => boolean): void {
     for (const [block, value] of this.restoredReadmeBlocks) {
       if (!contains(block)) continue;
@@ -432,6 +460,11 @@ export class PluginUiTranslationRuntime {
       this.restoredAttributes.delete(element);
     }
   }
+}
+
+function containsNode(root: Node, candidate: Node): boolean {
+  if (root === candidate) return true;
+  return "contains" in root && root.contains(candidate);
 }
 
 interface SerializedReadmeBlock {
@@ -529,6 +562,16 @@ function compileTemplate(value: string): { readonly pattern: RegExp; readonly to
 
 function templateTokenIndexes(value: string): number[] {
   return [...value.matchAll(DYNAMIC_TOKEN)].map((match) => Number(match[1]));
+}
+
+function sameRuntimeExpressionMultiset(
+  left: readonly number[],
+  right: readonly number[],
+): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort((a, b) => a - b);
+  const sortedRight = [...right].sort((a, b) => a - b);
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
 }
 
 function escapeRegExp(value: string): string {

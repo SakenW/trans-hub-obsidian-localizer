@@ -11,14 +11,17 @@ import type {
 export const CONTROL_PATHS = Object.freeze({
   bootstrap: "/v1/public-client/bootstrap",
   contributions: "/v1/public-client/contributions",
+  discoveries: "/v1/public-client/discoveries",
+  discoveryStatus: (discoveryId: string) =>
+    `/v1/public-client/discoveries/${pathSegment(discoveryId)}/status`,
+  publicLocalizationStatusBatch:
+    "/v1/public-client/public-localization-status/batch",
   contributionStatus: (contributionId: string) =>
     `/v1/public-client/contributions/${pathSegment(contributionId)}/status`,
   localizationDemandStatus: (contributionId: string) =>
     `/v1/public-client/contributions/${pathSegment(contributionId)}/localization-demand-status`,
   localizationDemandStatusBatch:
     "/v1/public-client/localization-demand-status/batch",
-  createUploadGrant: (contributionId: string) =>
-    `/v1/public-client/contributions/${pathSegment(contributionId)}/upload-grants`,
 });
 
 function pathSegment(value: string): string {

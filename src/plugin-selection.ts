@@ -1,6 +1,7 @@
 export interface SelectablePlugin {
   readonly id: string;
   readonly name: string;
+  readonly displayName?: string;
 }
 
 export function selectedPluginCount(
@@ -42,6 +43,6 @@ export function filterSelectablePlugins<T extends SelectablePlugin>(
   const normalizedQuery = query.normalize("NFC").trim().toLocaleLowerCase();
   if (normalizedQuery === "") return [...plugins];
   return plugins.filter((plugin) =>
-    `${plugin.name}\n${plugin.id}`.normalize("NFC").toLocaleLowerCase().includes(normalizedQuery),
+    `${plugin.name}\n${plugin.displayName ?? ""}\n${plugin.id}`.normalize("NFC").toLocaleLowerCase().includes(normalizedQuery),
   );
 }

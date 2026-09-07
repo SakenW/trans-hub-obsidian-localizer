@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   describePluginLocalizationStatus,
-  PLUGIN_LOCALIZATION_STATUS_FILTERS,
   pluginManualRetryKind,
   visiblePluginManualRetryKind,
 } from "../src/plugin-localization-status";
@@ -61,292 +60,404 @@ describe("describePluginLocalizationStatus", () => {
     })).toEqual({ kind: "login-required", label: "重新连接后继续同步" });
   });
 
-  it("新来源仍在处理时不显示旧的本地化终止状态", () => {
+  it("将公共目录发现的等待与阻断状态明确呈现", () => {
+    const baseDiscovery = {
+      discoveryId: "019f0000-0000-7000-8000-000000000001",
+      targetLocales: ["zh-CN"] as const,
+      classification: "pending_registry_verification",
+      taskState: "verifying_registry",
+      installationId: "019f0000-0000-7000-8000-000000000002",
+      submittedAt: "2026-08-01T00:00:00Z",
+      catalogIdentityDigest: exactIdentity.digest,
+    };
     expect(describePluginLocalizationStatus({
-      submission: {
-        ...baseSubmission,
-        contributionState: "received",
-        localizationContributionId: "localization-contribution",
-        localizationContributionState: "received",
-        localizationDemandStatus: {
-          state: "distribution_blocked",
-          sourceVersionId: "old-source",
-          targetLocale: "zh-CN",
-          targetVariant: "default",
-          totalUnitCount: 1,
-          workItemCount: 1,
-          nativeUnitCount: 0,
-          queuedCount: 0,
-          runningCount: 0,
-          succeededCount: 1,
-          failedCount: 0,
-          reviewedUnitCount: 0,
-          publishedUnitCount: 0,
-          retryAfterSeconds: 0,
-          failureCode: "PublicDistributionLicenseEvidenceMissing",
-          failureRetryable: false,
-          updatedAt: "2026-07-29T00:00:00Z",
+      publicDiscovery: baseDiscovery,
+      targetLocale: "zh-CN",
+    })).toEqual({ kind: "waiting", label: "正在验证公共目录条目…" });
+    const retryableBlock = {
+      ...baseDiscovery,
+      statusRevision: 2 as const,
+      classification: "blocked",
+      taskState: "blocked",
+      retryAllowed: true,
+      retryAfterSeconds: 0,
+      blockedReasonCode: "registry_projection_stale",
+    };
+    expect(describePluginLocalizationStatus({
+      publicDiscovery: retryableBlock,
+      targetLocale: "zh-CN",
+    })).toEqual({ kind: "failed", label: "目录条目暂无法处理。点击右侧“重试此插件”。" });
+    expect(visiblePluginManualRetryKind({
+      state: {
+        ...EMPTY_PLUGIN_STATE,
+        publicPluginDiscoveries: {
+          dataview: retryableBlock,
         },
       },
-      catalog: {
-        pluginId: "dataview",
-        pluginName: "Dataview",
-        pluginVersion: "0.5.68",
-        sourceLocale: "en",
-        digest: "catalog",
-        artifactDigest: "ab".repeat(32),
-        scannedAt: "2026-07-29T00:00:00Z",
-        strings: [],
-      },
+      pluginId: "dataview",
       targetLocale: "zh-CN",
-    })).toEqual({ kind: "waiting", label: "等待可信来源收录" });
+      sourceSelectable: true,
+      hasSession: true,
+    })).toBe("resubmit");
+
   });
 
-  it("shows actionable machine translation and publication progress", () => {
-    const status = {
-      state: "mt_running" as const,
-      sourceVersionId: "source-version",
-      targetLocale: "zh-CN",
-      targetVariant: "default",
-      totalUnitCount: 77,
-      workItemCount: 7,
-      nativeUnitCount: 70,
-      queuedCount: 0,
-      runningCount: 2,
-      succeededCount: 5,
-      failedCount: 0,
-      reviewedUnitCount: 0,
-      publishedUnitCount: 0,
-      retryAfterSeconds: 10,
-      failureRetryable: false,
-      updatedAt: "2026-07-20T00:00:00Z",
-    };
-    expect(describePluginLocalizationStatus({
-      submission: { ...baseSubmission, localizationDemandStatus: status },
-      targetLocale: "zh-CN",
-    })).toEqual({
-      kind: "waiting",
-      label: "机器翻译中：已完成 5/7 条，正在处理 2 条",
-    });
-    expect(describePluginLocalizationStatus({
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: {
-          ...status,
-          state: "export_pending",
-          runningCount: 0,
-          succeededCount: 7,
+  it("本地化投影阻断但发现 lifecycle 仍在途时不允许重提", () => {
+    expect(visiblePluginManualRetryKind({
+      state: {
+        ...EMPTY_PLUGIN_STATE,
+        publicPluginDiscoveries: {
+          dataview: {
+            discoveryId: "019f0000-0000-7000-8000-000000000001",
+            targetLocales: ["zh-CN"],
+            classification: "eligible_for_processing",
+            taskState: "queued_for_parsing",
+            installationId: "019f0000-0000-7000-8000-000000000002",
+            submittedAt: "2026-08-01T00:00:00Z",
+            localizationProjection: {
+              kind: "public_localization_status_projection",
+              protocol: { protocol: "trans-hub.client-protocol", revision: 1, schemaRevision: 1 },
+              projectionRevision: 1,
+              discoveryId: "019f0000-0000-7000-8000-000000000001",
+              registryKey: "official-directory",
+              externalObjectId: "dataview",
+              targetLocale: "zh-CN" as never,
+              catalogIdentityDigest: null,
+              sourceVersionId: null,
+              stage: "blocked",
+              updatedAt: "2026-08-01T00:01:00Z",
+            },
+          },
         },
       },
+      pluginId: "dataview",
+      targetLocale: "zh-CN",
+      sourceSelectable: true,
+      hasSession: true,
+    })).toBeNull();
+
+  });
+
+  it("已验证但未形成发布投影的目录发现继续等待且不允许重提", () => {
+    const discovery = {
+      discoveryId: "019f0000-0000-7000-8000-000000000001",
+      targetLocales: ["zh-CN"] as const,
+      classification: "eligible_for_processing",
+      taskState: "result_verified",
+      installationId: "019f0000-0000-7000-8000-000000000002",
+      submittedAt: "2026-08-01T00:00:00Z",
+    };
+    expect(describePluginLocalizationStatus({
+      publicDiscovery: discovery,
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "waiting",
-      label: "翻译已完成 7/7 条，正在生成可下载包",
+      label: "服务端已验证当前来源，正在建立本地化发布状态。",
     });
-  });
-
-  it("does not call an unprojected export a client pullback delay", () => {
-    const demand = {
-      state: "export_ready" as const,
-      sourceVersionId: "source-version",
+    expect(visiblePluginManualRetryKind({
+      state: {
+        ...EMPTY_PLUGIN_STATE,
+        publicPluginDiscoveries: { dataview: discovery },
+      },
+      pluginId: "dataview",
       targetLocale: "zh-CN",
-      targetVariant: "default",
-      totalUnitCount: 123,
-      workItemCount: 123,
-      nativeUnitCount: 0,
-      queuedCount: 0,
-      runningCount: 0,
-      succeededCount: 123,
-      failedCount: 0,
-      reviewedUnitCount: 0,
-      publishedUnitCount: 0,
-      manifestId: "manifest",
-      generationNumber: 17,
-      retryAfterSeconds: 0,
-      failureRetryable: false,
-      updatedAt: "2026-07-27T00:00:00Z",
+      sourceSelectable: true,
+      hasSession: true,
+    })).toBeNull();
+
+    const parsingDiscovery = {
+      ...discovery,
+      localizationProjection: { stage: "parsing" } as never,
     };
     expect(describePluginLocalizationStatus({
-      submission: { ...baseSubmission, localizationDemandStatus: demand },
+      publicDiscovery: parsingDiscovery,
       targetLocale: "zh-CN",
     })).toEqual({
       kind: "waiting",
-      label: "译文制品已生成，等待服务端公共目录更新",
+      label: "服务端已验证当前来源，正在建立本地化发布状态。",
     });
-    expect(describePluginLocalizationStatus({
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: { ...demand, publishedUnitCount: 123 },
+    expect(visiblePluginManualRetryKind({
+      state: {
+        ...EMPTY_PLUGIN_STATE,
+        publicPluginDiscoveries: { dataview: parsingDiscovery },
       },
+      pluginId: "dataview",
       targetLocale: "zh-CN",
-    })).toEqual({ kind: "waiting", label: "译文已发布，等待客户端回拉" });
+      sourceSelectable: true,
+      hasSession: true,
+    })).toBeNull();
   });
 
-  it("distinguishes retryable and terminal machine translation failures", () => {
-    const failed = {
-      state: "mt_failed" as const,
-      sourceVersionId: "source-version",
-      targetLocale: "zh-CN",
-      targetVariant: "default",
-      totalUnitCount: 2,
-      workItemCount: 2,
-      nativeUnitCount: 0,
-      queuedCount: 0,
-      runningCount: 0,
-      succeededCount: 1,
-      failedCount: 1,
-      reviewedUnitCount: 0,
-      publishedUnitCount: 0,
-      retryAfterSeconds: 60,
-      failureCode: "MachineTranslationTransientError",
-      failureRetryable: true,
-      failureAttemptNumber: 2,
-      updatedAt: "2026-07-20T00:00:00Z",
+  it.each([
+    { retryAllowed: false, retryAfterSeconds: 0, reason: "registry_projection_stale" },
+    { retryAllowed: true, retryAfterSeconds: 30, reason: "registry_projection_stale" },
+    { retryAllowed: true, retryAfterSeconds: 0, reason: "executor_retry_exhausted" },
+  ] as const)("只允许服务端明确可恢复的阻断重提：$reason", (contract) => {
+    const discovery = {
+      discoveryId: "019f0000-0000-7000-8000-000000000001",
+      receiptId: "019f0000-0000-7000-8000-000000000003",
+      statusRevision: 2 as const,
+      targetLocales: ["zh-CN"] as const,
+      classification: "blocked",
+      taskState: "blocked",
+      installationId: "019f0000-0000-7000-8000-000000000002",
+      submittedAt: "2026-08-01T00:00:00Z",
+      blockedReasonCode: contract.reason,
+      retryAllowed: contract.retryAllowed,
+      retryAfterSeconds: contract.retryAfterSeconds,
     };
-    expect(describePluginLocalizationStatus({
-      submission: { ...baseSubmission, localizationDemandStatus: failed },
-      targetLocale: "zh-CN",
-    }).label).toContain("服务器将自动重试（第 2/5 次）");
-    expect(describePluginLocalizationStatus({
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: { ...failed, failureRetryable: false },
+    expect(visiblePluginManualRetryKind({
+      state: {
+        ...EMPTY_PLUGIN_STATE,
+        publicPluginDiscoveries: { dataview: discovery },
       },
+      pluginId: "dataview",
       targetLocale: "zh-CN",
-    })).toEqual({
-      kind: "failed",
-      label: "机器翻译失败，服务器已停止自动重试。点击右侧“重试此插件”。",
-    });
+      sourceSelectable: true,
+      hasSession: true,
+    })).toBeNull();
   });
 
-  it("does not offer a manual retry for a deterministically unprocessable source", () => {
-    const demand = {
-      state: "mt_failed" as const,
-      sourceVersionId: "source-version",
+  it.each([
+    "discovered",
+    "verifying_registry",
+    "materialization_pending",
+    "result_verified",
+    "queued_for_parsing",
+  ])("发现阶段 %s 在途时禁止人工重提", (taskState) => {
+    expect(visiblePluginManualRetryKind({
+      state: {
+        ...EMPTY_PLUGIN_STATE,
+        publicPluginDiscoveries: {
+          dataview: {
+            statusRevision: 2,
+            receiptId: "019f0000-0000-7000-8000-000000000003",
+            discoveryId: "019f0000-0000-7000-8000-000000000001",
+            targetLocales: ["zh-CN"],
+            classification: "eligible_for_processing",
+            taskState,
+            retryAllowed: false,
+            retryAfterSeconds: 0,
+            installationId: "019f0000-0000-7000-8000-000000000002",
+            submittedAt: "2026-08-01T00:00:00Z",
+          },
+        },
+      } as never,
+      pluginId: "dataview",
       targetLocale: "zh-CN",
-      targetVariant: "default",
-      totalUnitCount: 1,
-      workItemCount: 1,
-      nativeUnitCount: 0,
-      queuedCount: 0,
-      runningCount: 0,
-      succeededCount: 0,
-      failedCount: 1,
-      reviewedUnitCount: 0,
-      publishedUnitCount: 0,
-      retryAfterSeconds: 0,
-      failureCode: "MachineTranslationUnsupportedComplexPlaceholder",
-      failureRetryable: false,
-      failureAttemptNumber: 1,
-      updatedAt: "2026-08-02T00:00:00Z",
+      sourceSelectable: true,
+      hasSession: true,
+    })).toBeNull();
+  });
+
+  it("发现虽可恢复但当前本地化投影健康在途时禁止重提", () => {
+    expect(visiblePluginManualRetryKind({
+      state: {
+        ...EMPTY_PLUGIN_STATE,
+        publicPluginDiscoveries: {
+          dataview: {
+            statusRevision: 2,
+            receiptId: "019f0000-0000-7000-8000-000000000003",
+            discoveryId: "019f0000-0000-7000-8000-000000000001",
+            targetLocales: ["zh-CN"],
+            classification: "blocked",
+            taskState: "blocked",
+            retryAllowed: true,
+            retryAfterSeconds: 0,
+            blockedReasonCode: "registry_projection_stale",
+            installationId: "019f0000-0000-7000-8000-000000000002",
+            submittedAt: "2026-08-01T00:00:00Z",
+            localizationProjection: {
+              targetLocale: "zh-CN",
+              stage: "parsing",
+            } as never,
+          },
+        },
+      },
+      pluginId: "dataview",
+      targetLocale: "zh-CN",
+      sourceSelectable: true,
+      hasSession: true,
+    })).toBeNull();
+  });
+
+  it("does not let an in-flight public discovery hide an exact published translation", () => {
+    const discovery = {
+      discoveryId: "019f0000-0000-7000-8000-000000000001",
+      targetLocales: ["zh-CN"] as const,
+      classification: "eligible_for_processing" as const,
+      taskState: "queued_for_parsing" as const,
+      installationId: "019f0000-0000-7000-8000-000000000002",
+      submittedAt: "2026-08-01T00:00:00Z",
     };
-    const input = {
+    const status = describePluginLocalizationStatus({
+      publicDiscovery: discovery,
+      submission: {
+        ...baseSubmission,
+        catalogDigest: exactIdentity.digest,
+        sourceVersionId: "current-source",
+      },
       catalog: {
         pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
         sourceLocale: "en", digest: exactIdentity.digest,
         artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
-        scannedAt: "2026-08-02T00:00:00Z",
-        strings: [{ key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
-      },
-      submission: {
-        ...baseSubmission,
-        catalogDigest: exactIdentity.digest,
-        contributionState: "rejected" as const,
-        sourceVersionId: "source-version",
-        localizationContributionState: "rejected" as const,
-        localizationDemandStatus: demand,
+        scannedAt: "2026-08-01T00:00:00Z",
+        strings: [{ key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" }],
       },
       translation: {
-        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source-version",
-        targetLocale: "zh-CN", entries: [], pulledAt: "2026-08-02T00:00:00Z",
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "current-source",
+        artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
+        targetLocale: "zh-CN",
+        entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
+        pulledAt: "2026-08-01T00:00:00Z",
       },
       targetLocale: "zh-CN",
-    } as const;
+    });
 
-    expect(pluginManualRetryKind(input)).toBeNull();
-    const status = describePluginLocalizationStatus(input);
-    expect(status.kind).toBe("preserved-source");
-    expect(status.label).toContain("无法安全处理当前来源中的复杂占位符");
-    expect(status.label).not.toContain("重试");
-    expect(PLUGIN_LOCALIZATION_STATUS_FILTERS.find((item) => item.value === "preserved-source")?.label)
-      .toBe("保留原文");
-    expect(PLUGIN_LOCALIZATION_STATUS_FILTERS.find((item) => item.value === "failed")?.label)
-      .toBe("处理失败");
-
-    const recoverableSynchronizationError = {
-      ...input,
-      submission: {
-        ...input.submission,
-        lastError: {
-          code: "PC_RETRY_EXHAUSTED",
-          message: "服务器暂时不可用",
-          targetLocale: "zh-CN",
-          updatedAt: "2026-08-02T00:01:00Z",
-        },
-      },
-    } as const;
-    expect(pluginManualRetryKind(recoverableSynchronizationError)).toBe("resynchronize");
-    expect(describePluginLocalizationStatus(recoverableSynchronizationError).label)
-      .toContain("同步失败");
+    expect(status.kind).toBe("localized");
+    expect(status.label).not.toBe("正在验证公共目录条目…");
   });
 
-  it("does not offer a stale machine retry after the exact catalog is complete", () => {
-    const catalog = {
-      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
-      sourceLocale: "en", digest: exactIdentity.digest,
-      artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
-      scannedAt: "2026-07-29T00:00:00Z",
-      strings: [
-        { key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" },
-        { key: "two", source: "Index", origins: ["ui-call" as const], placeholderSignature: "" },
-      ],
+  it("does not let a public discovery hide a safely applied published intersection", () => {
+    const localIdentity = {
+      ...exactIdentity,
+      unitCount: 2,
+      digest: "c".repeat(64),
+      scopes: [{ scope: "runtime-ui", unitCount: 2, digest: "d".repeat(64) }],
     };
-    const submission = {
-      ...baseSubmission,
-      catalogDigest: exactIdentity.digest,
-      sourceVersionId: "current-source",
-      localizationContributionState: "mt_failed",
-      localizationDemandStatus: {
-        state: "mt_failed" as const,
-        sourceVersionId: "current-source",
+    const authorityIdentity = {
+      ...exactIdentity,
+      artifactDigest: "e".repeat(64),
+      unitCount: 1,
+      digest: "f".repeat(64),
+      scopes: [{ scope: "runtime-ui", unitCount: 1, digest: "1".repeat(64) }],
+    };
+    const status = describePluginLocalizationStatus({
+      submission: {
+        ...baseSubmission,
+        catalogDigest: localIdentity.digest,
+        contributionState: "rejected",
+      },
+      publicDiscovery: {
+        discoveryId: "019f0000-0000-7000-8000-000000000001",
+        targetLocales: ["zh-CN"],
+        classification: "eligible_for_processing",
+        taskState: "queued_for_parsing",
+        installationId: "019f0000-0000-7000-8000-000000000002",
+        submittedAt: "2026-08-01T00:00:00Z",
+      },
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+        sourceLocale: "en", digest: localIdentity.digest,
+        artifactDigest: localIdentity.artifactDigest, catalogIdentity: localIdentity,
+        scannedAt: "2026-08-01T00:00:00Z",
+        strings: [
+          { key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" },
+          { key: "two", source: "Extra", origins: ["ui-call"], placeholderSignature: "" },
+        ],
+      },
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "current-source",
+        artifactDigest: authorityIdentity.artifactDigest, catalogIdentity: authorityIdentity,
+        targetLocale: "zh-CN", sourceUnitCount: 1, upstreamNativeCount: 0,
+        publishedUnitCount: 1, missingUnitCount: 0,
+        entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
+        pulledAt: "2026-08-01T00:00:00Z",
+      },
+      targetLocale: "zh-CN",
+    });
+
+    expect(status.kind).toBe("localized");
+    expect(status.label).toContain("已获取 1/2 条匹配界面译文");
+    expect(status.label).not.toBe("正在验证公共目录条目…");
+  });
+
+  it.each([
+    ["discovery", "waiting", "已提交公共目录发现，等待服务端处理"],
+    ["validating", "waiting", "正在校验公共目录与当前权威版本"],
+    ["parsing", "waiting", "当前权威版本正在解析并建立来源目录"],
+    ["translating", "waiting", "当前权威版本正在翻译"],
+    ["publishing", "waiting", "译文正在生成可下载发布版本"],
+    ["published", "waiting", "译文已发布，等待客户端下载"],
+    ["blocked", "blocked", "当前权威版本暂无法公开发布"],
+  ] as const)("renders the current %s projection without a legacy submission", (
+    stage, expectedKind, expectedLabel,
+  ) => {
+    const withAuthority = ["translating", "publishing", "published", "blocked"].includes(stage);
+    const publicDiscovery = {
+      discoveryId: "019f0000-0000-7000-8000-000000000001",
+      targetLocales: ["zh-CN"] as const,
+      classification: "eligible_for_processing",
+      taskState: "queued_for_parsing",
+      installationId: "019f0000-0000-7000-8000-000000000002",
+      submittedAt: "2026-08-01T00:00:00Z",
+      catalogIdentityDigest: exactIdentity.digest,
+      localizationProjection: {
+        kind: "public_localization_status_projection" as const,
+        protocol: {
+          protocol: "trans-hub.client-protocol" as const,
+          revision: 1 as const,
+          schemaRevision: 1 as const,
+        },
+        projectionRevision: 1 as const,
+        discoveryId: "019f0000-0000-7000-8000-000000000001",
+        registryKey: "official-directory",
+        externalObjectId: "dataview",
         targetLocale: "zh-CN",
-        targetVariant: "default",
-        totalUnitCount: 2,
-        workItemCount: 2,
-        nativeUnitCount: 0,
-        queuedCount: 0,
-        runningCount: 0,
-        succeededCount: 1,
-        failedCount: 1,
-        reviewedUnitCount: 0,
-        publishedUnitCount: 0,
-        retryAfterSeconds: 60,
-        failureCode: "MachineTranslationRejected",
-        failureRetryable: false,
-        failureAttemptNumber: 1,
-        updatedAt: "2026-07-29T00:00:00Z",
+        catalogIdentityDigest: withAuthority ? {
+          algorithm: "sha256" as const,
+          domain: "logical_object" as const,
+          hex: exactIdentity.digest,
+        } : null,
+        sourceVersionId: withAuthority
+          ? "019f0000-0000-7000-8000-000000000003"
+          : null,
+        stage,
+        updatedAt: "2026-08-26T00:00:00.000Z",
       },
     };
-    const translation = {
-      pluginId: "dataview", pluginVersion: "0.5.68",
-      sourceVersionId: "current-source", targetLocale: "zh-CN",
-      artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
-      sourceUnitCount: 2, publishedUnitCount: 2, missingUnitCount: 0,
-      entries: [
-        { pluginId: "dataview", source: "Settings", target: "设置" },
-        { pluginId: "dataview", source: "Index", target: "索引" },
-      ],
-      pulledAt: "2026-07-29T00:00:00Z",
-    };
+    expect(describePluginLocalizationStatus({
+      publicDiscovery: publicDiscovery as never,
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+        sourceLocale: "en", digest: exactIdentity.digest,
+        artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
+        scannedAt: "2026-08-01T00:00:00Z", strings: [],
+      },
+      targetLocale: "zh-CN",
+    })).toEqual({ kind: expectedKind, label: expectedLabel });
+  });
 
-    const input = {
-      catalog, submission, translation, targetLocale: "zh-CN",
-    } as const;
-    expect(pluginManualRetryKind(input)).toBeNull();
-    const status = describePluginLocalizationStatus(input);
-    expect(status.kind).toBe("localized");
-    expect(status.coverage?.complete).toBe(true);
-    expect(status.label).not.toContain("重试");
+  it("does not let a historical discovery projection shadow the current catalog", () => {
+    expect(describePluginLocalizationStatus({
+      publicDiscovery: {
+        discoveryId: "019f0000-0000-7000-8000-000000000001",
+        targetLocales: ["zh-CN"], classification: "eligible_for_processing",
+        taskState: "queued_for_parsing",
+        installationId: "019f0000-0000-7000-8000-000000000002",
+        submittedAt: "2026-07-01T00:00:00.000Z",
+        catalogIdentityDigest: "b".repeat(64),
+        localizationProjection: {
+          kind: "public_localization_status_projection",
+          protocol: {
+            protocol: "trans-hub.client-protocol", revision: 1, schemaRevision: 1,
+          },
+          projectionRevision: 1,
+          discoveryId: "019f0000-0000-7000-8000-000000000001",
+          registryKey: "official-directory", externalObjectId: "dataview",
+          targetLocale: "zh-CN", catalogIdentityDigest: null,
+          sourceVersionId: null, stage: "blocked",
+          updatedAt: "2026-07-01T00:01:00.000Z",
+        },
+      } as never,
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+        sourceLocale: "en", digest: exactIdentity.digest,
+        artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
+        scannedAt: "2026-08-01T00:00:00.000Z", strings: [],
+      },
+      targetLocale: "zh-CN",
+    })).toEqual({ kind: "waiting", label: "正在验证公共目录条目…" });
   });
 
   it("prioritizes an applied translation for the selected locale", () => {
@@ -364,52 +475,6 @@ describe("describePluginLocalizationStatus", () => {
     })).toEqual({ kind: "waiting", label: "已获取 1 条缓存译文，等待当前目录匹配" });
   });
 
-  it("将首次本地化准备和被拒绝的需求稳定归类，供列表筛选和单项重试使用", () => {
-    expect(describePluginLocalizationStatus({ targetLocale: "zh-CN" })).toEqual({
-      kind: "waiting", label: "正在准备首次本地化…", initialSubmission: true,
-    });
-    expect(describePluginLocalizationStatus({
-      submission: { ...baseSubmission, localizationContributionState: "rejected" },
-      targetLocale: "zh-CN",
-    })).toEqual({ kind: "failed", label: "需求未被接受。点击右侧“重试此插件”。" });
-  });
-
-  it("以当前精确需求的公开分发阻断覆盖旧来源拒绝，且不显示不可执行的重试", () => {
-    const catalog = {
-      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
-      sourceLocale: "en", digest: "catalog", artifactDigest: "artifact",
-      scannedAt: "2026-08-02T00:00:00Z", strings: [],
-    };
-    const submission = {
-      ...baseSubmission,
-      catalogDigest: "catalog",
-      contributionState: "rejected",
-      sourceVersionId: "source-version",
-      localizationContributionState: "distribution_blocked",
-      localizationDemandStatus: {
-        state: "distribution_blocked" as const,
-        sourceVersionId: "source-version", targetLocale: "zh-CN", targetVariant: "default",
-        totalUnitCount: 1, workItemCount: 1, nativeUnitCount: 0,
-        queuedCount: 0, runningCount: 0, succeededCount: 1, failedCount: 0,
-        reviewedUnitCount: 0, publishedUnitCount: 0, retryAfterSeconds: 0,
-        failureCode: "PublicDistributionAuthorityRetryExhausted",
-        failureRetryable: false,
-        updatedAt: "2026-08-02T00:00:00Z",
-      },
-    };
-    const translation = {
-      pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source-version",
-      targetLocale: "zh-CN", entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
-      pulledAt: "2026-08-02T00:00:00Z",
-    };
-    const input = { catalog, submission, translation, targetLocale: "zh-CN" } as const;
-
-    const status = describePluginLocalizationStatus(input);
-    expect(status.kind).toBe("blocked");
-    expect(status.label).toContain("无法公开发布：权威来源校验多次失败，服务器已停止自动重试");
-    expect(pluginManualRetryKind(input)).toBeNull();
-  });
-
   it("显示当前目录的真实覆盖率，而不是仅显示缓存条目数", () => {
     expect(describePluginLocalizationStatus({
       catalog: {
@@ -421,15 +486,23 @@ describe("describePluginLocalizationStatus", () => {
         ],
       },
       translation: {
-        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
-        targetLocale: "zh-CN", entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
+        pluginId: "dataview", pluginVersion: "0.5.69", authorityPluginVersion: "0.5.70",
+        sourceVersionId: "source", targetLocale: "zh-CN",
+        entries: [{
+          pluginId: "dataview", source: "Settings", target: "设置",
+          sourceCompatibility: {
+            semanticRole: "runtime-ui", contentScopes: ["runtime-ui"],
+            placeholderSignature: "", formatSignature: "plain-text-v1",
+            sourceContentDigest: `sha256:${"a".repeat(64)}`,
+          },
+        }],
         pulledAt: "2026-07-18T00:00:00Z",
       },
       targetLocale: "zh-CN",
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "可安全应用 1/2 条匹配译文，1 条暂不可安全应用",
+        headline: "已获取 1/2 条匹配界面译文，1 条保留原文；当前使用 0.5.70 的本地化译文；插件可继续使用，建议升级至 0.5.70 以获得最佳匹配",
         complete: false,
       },
     });
@@ -443,20 +516,49 @@ describe("describePluginLocalizationStatus", () => {
         strings: [{ key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" }],
       },
       translation: {
-        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
+        pluginId: "dataview", pluginVersion: "0.5.69", authorityPluginVersion: "0.5.70",
+        sourceVersionId: "source",
         targetLocale: "zh-CN", sourceUnitCount: 79, upstreamNativeCount: 12,
         publishedUnitCount: 64, missingUnitCount: 3,
-        entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
+        entries: [{
+          pluginId: "dataview", source: "Settings", target: "设置",
+          sourceCompatibility: {
+            semanticRole: "runtime-ui", contentScopes: ["runtime-ui"],
+            placeholderSignature: "", formatSignature: "plain-text-v1",
+            sourceContentDigest: `sha256:${"a".repeat(64)}`,
+          },
+        }],
         pulledAt: "2026-07-18T00:00:00Z",
       },
       targetLocale: "zh-CN",
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "可安全应用 1/1 条匹配译文",
+        headline: "已获取 1/1 条匹配界面译文；当前使用 0.5.70 的本地化译文；插件可继续使用，建议升级至 0.5.70 以获得最佳匹配",
         complete: true,
       },
     });
+  });
+
+  it("精确安装版本应用当前译文时不显示版本一致性建议", () => {
+    const status = describePluginLocalizationStatus({
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.70",
+        sourceLocale: "en", digest: "exact", artifactDigest: "artifact",
+        scannedAt: "2026-09-05T00:00:00Z",
+        strings: [{ key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" }],
+      },
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.70", authorityPluginVersion: "0.5.70",
+        sourceVersionId: "source", targetLocale: "zh-CN",
+        entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
+        pulledAt: "2026-09-05T00:00:00Z",
+      },
+      targetLocale: "zh-CN",
+    });
+
+    expect(status.label).not.toContain("当前本地化版本");
+    expect(status.label).toContain("已获取 1/1 条匹配界面译文");
   });
 
   it("本地制品变体只显示安全交集，不误报服务器目录待同步", () => {
@@ -491,496 +593,9 @@ describe("describePluginLocalizationStatus", () => {
     });
 
     expect(status.kind).toBe("localized");
-    expect(status.coverage?.headline).toBe("可安全应用 1/2 条匹配译文，1 条暂不可安全应用");
+    expect(status.coverage?.headline).toBe("已获取 1/2 条匹配界面译文，1 条保留原文");
     expect(status.coverage?.notice).toBeUndefined();
     expect(status.coverage?.complete).toBe(false);
-  });
-
-  it("来源许可阻断时保留安全交集且不再提示等待或重试", () => {
-    const catalog = {
-      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
-      sourceLocale: "en", digest: "new-catalog", artifactDigest: exactIdentity.artifactDigest,
-      catalogIdentity: {
-        ...exactIdentity,
-        digest: "12".repeat(32),
-        scopes: [{ scope: "runtime-ui", unitCount: 2, digest: "34".repeat(32) }],
-      },
-      scannedAt: "2026-07-29T00:00:00Z",
-      strings: [
-        { key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" },
-        { key: "two", source: "New local source", origins: ["ui-call" as const], placeholderSignature: "" },
-      ],
-    };
-    const submission = {
-      ...baseSubmission,
-      catalogDigest: "new-catalog",
-      localizationDemandStatus: {
-        state: "distribution_blocked" as const,
-        sourceVersionId: "old-source",
-        targetLocale: "zh-CN",
-        targetVariant: "default",
-        totalUnitCount: 2,
-        workItemCount: 2,
-        nativeUnitCount: 0,
-        queuedCount: 0,
-        runningCount: 0,
-        succeededCount: 2,
-        failedCount: 0,
-        reviewedUnitCount: 0,
-        publishedUnitCount: 0,
-        retryAfterSeconds: 0,
-        failureCode: "PublicDistributionPolicyUnavailable",
-        failureRetryable: false,
-        updatedAt: "2026-07-29T00:00:00Z",
-      },
-    };
-    const translation = {
-      pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "old-source",
-      artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
-      targetLocale: "zh-CN",
-      entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
-      pulledAt: "2026-07-29T00:00:00Z",
-    };
-
-    const status = describePluginLocalizationStatus({
-      catalog, submission, translation, targetLocale: "zh-CN",
-    });
-    expect(status.kind).toBe("blocked");
-    expect(status.coverage?.headline).toBe(
-      "无法公开发布：当前精确版本的公开分发策略不可用",
-    );
-    expect(status.coverage?.notice).toBe(
-      "可安全应用 1/2 条匹配译文，1 条暂不可安全应用",
-    );
-    expect(status.label).not.toContain("等待");
-    expect(pluginManualRetryKind({
-      catalog, submission, translation, targetLocale: "zh-CN",
-    })).toBeNull();
-  });
-
-  it("已有安全交集时仍以终止的机器翻译失败作为主状态", () => {
-    const catalog = {
-      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
-      sourceLocale: "en", digest: exactIdentity.digest,
-      artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
-      scannedAt: "2026-07-29T00:00:00Z",
-      strings: [
-        { key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" },
-        { key: "two", source: "New local source", origins: ["ui-call" as const], placeholderSignature: "" },
-      ],
-    };
-    const status = describePluginLocalizationStatus({
-      catalog,
-      translation: {
-        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
-        artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
-        targetLocale: "zh-CN",
-        entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
-        pulledAt: "2026-07-29T00:00:00Z",
-      },
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: {
-          state: "mt_failed", sourceVersionId: "source", targetLocale: "zh-CN",
-          targetVariant: "default", totalUnitCount: 2, workItemCount: 2,
-          nativeUnitCount: 0, queuedCount: 0, runningCount: 0, succeededCount: 1,
-          failedCount: 1, reviewedUnitCount: 0, publishedUnitCount: 0,
-          retryAfterSeconds: 0, failureRetryable: false,
-          updatedAt: "2026-07-29T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    });
-
-    expect(status.kind).toBe("failed");
-    expect(status.coverage?.headline).toBe(
-      "机器翻译失败，服务器已停止自动重试。点击右侧“重试此插件”。",
-    );
-    expect(status.coverage?.notice).toBe(
-      "可安全应用 1/2 条匹配译文，1 条暂不可安全应用",
-    );
-  });
-
-  it.each([
-    {
-      retryable: true,
-      expectedKind: "waiting" as const,
-      expectedLabel: "机器翻译暂时失败，服务器将自动重试（第 2/5 次）",
-    },
-    {
-      retryable: false,
-      expectedKind: "failed" as const,
-      expectedLabel: "机器翻译失败，服务器已停止自动重试。点击右侧“重试此插件”。",
-    },
-  ])("本地目录暂缺时仍显示当前来源的机器翻译失败（retryable=$retryable）", ({
-    retryable, expectedKind, expectedLabel,
-  }) => {
-    const input = {
-      translation: {
-        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
-        targetLocale: "zh-CN",
-        entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
-        pulledAt: "2026-07-29T00:00:00Z",
-      },
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: {
-          state: "mt_failed", sourceVersionId: "source", targetLocale: "zh-CN",
-          targetVariant: "default", totalUnitCount: 2, workItemCount: 2,
-          nativeUnitCount: 0, queuedCount: 0, runningCount: 0, succeededCount: 1,
-          failedCount: 1, reviewedUnitCount: 0, publishedUnitCount: 0,
-          retryAfterSeconds: retryable ? 30 : 0, failureRetryable: retryable,
-          failureAttemptNumber: 2, updatedAt: "2026-07-29T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    } as const;
-    const status = describePluginLocalizationStatus(input);
-
-    expect(status).toMatchObject({ kind: expectedKind });
-    expect(status.label).toContain(expectedLabel);
-    expect(pluginManualRetryKind(input)).toBe(retryable ? null : "resubmit");
-  });
-
-  it("没有历史译文时按服务端失败码显示独立分发受限状态", () => {
-    expect(describePluginLocalizationStatus({
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: {
-          state: "distribution_blocked",
-          sourceVersionId: "blocked-source",
-          targetLocale: "zh-CN",
-          targetVariant: "default",
-          totalUnitCount: 2,
-          workItemCount: 2,
-          nativeUnitCount: 0,
-          queuedCount: 0,
-          runningCount: 0,
-          succeededCount: 2,
-          failedCount: 0,
-          reviewedUnitCount: 0,
-          publishedUnitCount: 0,
-          retryAfterSeconds: 0,
-          failureCode: "PublicDistributionLicenseEvidenceMissing",
-          failureRetryable: false,
-          updatedAt: "2026-07-29T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    })).toEqual({
-      kind: "blocked",
-      label: "无法公开发布：缺少当前精确版本的许可证证据",
-    });
-  });
-
-  it("分发受限缺少失败码时仍显示通用阻断原因", () => {
-    const status = describePluginLocalizationStatus({
-      catalog: {
-        pluginId: "generic", pluginName: "Generic", pluginVersion: "1.0.0",
-        sourceLocale: "en", digest: exactIdentity.digest,
-        artifactDigest: exactIdentity.artifactDigest,
-        catalogIdentity: exactIdentity, scannedAt: "2026-07-29T00:00:00Z",
-        strings: [
-          { key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" },
-          { key: "two", source: "Missing", origins: ["ui-call"], placeholderSignature: "" },
-        ],
-      },
-      translation: {
-        pluginId: "generic", pluginVersion: "1.0.0", sourceVersionId: "source",
-        artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
-        targetLocale: "zh-CN",
-        entries: [{ pluginId: "generic", source: "Settings", target: "设置" }],
-        pulledAt: "2026-07-29T00:00:00Z",
-      },
-      submission: {
-        ...baseSubmission,
-        pluginId: "generic",
-        pluginVersion: "1.0.0",
-        catalogDigest: exactIdentity.digest,
-        sourceVersionId: "source",
-        localizationDemandStatus: {
-          state: "distribution_blocked", sourceVersionId: "source", targetLocale: "zh-CN",
-          targetVariant: "default", totalUnitCount: 2, workItemCount: 1,
-          nativeUnitCount: 0, queuedCount: 0, runningCount: 0, succeededCount: 1,
-          failedCount: 0, reviewedUnitCount: 0, publishedUnitCount: 0,
-          retryAfterSeconds: 0, failureRetryable: false,
-          updatedAt: "2026-07-29T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    });
-
-    expect(status.kind).toBe("blocked");
-    expect(status.coverage?.headline).toBe(
-      "无法公开发布：当前精确版本的公开分发策略不可用",
-    );
-    expect(status.coverage?.notice).toBe(
-      "可安全应用 1/2 条匹配译文，1 条暂不可安全应用",
-    );
-  });
-
-  it("完整安全覆盖也不会遮挡分发受限状态", () => {
-    const catalog = {
-      pluginId: "generic", pluginName: "Generic", pluginVersion: "1.0.0",
-      sourceLocale: "en", digest: exactIdentity.digest,
-      artifactDigest: exactIdentity.artifactDigest,
-      catalogIdentity: exactIdentity, scannedAt: "2026-07-29T00:00:00Z",
-      strings: [{ key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
-    };
-    const status = describePluginLocalizationStatus({
-      catalog,
-      translation: {
-        pluginId: "generic", pluginVersion: "1.0.0", sourceVersionId: "source",
-        artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
-        targetLocale: "zh-CN",
-        entries: [{ pluginId: "generic", source: "Settings", target: "设置" }],
-        pulledAt: "2026-07-29T00:00:00Z",
-      },
-      submission: {
-        ...baseSubmission,
-        pluginId: "generic",
-        pluginVersion: "1.0.0",
-        catalogDigest: exactIdentity.digest,
-        sourceVersionId: "source",
-        localizationDemandStatus: {
-          state: "distribution_blocked", sourceVersionId: "source", targetLocale: "zh-CN",
-          targetVariant: "default", totalUnitCount: 1, workItemCount: 1,
-          nativeUnitCount: 0, queuedCount: 0, runningCount: 0, succeededCount: 1,
-          failedCount: 0, reviewedUnitCount: 0, publishedUnitCount: 0,
-          retryAfterSeconds: 0, failureCode: "PublicDistributionLicenseUnsupported",
-          failureRetryable: false, updatedAt: "2026-07-29T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    });
-
-    expect(status.kind).toBe("blocked");
-    expect(status.coverage?.complete).toBe(true);
-    expect(status.coverage?.headline).toBe(
-      "无法公开发布：上游许可证不在当前安全分发范围",
-    );
-    expect(status.coverage?.notice).toBe("可安全应用 1/1 条匹配译文");
-  });
-
-  it("新权威来源完整覆盖时不沿用旧来源的分发阻断", () => {
-    const status = describePluginLocalizationStatus({
-      translation: {
-        pluginId: "generic", pluginVersion: "2.0.0", sourceVersionId: "new-source",
-        targetLocale: "zh-CN",
-        entries: [{ pluginId: "generic", source: "Settings", target: "设置" }],
-        pulledAt: "2026-07-30T00:00:00Z",
-      },
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: {
-          state: "distribution_blocked", sourceVersionId: "old-source", targetLocale: "zh-CN",
-          targetVariant: "default", totalUnitCount: 1, workItemCount: 1,
-          nativeUnitCount: 0, queuedCount: 0, runningCount: 0, succeededCount: 1,
-          failedCount: 0, reviewedUnitCount: 0, publishedUnitCount: 0,
-          retryAfterSeconds: 0, failureCode: "PublicDistributionLicenseUnsupported",
-          failureRetryable: false, updatedAt: "2026-07-29T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    });
-
-    expect(status.kind).toBe("waiting");
-    expect(status.label).toBe("已获取 1 条缓存译文，等待当前目录匹配");
-  });
-
-  it("提交记录已指向新权威来源时不显示旧译文缓存的分发阻断", () => {
-    const status = describePluginLocalizationStatus({
-      translation: {
-        pluginId: "generic", pluginVersion: "2.0.0", sourceVersionId: "old-source",
-        targetLocale: "zh-CN",
-        entries: [{ pluginId: "generic", source: "Settings", target: "设置" }],
-        pulledAt: "2026-07-30T00:00:00Z",
-      },
-      submission: {
-        ...baseSubmission,
-        sourceVersionId: "current-source",
-        localizationDemandStatus: {
-          state: "distribution_blocked", sourceVersionId: "old-source", targetLocale: "zh-CN",
-          targetVariant: "default", totalUnitCount: 1, workItemCount: 1,
-          nativeUnitCount: 0, queuedCount: 0, runningCount: 0, succeededCount: 1,
-          failedCount: 0, reviewedUnitCount: 0, publishedUnitCount: 0,
-          retryAfterSeconds: 0, failureCode: "PublicDistributionPolicyAmbiguous",
-          failureRetryable: false, updatedAt: "2026-07-29T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    });
-
-    expect(status).toEqual({ kind: "waiting", label: "已获取 1 条缓存译文，等待当前目录匹配" });
-  });
-
-  it("没有本地目录时仍显示当前来源的分发阻断", () => {
-    const status = describePluginLocalizationStatus({
-      translation: {
-        pluginId: "generic", pluginVersion: "1.0.0", sourceVersionId: "source",
-        targetLocale: "zh-CN",
-        entries: [{ pluginId: "generic", source: "Settings", target: "设置" }],
-        pulledAt: "2026-07-30T00:00:00Z",
-      },
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: {
-          state: "distribution_blocked", sourceVersionId: "source", targetLocale: "zh-CN",
-          targetVariant: "default", totalUnitCount: 1, workItemCount: 1,
-          nativeUnitCount: 0, queuedCount: 0, runningCount: 0, succeededCount: 1,
-          failedCount: 0, reviewedUnitCount: 0, publishedUnitCount: 0,
-          retryAfterSeconds: 0, failureCode: "PublicDistributionLicenseUnsupported",
-          failureRetryable: false, updatedAt: "2026-07-29T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    });
-
-    expect(status).toEqual({
-      kind: "blocked",
-      label: "无法公开发布：上游许可证不在当前安全分发范围",
-    });
-  });
-
-  it.each([
-    ["PublicDistributionPolicyPending", "暂无法公开发布：许可证证据已确认，服务端正在生成公开分发策略"],
-    ["PublicDistributionLicenseUnsupported", "无法公开发布：上游许可证不在当前安全分发范围"],
-    ["PublicDistributionLicenseRedistributionProhibited", "无法公开发布：当前来源的许可证明确禁止公开分发"],
-    ["PublicDistributionLicenseReviewRequired", "暂无法公开发布：当前来源的许可证需要人工确认"],
-    ["PublicDistributionLicenseEvidenceAmbiguous", "无法公开发布：当前来源的许可证证据存在冲突，服务器无法唯一确认许可证"],
-    ["PublicDistributionPolicyAmbiguous", "无法公开发布：当前精确版本存在冲突的公开分发策略"],
-    ["PublicSourceVersionYanked", "无法公开发布：当前来源版本已下架"],
-    ["PublicDistributionSourceDrift", "暂无法公开发布：当前来源与权威来源不一致，需重新收录精确来源版本"],
-    ["PublicDistributionSourceUnsupported", "无法公开发布：当前来源未通过权威来源校验"],
-    ["PublicDistributionManualDeny", "无法公开发布：管理员已关闭当前精确版本的公开分发"],
-    ["PublicDistributionAuthorizationDenied", "无法公开发布：服务器无权为当前来源建立公开分发策略"],
-    ["PublicDistributionAuthorityInvalid", "无法公开发布：当前来源的权威证据无效"],
-    ["PublicDistributionAuthorityRetryExhausted", "无法公开发布：权威来源校验多次失败，服务器已停止自动重试"],
-    ["PublicDistributionPolicyUnavailable", "无法公开发布：当前精确版本的公开分发策略不可用"],
-  ])("将 %s 映射为精确的分发受限原因", (failureCode, label) => {
-    expect(describePluginLocalizationStatus({
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: {
-          state: "distribution_blocked",
-          sourceVersionId: "blocked-source",
-          targetLocale: "zh-CN",
-          targetVariant: "default",
-          totalUnitCount: 2,
-          workItemCount: 2,
-          nativeUnitCount: 0,
-          queuedCount: 0,
-          runningCount: 0,
-          succeededCount: 2,
-          failedCount: 0,
-          reviewedUnitCount: 0,
-          publishedUnitCount: 0,
-          retryAfterSeconds: 0,
-          failureCode,
-          failureRetryable: false,
-          updatedAt: "2026-07-29T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    })).toEqual({ kind: "blocked", label });
-  });
-
-  it("权威来源仍在校验时显示服务端真实进度", () => {
-    expect(describePluginLocalizationStatus({
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: {
-          state: "reconciled",
-          sourceVersionId: "source",
-          targetLocale: "zh-CN",
-          targetVariant: "default",
-          totalUnitCount: 2,
-          workItemCount: 2,
-          nativeUnitCount: 0,
-          queuedCount: 0,
-          runningCount: 0,
-          succeededCount: 0,
-          failedCount: 0,
-          reviewedUnitCount: 0,
-          publishedUnitCount: 0,
-          retryAfterSeconds: 15,
-          failureCode: "PublicDistributionAuthorityRefreshing",
-          failureRetryable: true,
-          updatedAt: "2026-07-30T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    })).toEqual({
-      kind: "waiting",
-      label: "服务器正在校验当前精确版本的权威来源与许可证",
-    });
-  });
-
-  it.each([false, true])("已有缓存译文时仍优先显示权威校验进度（目录漂移=%s）", (drift) => {
-    const catalog = {
-      pluginId: "dataview",
-      pluginName: "Dataview",
-      pluginVersion: "0.5.68",
-      sourceLocale: "en",
-      digest: drift ? "new-catalog" : exactIdentity.digest,
-      artifactDigest: exactIdentity.artifactDigest,
-      catalogIdentity: drift
-        ? { ...exactIdentity, digest: "12".repeat(32) }
-        : exactIdentity,
-      scannedAt: "2026-07-30T00:00:00Z",
-      strings: [
-        { key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" },
-        { key: "two", source: drift ? "New command" : "Command", origins: ["ui-call" as const], placeholderSignature: "" },
-      ],
-    };
-    const status = describePluginLocalizationStatus({
-      catalog,
-      translation: {
-        pluginId: "dataview",
-        pluginVersion: "0.5.68",
-        sourceVersionId: "source",
-        artifactDigest: exactIdentity.artifactDigest,
-        catalogIdentity: exactIdentity,
-        targetLocale: "zh-CN",
-        entries: [
-          { pluginId: "dataview", source: "Settings", target: "设置" },
-          { pluginId: "dataview", source: "Command", target: "命令" },
-        ],
-        pulledAt: "2026-07-30T00:00:00Z",
-      },
-      submission: {
-        ...baseSubmission,
-        catalogDigest: catalog.digest,
-        localizationDemandStatus: {
-          state: "reconciled",
-          sourceVersionId: "source",
-          targetLocale: "zh-CN",
-          targetVariant: "default",
-          totalUnitCount: 2,
-          workItemCount: 2,
-          nativeUnitCount: 0,
-          queuedCount: 0,
-          runningCount: 0,
-          succeededCount: 2,
-          failedCount: 0,
-          reviewedUnitCount: 0,
-          publishedUnitCount: 0,
-          retryAfterSeconds: 15,
-          failureCode: "PublicDistributionAuthorityRefreshing",
-          failureRetryable: true,
-          updatedAt: "2026-07-30T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    });
-
-    expect(status.kind).toBe("waiting");
-    expect(status.coverage?.headline).toBe("服务器正在校验当前精确版本的权威来源与许可证");
-    expect(status.coverage?.notice).toBe(
-      drift
-        ? "可安全应用 1/2 条匹配译文，1 条暂不可安全应用"
-        : "可安全应用 2/2 条匹配译文",
-    );
   });
 
   it("当前目录重建失败时不被旧译文的目录差异状态遮挡", () => {
@@ -1017,42 +632,27 @@ describe("describePluginLocalizationStatus", () => {
     })).toBe("resynchronize");
   });
 
-  it("可恢复同步错误优先于旧分发阻断和目录差异", () => {
-    const catalog = {
-      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.69",
-      sourceLocale: "en", digest: "new-catalog", artifactDigest: "new-artifact",
-      scannedAt: "2026-08-02T00:00:00Z",
-      strings: [{ key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
-    };
-    const submission = {
-      ...baseSubmission,
-      pluginVersion: "0.5.68", catalogDigest: "old-catalog", sourceVersionId: "old-source",
-      localizationTargetLocale: "zh-CN",
-      localizationDemandStatus: {
-        state: "distribution_blocked" as const,
-        sourceVersionId: "old-source", targetLocale: "zh-CN", targetVariant: "default",
-        totalUnitCount: 1, workItemCount: 1, nativeUnitCount: 0, queuedCount: 0,
-        runningCount: 0, succeededCount: 0, failedCount: 0, reviewedUnitCount: 0,
-        publishedUnitCount: 0, retryAfterSeconds: 0,
-        failureCode: "PublicDistributionLicenseEvidenceMissing", failureRetryable: false,
-        updatedAt: "2026-08-02T00:00:00Z",
+  it("来源已拒绝时优先重新提交新观察，而不是重复同步陈旧错误", () => {
+    const input = {
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+        sourceLocale: "en", digest: "current-catalog", artifactDigest: "current-artifact",
+        scannedAt: "2026-08-02T00:00:00Z",
+        strings: [{ key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
       },
-      lastError: {
-        code: "PC_RETRY_EXHAUSTED", message: "目录刷新暂时失败",
-        targetLocale: "zh-CN", updatedAt: "2026-08-02T00:01:00Z",
+      submission: {
+        ...baseSubmission,
+        catalogDigest: "current-catalog",
+        contributionState: "rejected" as const,
+        lastError: {
+          code: "PC_RETRY_EXHAUSTED", message: "旧任务已耗尽重试次数",
+          targetLocale: "zh-CN", updatedAt: "2026-08-02T00:01:00Z",
+        },
       },
+      targetLocale: "zh-CN",
     } as const;
-    const translation = {
-      pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "old-source",
-      targetLocale: "zh-CN", entries: [], pulledAt: "2026-08-02T00:00:00Z",
-    };
-    const input = { catalog, submission, translation, targetLocale: "zh-CN" } as const;
 
-    expect(pluginManualRetryKind(input)).toBe("resynchronize");
-    expect(describePluginLocalizationStatus(input)).toEqual({
-      kind: "failed",
-      label: "同步失败：目录刷新暂时失败。点击右侧“重试此插件”，无需关闭开关。",
-    });
+    expect(pluginManualRetryKind(input)).toBe("resubmit");
   });
 
   it("行可见重试判定统一投影 locale、来源资格和会话", () => {
@@ -1209,86 +809,6 @@ describe("describePluginLocalizationStatus", () => {
     ]);
   });
 
-  it("仅在权威需求仍处理中时把精确目录缺口称为等待发布", () => {
-    const catalog = {
-      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
-      sourceLocale: "en", digest: exactIdentity.digest,
-      artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
-      scannedAt: "2026-07-18T00:00:00Z",
-      strings: [
-        { key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" },
-        { key: "two", source: "New option", origins: ["ui-call" as const], placeholderSignature: "" },
-      ],
-    };
-    const translation = {
-      pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source",
-      artifactDigest: exactIdentity.artifactDigest, catalogIdentity: exactIdentity,
-      targetLocale: "zh-CN",
-      entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
-      pulledAt: "2026-07-18T00:00:00Z",
-    };
-    expect(describePluginLocalizationStatus({ catalog, translation, targetLocale: "zh-CN" })).toEqual({
-      kind: "localized",
-      label: "已获取 1/2 条匹配译文（50%），1 条尚未发布；插件界面 1/2",
-      coverage: {
-        headline: "已获取 1/2 条匹配译文（50%），1 条尚未发布",
-        complete: false,
-        scopeMetrics: ["插件界面 1/2"],
-        sourceMetrics: [],
-      },
-    });
-    expect(describePluginLocalizationStatus({
-      catalog,
-      translation,
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: {
-          state: "mt_running", sourceVersionId: "stale-source", targetLocale: "zh-CN",
-          targetVariant: "default", totalUnitCount: 2, workItemCount: 1,
-          nativeUnitCount: 0, queuedCount: 0, runningCount: 1, succeededCount: 0,
-          failedCount: 0, reviewedUnitCount: 0, publishedUnitCount: 1,
-          retryAfterSeconds: 5, failureRetryable: false,
-          updatedAt: "2026-07-20T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    })).toEqual({
-      kind: "localized",
-      label: "已获取 1/2 条匹配译文（50%），1 条尚未发布；插件界面 1/2",
-      coverage: {
-        headline: "已获取 1/2 条匹配译文（50%），1 条尚未发布",
-        complete: false,
-        scopeMetrics: ["插件界面 1/2"],
-        sourceMetrics: [],
-      },
-    });
-    expect(describePluginLocalizationStatus({
-      catalog,
-      translation,
-      submission: {
-        ...baseSubmission,
-        localizationDemandStatus: {
-          state: "mt_running", sourceVersionId: "source", targetLocale: "zh-CN",
-          targetVariant: "default", totalUnitCount: 2, workItemCount: 1,
-          nativeUnitCount: 0, queuedCount: 0, runningCount: 1, succeededCount: 0,
-          failedCount: 0, reviewedUnitCount: 0, publishedUnitCount: 1,
-          retryAfterSeconds: 5, failureRetryable: false,
-          updatedAt: "2026-07-20T00:00:00Z",
-        },
-      },
-      targetLocale: "zh-CN",
-    })).toEqual({
-      kind: "waiting",
-      label: "已准备 1/2 条匹配译文（50%），1 条等待发布；插件界面 1/2",
-      coverage: {
-        headline: "已准备 1/2 条匹配译文（50%），1 条等待发布",
-        complete: false,
-        scopeMetrics: ["插件界面 1/2"],
-        sourceMetrics: [],
-      },
-    });
-  });
-
   it("仅有覆盖摘要时也展示插件自带语言，不伪造语枢译文条目", () => {
     expect(describePluginLocalizationStatus({
       catalog: {
@@ -1354,7 +874,7 @@ describe("describePluginLocalizationStatus", () => {
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "可安全应用 1/2 条匹配译文，1 条暂不可安全应用",
+        headline: "已获取 1/2 条匹配界面译文，1 条保留原文",
         complete: false,
       },
     });
@@ -1398,9 +918,9 @@ describe("describePluginLocalizationStatus", () => {
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "可安全应用 1350/1683 条匹配译文，333 条暂不可安全应用",
+        headline: "已获取 1350/1402 条匹配界面译文，52 条保留原文",
         complete: false,
-        scopeMetrics: ["插件界面 1350/1402", "名称与说明 0/2", "README 0/290"],
+        scopeMetrics: ["插件界面 1350/1402", "名称与说明 0/2"],
         sourceMetrics: [{ label: "插件自带 1350", tone: "native" }],
       },
     });

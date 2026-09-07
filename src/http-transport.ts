@@ -61,6 +61,10 @@ export class ObsidianHttpTransport implements TransportClient, PublicHttpTranspo
     if (request.credential !== null) {
       headers.Authorization = `Bearer ${request.credential.value}`;
     }
+    if (request.method === "GET") {
+      headers["Cache-Control"] = "no-store";
+      headers.Pragma = "no-cache";
+    }
     return this.send({
       method: request.method,
       path: request.path,

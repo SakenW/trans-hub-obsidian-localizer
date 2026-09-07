@@ -59,6 +59,7 @@ interface StoredInstallation {
 
 export class ActivationStore {
   private reconnectRequired = false;
+  private lifecycleRevision = 0;
 
   constructor(
     private readonly app: App,
@@ -68,10 +69,12 @@ export class ActivationStore {
   async client(input: {
     readonly apiBaseUrl: string;
   }): Promise<{ readonly client: PublicClient; readonly bootstrap: BootstrapResponse; readonly authorityWorkspaceId: string }> {
+    const lifecycleRevision = this.lifecycleRevision;
     const signer = await this.signer();
+    this.assertCurrent(lifecycleRevision);
     const stored = readStoredInstallation(this.app);
     if (stored === null) throw new Error("请先连接语枢。");
-    const storage = this.storage(stored.authorityWorkspaceId);
+    const storage = this.storage(stored.authorityWorkspaceId, lifecycleRevision);
     const client = new PublicClient({
       transport: new ObsidianHttpTransport(input.apiBaseUrl),
       signer,
@@ -94,6 +97,7 @@ export class ActivationStore {
       storage,
       signer,
       bootstrap: stored.bootstrap,
+      lifecycleRevision,
     });
     return { client, bootstrap, authorityWorkspaceId: stored.authorityWorkspaceId };
   }
@@ -103,6 +107,7 @@ export class ActivationStore {
     readonly ecosystemSlug: string;
     readonly callbackAction: string;
   }): Promise<string> {
+    const lifecycleRevision = ++this.lifecycleRevision;
     this.reconnectRequired = false;
     // Browser authorization is an explicit device re-enrollment. Reusing one
     // signing key for another installation is correctly contained as cloning.
@@ -111,13 +116,14 @@ export class ActivationStore {
     this.app.secretStorage.setSecret(INSTALLATION_SECRET_ID, "");
     this.app.secretStorage.setSecret(PENDING_RENEWAL_SECRET_ID, "");
     const signer = await this.signer();
+    this.assertCurrent(lifecycleRevision);
     const client = new PublicClient({
       transport: new ObsidianHttpTransport(PREPARE_ONLY_TRANSPORT_ORIGIN),
       signer,
       digest: webCryptoDigest(),
       clock: systemClock(),
       random: systemRandom(),
-      installationStorage: this.storage("pending"),
+      installationStorage: this.storage("pending", lifecycleRevision),
     });
     const prepared = client.prepareBootstrap({
       client: { type: "public_plugin", version: OBSIDIAN_CLIENT_VERSION, platform: "obsidian-desktop" },
@@ -129,6 +135,7 @@ export class ActivationStore {
       prepared,
       createdAtEpochMs: Date.now(),
     };
+    this.assertCurrent(lifecycleRevision);
     this.app.secretStorage.setSecret(PENDING_AUTHORIZATION_SECRET_ID, JSON.stringify(pending));
     const url = new URL(`${input.webBaseUrl}/connect/client`);
     url.searchParams.set("ecosystem", input.ecosystemSlug);
@@ -145,6 +152,7 @@ export class ActivationStore {
     readonly linkingCode: string;
     readonly bindingDigest: string;
   }): Promise<BootstrapResponse> {
+    const lifecycleRevision = this.lifecycleRevision;
     const pending = parsePendingAuthorization(
       this.app.secretStorage.getSecret(PENDING_AUTHORIZATION_SECRET_ID),
     );
@@ -156,7 +164,8 @@ export class ActivationStore {
       throw new Error("浏览器授权与本机安装身份不匹配。");
     }
     const signer = await this.signer();
-    const storage = this.storage(input.authorityWorkspaceId);
+    this.assertCurrent(lifecycleRevision);
+    const storage = this.storage(input.authorityWorkspaceId, lifecycleRevision);
     const client = new PublicClient({
       transport: new ObsidianHttpTransport(input.apiBaseUrl),
       signer,
@@ -169,6 +178,7 @@ export class ActivationStore {
       linkingCode: input.linkingCode,
       prepared: pending.prepared,
     });
+    this.assertCurrent(lifecycleRevision);
     this.reconnectRequired = false;
     this.app.secretStorage.setSecret(PENDING_AUTHORIZATION_SECRET_ID, "");
     return bootstrap;
@@ -186,11 +196,13 @@ export class ActivationStore {
   }
 
   clear(): void {
+    this.lifecycleRevision += 1;
     this.reconnectRequired = false;
     this.clearStoredActivation();
   }
 
   private invalidate(): void {
+    this.lifecycleRevision += 1;
     this.reconnectRequired = true;
     this.clearStoredActivation();
   }
@@ -202,8 +214,21 @@ export class ActivationStore {
     this.app.secretStorage.setSecret(PENDING_RENEWAL_SECRET_ID, "");
   }
 
-  private storage(authorityWorkspaceId: string): SecretInstallationStorage {
-    return new SecretInstallationStorage(this.app, authorityWorkspaceId);
+  private storage(
+    authorityWorkspaceId: string,
+    lifecycleRevision: number,
+  ): SecretInstallationStorage {
+    return new SecretInstallationStorage(
+      this.app,
+      authorityWorkspaceId,
+      () => this.lifecycleRevision === lifecycleRevision,
+    );
+  }
+
+  private assertCurrent(lifecycleRevision: number): void {
+    if (this.lifecycleRevision !== lifecycleRevision) {
+      throw new Error("设备授权操作已被新的会话取代。");
+    }
   }
 
   private signer(): Promise<Ed25519InstallationSignerPort> {
@@ -224,7 +249,9 @@ export class ActivationStore {
     readonly storage: SecretInstallationStorage;
     readonly signer: Ed25519InstallationSignerPort;
     readonly bootstrap: BootstrapResponse;
+    readonly lifecycleRevision: number;
   }): Promise<BootstrapResponse> {
+    this.assertCurrent(input.lifecycleRevision);
     const storedPending = parsePendingCredentialRenewal(
       this.app.secretStorage.getSecret(PENDING_RENEWAL_SECRET_ID),
     );
@@ -270,6 +297,7 @@ export class ActivationStore {
         },
       },
     });
+    this.assertCurrent(input.lifecycleRevision);
     if (response.status !== 200) {
       if (response.status === 401 || response.status === 403) this.invalidate();
       throw new Error(`设备授权续期失败：HTTP ${response.status}`);
@@ -287,6 +315,7 @@ export class ActivationStore {
       intakeCredential: renewal.intakeCredential,
     });
     await input.storage.save({ bootstrap });
+    this.assertCurrent(input.lifecycleRevision);
     this.app.secretStorage.setSecret(PENDING_RENEWAL_SECRET_ID, "");
     return bootstrap;
   }
@@ -296,6 +325,7 @@ class SecretInstallationStorage implements InstallationStoragePort {
   constructor(
     private readonly app: App,
     private readonly authorityWorkspaceId: string,
+    private readonly canPersist: () => boolean,
   ) {}
 
   loadSync(): InstallationRecord | null {
@@ -315,6 +345,9 @@ class SecretInstallationStorage implements InstallationStoragePort {
   }
 
   save(record: InstallationRecord): Promise<void> {
+    if (!this.canPersist()) {
+      return Promise.reject(new Error("设备授权操作已被新的会话取代。"));
+    }
     this.app.secretStorage.setSecret(INSTALLATION_SECRET_ID, JSON.stringify({
       authorityWorkspaceId: this.authorityWorkspaceId,
       ...record,
@@ -323,6 +356,9 @@ class SecretInstallationStorage implements InstallationStoragePort {
   }
 
   clear(): Promise<void> {
+    if (!this.canPersist()) {
+      return Promise.reject(new Error("设备授权操作已被新的会话取代。"));
+    }
     this.app.secretStorage.setSecret(INSTALLATION_SECRET_ID, "");
     return Promise.resolve();
   }

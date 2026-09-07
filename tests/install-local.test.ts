@@ -62,6 +62,11 @@ it("builds and installs each exact bundle file without changing data", () => {
         .digest("hex");
       expect(receipt.installedFiles[file]).toBe(digest);
     }
+    const bundle = readFileSync(resolve(installedRoot, "main.js"), "utf8");
+    expect(bundle).not.toContain("http://127.0.0.1:8000");
+    expect(bundle).not.toContain("http://127.0.0.1:3000");
+    expect(bundle).not.toContain("TRANS_HUB_OBSIDIAN_DEV_");
+    expect(bundle.trimEnd()).not.toMatch(/\/\/# sourceMappingURL=[^\n]+$/u);
     expect(readFileSync(dataPath, "utf8")).toBe(originalData);
   } finally {
     rmSync(vault, { recursive: true, force: true });
