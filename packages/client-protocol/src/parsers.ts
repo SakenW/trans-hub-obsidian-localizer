@@ -11,7 +11,6 @@ import {
   parsePublicDiscoveryReceipt,
   parsePublicDiscoveryStatus,
   parsePublicLocalizationStatusBatch,
-  parsePublicLocalizationStatusProjection,
   parseRegistryVerificationProjection,
 } from "./public-discovery-parser.js";
 import { protocolError } from "./errors.js";

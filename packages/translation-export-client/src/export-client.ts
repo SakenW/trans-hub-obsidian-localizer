@@ -320,7 +320,7 @@ export class TranslationExportClient<
         | (TranslationExportManifest & Readonly<{ revision: 2 }>)
         | import("./contracts").CanonicalJsonTranslationExportManifest
       >
-    ).verify(manifest as Extract<AnyTranslationExportManifest, { revision: 2 | 3 }>);
+    ).verify(manifest);
   }
 
   private async verifyHistoricalManifest(
@@ -335,7 +335,7 @@ export class TranslationExportClient<
       | (TranslationExportManifest & Readonly<{ revision: 2 }>)
       | import("./contracts").CanonicalJsonTranslationExportManifest
     >).verifyHistorical?.(
-      manifest as Extract<AnyTranslationExportManifest, { revision: 2 | 3 }>,
+      manifest,
     );
   }
 

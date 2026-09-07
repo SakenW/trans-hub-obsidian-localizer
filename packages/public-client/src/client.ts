@@ -11,7 +11,6 @@ import {
   type LocalizationDemandStatusBatch,
   type LocalizationDemandStatusBatchRequest,
   type PublicCapability,
-  type PublicDiscoveryIntent,
   type PublicDiscoveryReceipt,
   type PublicDiscoveryStatus,
   type PublicLocalizationStatusBatch,
@@ -59,7 +58,6 @@ import {
 import {
   assertDigestScope,
   assertNotExpired,
-  verifyServerDocument,
 } from "./verification.js";
 
 export class PublicClient implements PublicClientControl {
