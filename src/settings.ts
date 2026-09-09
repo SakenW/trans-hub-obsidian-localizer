@@ -767,22 +767,37 @@ export class TransHubSettingTab extends PluginSettingTab {
         if (localizationStatus.coverage !== undefined) descriptionEl.createDiv({
           text: localizationStatus.coverage.headline, cls: "trans-hub-plugin-picker__catalog-applied",
         });
-        const details = descriptionEl.createEl("details", { cls: "trans-hub-plugin-picker__details" });
-        details.createEl("summary", { text: translate("进度与版本详情") });
-        if (!renderCoverageDetails) details.createDiv({ text: sourceStatus?.label ?? localizationStatus.label });
-        if (presentation.kind === "processing" && localizationStatus.initialSubmission && !statusStale) {
-          details.createDiv({
-            text: translate("首次准备完成后会自动同步，无需反复重试。"),
-          });
-        }
-        if (sourceStatus === null && localizationStatus.catalogMismatch !== undefined) {
-          renderPluginPickerCatalogMismatchDetails(details, localizationStatus.catalogMismatch);
-        } else if (renderCoverageDetails) {
-          renderPluginPickerCoverageDetails(details, localizationStatus.coverage);
-        }
+        const detailStatus = sourceStatus?.label ?? localizationStatus.label;
+        const showInitialPreparationNote = presentation.kind === "processing"
+          && localizationStatus.initialSubmission
+          && !statusStale;
         const catalog = pluginState.pluginCatalogs[plugin.id];
-        if (localizationStatus.coverage?.complete === false && catalog !== undefined && plugin.translation !== undefined) {
-          const missing = describeMissingTranslations(catalog, plugin.translation);
+        const missing = localizationStatus.coverage?.complete === false
+          && catalog !== undefined
+          && plugin.translation !== undefined
+          ? describeMissingTranslations(catalog, plugin.translation)
+          : [];
+        const shouldRenderDetails = renderCoverageDetails
+          || localizationStatus.catalogMismatch !== undefined
+          || detailStatus !== statusLabel
+          || showInitialPreparationNote
+          || missing.length > 0;
+        if (shouldRenderDetails) {
+          const details = descriptionEl.createEl("details", { cls: "trans-hub-plugin-picker__details" });
+          details.createEl("summary", { text: translate("进度与版本详情") });
+          if (!renderCoverageDetails && detailStatus !== statusLabel) {
+            details.createDiv({ text: detailStatus });
+          }
+          if (showInitialPreparationNote) {
+            details.createDiv({
+              text: translate("首次准备完成后会自动同步，无需反复重试。"),
+            });
+          }
+          if (sourceStatus === null && localizationStatus.catalogMismatch !== undefined) {
+            renderPluginPickerCatalogMismatchDetails(details, localizationStatus.catalogMismatch);
+          } else if (renderCoverageDetails) {
+            renderPluginPickerCoverageDetails(details, localizationStatus.coverage);
+          }
           if (missing.length > 0) {
             const missingDetails = details.createEl("details");
             missingDetails.createEl("summary", { text: translate("未匹配文案（{count}）", { count: missing.length }) });

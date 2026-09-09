@@ -568,7 +568,7 @@ describe("describePluginLocalizationStatus", () => {
 
   it.each([
     ["discovery", "waiting", "已提交公共目录发现，等待服务端处理"],
-    ["validating", "waiting", "正在校验公共目录与当前权威版本"],
+    ["validating", "waiting", "正在准备当前权威版本的译文任务"],
     ["parsing", "waiting", "当前权威版本正在解析并建立来源目录"],
     ["translating", "waiting", "当前权威版本正在翻译"],
     ["publishing", "waiting", "译文正在生成可下载发布版本"],

@@ -124,7 +124,7 @@ const ENGLISH_MESSAGES: Readonly<Record<string, string>> = {
   "状态刷新失败；已保留上次结果，{failed} 个插件的状态可能已过期。": "Status refresh failed. The previous result was retained; {failed} plugin statuses may be stale.",
   "已刷新所选 {count} 个插件状态；{blocked} 个服务端受限，请展开对应插件查看原因。": "Refreshed {count} selected plugins; {blocked} were blocked by the server and cannot be retried by the client.",
   "{scope} {count} 个插件；{blocked} 个服务端受限，请展开对应插件查看原因。": "{scope} {count} plugins; {blocked} were blocked by the server and cannot be retried by the client.",
-  "正在校验公共目录与当前权威版本": "Validating the public directory entry against the current authoritative version.",
+  "正在准备当前权威版本的译文任务": "Preparing translation work for the current authoritative version.",
   "当前权威版本正在解析并建立来源目录": "Parsing the current authoritative version and building its source catalog.",
   "当前权威版本正在翻译": "Translating the current authoritative version.",
   "译文正在生成可下载发布版本": "Preparing a downloadable published translation.",

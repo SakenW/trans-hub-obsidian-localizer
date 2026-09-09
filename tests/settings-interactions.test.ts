@@ -127,6 +127,37 @@ describe("settings user interactions", () => {
     await control("重试失败项（1）").click();
     expect(plugin.retryPluginIds).toHaveBeenCalledExactlyOnceWith(["dataview"]);
   });
+  it("不在进度详情中重复卡片已展示的服务端状态", () => {
+    const { plugin, internal, container } = fixture();
+    plugin.settings.excludedPluginIds = [];
+    Object.assign(plugin.getPluginState().pluginCatalogs, {
+      tables: {
+        pluginId: "tables", pluginName: "Tables", pluginVersion: "1.0.0",
+        sourceLocale: "en", digest: "catalog-digest", artifactDigest: "a".repeat(64),
+        scannedAt: "2026-09-09T00:00:00Z",
+        strings: [{ key: "one", source: "Current source", origins: ["ui-call"], placeholderSignature: "" }],
+      },
+    });
+    Object.assign(plugin.getPluginState().publicPluginDiscoveries, {
+      tables: {
+        statusRevision: 2, discoveryId: "discovery", receiptId: "receipt", targetLocales: ["zh-CN"],
+        classification: "eligible_for_processing", taskState: "result_verified",
+        retryAllowed: false, retryAfterSeconds: 0, installationId: "installation",
+        submittedAt: "2026-09-09T00:00:00Z",
+        localizationProjection: {
+          kind: "public_localization_status_projection",
+          protocol: { protocol: "trans-hub.client-protocol", revision: 1, schemaRevision: 1 },
+          projectionRevision: 1, discoveryId: "discovery", registryKey: "official-directory",
+          externalObjectId: "tables", targetLocale: "zh-CN", catalogIdentityDigest: null,
+          sourceVersionId: "source", stage: "translating", updatedAt: "2026-09-09T00:00:00Z",
+        },
+      },
+    });
+
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
+
+    expect(container.allText().match(/当前权威版本正在翻译/gu)).toHaveLength(1);
+  });
   it("同步期间重复点击与批量重试不会重复提交", async () => {
     const { plugin, internal, container } = fixture();
     plugin.settings.excludedPluginIds = [];

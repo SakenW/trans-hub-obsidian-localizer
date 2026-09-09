@@ -290,7 +290,7 @@ export function describePluginLocalizationStatus(input: {
       case "discovery":
         return { kind: "waiting", label: translate("已提交公共目录发现，等待服务端处理") };
       case "validating":
-        return { kind: "waiting", label: translate("正在校验公共目录与当前权威版本") };
+        return { kind: "waiting", label: translate("正在准备当前权威版本的译文任务") };
       case "parsing":
         return { kind: "waiting", label: translate("当前权威版本正在解析并建立来源目录") };
       case "translating":
