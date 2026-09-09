@@ -8,19 +8,20 @@ import {
 } from "../src/translation-sync";
 
 describe("parseObsidianTranslationPack", () => {
-  it("accepts exact Obsidian occurrence scope", () => {
+  it("accepts version 1 without a row digest", () => {
+    const version = 1;
     const manifest = manifestFixture();
     const pack = manifest.packs[0];
     const payload = new TextEncoder().encode(JSON.stringify({
       schema: "trans-hub.translation-pack",
-      version: 1,
+      version,
       source_version_id: manifest.sourceVersionId,
       target_locale: manifest.targetLocale,
       target_variant: manifest.targetVariant,
       pack_index: 0,
-      items: [{ occurrence_key: "obsidian:block:note:block", target_text: "译文", payload_digest: `sha256:${"a".repeat(64)}`, structured_content: {} }],
+      items: [{ occurrence_key: "obsidian:block:note:block", target_text: "译文", structured_content: {} }],
     }));
-    expect(parseObsidianTranslationPack(payload, manifest, pack)).toEqual([{ noteId: "note", blockId: "block", translatedText: "译文", translationDigest: `sha256:${"a".repeat(64)}` }]);
+    expect(parseObsidianTranslationPack(payload, manifest, pack)).toEqual([{ noteId: "note", blockId: "block", translatedText: "译文" }]);
   });
 
   it("rejects non-Obsidian rows", () => {
@@ -65,7 +66,6 @@ describe("parsePluginTranslationPack", () => {
       pluginId: "sample-plugin",
       stringKey: key,
       translatedText: "设置",
-      translationDigest: `sha256:${"b".repeat(64)}`,
       provenanceKind: "th-reviewed-correction",
       application: "correction",
       nativeTarget: "设定",
@@ -121,7 +121,6 @@ describe("parsePluginTranslationPack", () => {
       pluginId: "sample-plugin",
       stringKey: key,
       translatedText: "设置",
-      translationDigest: `sha256:${"d".repeat(64)}`,
     }]);
 
     const crossPluginPayload = new TextEncoder().encode(JSON.stringify({

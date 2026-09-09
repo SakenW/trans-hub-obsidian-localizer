@@ -19,6 +19,18 @@ const scanResult = {
 };
 
 describe("processPluginSelection", () => {
+  it("reports delivered translations alongside remaining work and blocked plugins", () => {
+    const message = describePluginSelectionProcessing({ kind: "synchronized", scan: scanResult,
+      sync: { submittedCount: 0, requestedCount: 0, pulledCount: 24, translationCount: 500,
+        waitingCount: 14, blockedPluginIds: ["blocked"], failedPluginIds: ["failed"] },
+    });
+    expect(message).toContain("更新 24 个插件");
+    expect(message).toContain("安全应用 500 条译文");
+    expect(message).toContain("后续译文更新");
+    expect(message).toContain("同步失败");
+    expect(message).toContain("受服务端限制");
+    expect(message).not.toContain("正在处理");
+  });
   it("选择变化后立即扫描和同步，不依赖定时自动化开关", async () => {
     const calls: string[] = [];
     const result = await processPluginSelection({

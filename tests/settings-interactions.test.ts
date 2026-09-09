@@ -25,7 +25,10 @@ function fixture() {
     savePluginData: vi.fn(async () => {}), refreshPluginTranslationRuntime: vi.fn(async () => {}),
     restoreThirdPartyPluginFiles: vi.fn((_ids?: readonly string[]) => Promise.resolve(emptyRestore)),
     processPluginIds: vi.fn((_ids: readonly string[]) => Promise.resolve({ kind: "login-required", scan: { scannedCount: 2 } })),
+    processSelectedPlugins: vi.fn(() => Promise.resolve({ kind: "login-required", scan: { scannedCount: 1 } })),
+    retryPluginIds: vi.fn((_ids: readonly string[]) => Promise.resolve({ kind: "login-required", scan: { scannedCount: 1 } })),
     connect: vi.fn(async () => {}),
+    openPluginManager: vi.fn(async () => {}),
   };
   const tab = new TransHubSettingTab(new App() as never, plugin as unknown as TransHubObsidianPlugin);
   const internal = tab as unknown as {
@@ -50,10 +53,10 @@ function control(text: string): TestControl {
 
 beforeEach(() => { renderedSettings.length = 0; setClientLocale("zh-CN"); });
 describe("settings user interactions", () => {
-  it("全选将新增插件一次性送入与逐个开启相同的处理队列", async () => {
+  it("全部开启将新增插件一次性送入与逐个开启相同的处理队列", async () => {
     const { plugin, internal, container } = fixture();
     internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
-    await control("全选").click();
+    await control("全部开启").click();
     await internal.selectionProcessing;
     expect(plugin.settings.excludedPluginIds).toEqual([]);
     expect(plugin.processPluginIds).toHaveBeenCalledExactlyOnceWith(["dataview", "tables"]);
@@ -93,7 +96,7 @@ describe("settings user interactions", () => {
     expect(plugin.restoreThirdPartyPluginFiles).toHaveBeenCalledExactlyOnceWith(["dataview"]);
     expect(plugin.processPluginIds).not.toHaveBeenCalled();
     plugin.settings.pluginTranslationEnabled = false;
-    await control("全选").click();
+    await control("全部开启").click();
     expect(plugin.processPluginIds).not.toHaveBeenCalled();
   });
   it("关闭的插件显示已关闭，暂停状态禁用网络操作", () => {
@@ -105,9 +108,53 @@ describe("settings user interactions", () => {
     renderedSettings.length = 0;
     internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
     expect(container.allText()).toContain("本地化已暂停");
-    expect(control("检查进度").disabled).toBe(true);
-    expect(control("重新检查插件").disabled).toBe(true);
+    expect(control("同步译文").disabled).toBe(true);
+    expect(control("重试失败项（0）").disabled).toBe(true);
   });
+
+  it("批量重试只提交已选择且可恢复的插件", async () => {
+    const { plugin, internal, container } = fixture();
+    plugin.settings.excludedPluginIds = ["tables"];
+    const state = plugin.getPluginState();
+    Object.assign(state.publicPluginDiscoveries, { dataview: {
+      statusRevision: 2, discoveryId: "discovery", receiptId: "receipt", targetLocales: ["zh-CN"],
+      classification: "blocked", taskState: "blocked", retryAllowed: false, retryAfterSeconds: 0,
+      blockedReasonCode: "registry_binding_changed", retryGeneration: 0,
+      installationId: "installation", submittedAt: "2026-09-09T00:00:00Z",
+    } as never });
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
+    expect(control("重试失败项（1）")).toBeDefined();
+    await control("重试失败项（1）").click();
+    expect(plugin.retryPluginIds).toHaveBeenCalledExactlyOnceWith(["dataview"]);
+  });
+  it("同步期间重复点击与批量重试不会重复提交", async () => {
+    const { plugin, internal, container } = fixture();
+    plugin.settings.excludedPluginIds = [];
+    let finish!: () => void;
+    plugin.processSelectedPlugins.mockImplementationOnce(() => new Promise((resolve) => {
+      finish = () => resolve({ kind: "login-required", scan: { scannedCount: 1 } });
+    }));
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
+    const first = control("同步译文").click();
+    await control("同步译文").click();
+    await control("重试失败项（0）").click();
+    expect(plugin.processSelectedPlugins).toHaveBeenCalledTimes(1);
+    expect(plugin.retryPluginIds).not.toHaveBeenCalled();
+    finish();
+    await first;
+  });
+
+  it("打开管理器前先关闭设置窗口", async () => {
+    const { plugin, tab, internal, container } = fixture();
+    const events: string[] = [];
+    Object.assign(tab.app, { setting: { close: () => events.push("close-settings") } });
+    plugin.openPluginManager.mockImplementation(() => { events.push("open-manager"); return Promise.resolve(); });
+    internal.renderSettings(container as unknown as HTMLElement);
+    await control("打开插件管理器").click();
+    expect(events).toEqual(["close-settings", "open-manager"]);
+    expect(control("打开插件管理器").disabled).toBe(false);
+  });
+
   it("主操作在高级选项之前，恢复冲突在设置页可见且可处理", () => {
     const { internal, container, setRestoreResult } = fixture();
     setRestoreResult({ ...emptyRestore, conflicts: 1, conflictPluginIds: ["dataview"] });

@@ -1,8 +1,11 @@
+import { normalizePlatformLocale } from "@trans-hub/client-protocol";
 import { describe, expect, it } from "vitest";
 
 import {
   describePluginLocalizationStatus,
   pluginManualRetryKind,
+  isPublicDiscoveryManuallyRetryable,
+  requiresOneTimeRegistryBindingRecovery,
   visiblePluginManualRetryKind,
 } from "../src/plugin-localization-status";
 import { EMPTY_PLUGIN_STATE } from "../src/plugin-state";
@@ -29,6 +32,19 @@ const exactIdentity = {
 };
 
 describe("describePluginLocalizationStatus", () => {
+  it.each([
+    ["executor_retry_exhausted", "自动处理多次失败"],
+    ["source_validation_rejected", "插件来源验证未通过"],
+    ["validator_not_approved", "插件来源与当前验证规则不匹配"],
+  ])("explains server block %s without suggesting a client retry", (blockedReasonCode, explanation) => {
+    const result = describePluginLocalizationStatus({ targetLocale: "zh-CN", publicDiscovery: {
+      discoveryId: "discovery", installationId: "installation", submittedAt: "2026-09-07T00:00:00Z",
+      targetLocales: ["zh-CN"], classification: "blocked", taskState: "blocked", blockedReasonCode,
+    } });
+    expect(result.kind).toBe("blocked");
+    expect(result.label).toContain(explanation);
+    expect(result.label).not.toContain("重试此插件");
+  });
   it("marks the English source locale as complete without waiting for translation", () => {
     expect(describePluginLocalizationStatus({ targetLocale: "en" })).toEqual({
       kind: "localized",
@@ -60,6 +76,100 @@ describe("describePluginLocalizationStatus", () => {
     })).toEqual({ kind: "login-required", label: "重新连接后继续同步" });
   });
 
+  it("keeps a safely applied cross-version translation visible when the catalog refresh fails", () => {
+    const catalog = {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+      sourceLocale: "en", digest: "current", artifactDigest: "artifact",
+      scannedAt: "2026-09-09T00:00:00Z",
+      strings: [{ key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
+    };
+    const result = describePluginLocalizationStatus({
+      catalog,
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.70", authorityPluginVersion: "0.5.70",
+        sourceVersionId: "server-source", targetLocale: "zh-CN",
+        entries: [{ pluginId: "dataview", source: "Settings", target: "设置",
+          sourceCompatibility: {
+            semanticRole: "runtime-ui", contentScopes: ["runtime-ui"],
+            placeholderSignature: "", formatSignature: "plain-text-v1",
+            sourceContentDigest: `sha256:${"a".repeat(64)}`,
+          },
+        }],
+        pulledAt: "2026-09-09T00:00:00Z",
+      },
+      submission: {
+        ...baseSubmission, catalogDigest: "current", sourceVersionId: "server-source",
+        lastError: {
+          code: "public_catalog_unavailable", message: "此插件的译文目录读取失败，请稍后重试。",
+          targetLocale: "zh-CN", updatedAt: "2026-09-09T00:00:00Z",
+        },
+      },
+      targetLocale: "zh-CN",
+    });
+    expect(result.kind).toBe("localized");
+    expect(result.label).toContain("本地化译文");
+    expect(result.coverage?.headline).toContain("1/1");
+    expect(result.coverage?.complete).toBe(true);
+  });
+
+  it("keeps a directory failure actionable when an incompatible cache has no safe matches", () => {
+    const result = describePluginLocalizationStatus({
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+        sourceLocale: "en", digest: "current", artifactDigest: "artifact",
+        scannedAt: "2026-09-09T00:00:00Z",
+        strings: [{ key: "one", source: "Current setting", origins: ["ui-call" as const], placeholderSignature: "" }],
+      },
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.70", authorityPluginVersion: "0.5.70",
+        sourceVersionId: "old-source", targetLocale: "zh-CN",
+        entries: [{ pluginId: "dataview", source: "Old setting", target: "旧设置" }],
+        pulledAt: "2026-09-09T00:00:00Z",
+      },
+      submission: {
+        ...baseSubmission, catalogDigest: "current", sourceVersionId: "old-source",
+        lastError: {
+          code: "public_catalog_unavailable", message: "此插件的译文目录读取失败，请稍后重试。",
+          targetLocale: "zh-CN", updatedAt: "2026-09-09T00:00:00Z",
+        },
+      },
+      targetLocale: "zh-CN",
+    });
+    expect(result).toEqual(expect.objectContaining({ kind: "failed" }));
+    expect(result.label).toContain("目录读取失败");
+  });
+
+  it("does not hide an explicit current server block behind an exact cache", () => {
+    const result = describePluginLocalizationStatus({
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+        sourceLocale: "en", digest: exactIdentity.digest, artifactDigest: exactIdentity.artifactDigest,
+        catalogIdentity: exactIdentity, scannedAt: "2026-09-09T00:00:00Z",
+        strings: [{ key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
+      },
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "source", targetLocale: "zh-CN",
+        catalogIdentity: exactIdentity,
+        entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }], pulledAt: "2026-09-09T00:00:00Z",
+      },
+      publicDiscovery: {
+        discoveryId: "discovery", installationId: "installation", submittedAt: "2026-09-09T00:00:00Z",
+        targetLocales: ["zh-CN"], classification: "blocked", taskState: "blocked",
+        blockedReasonCode: "source_validation_rejected",
+        localizationProjection: {
+          kind: "public_localization_status_projection", protocol: { protocol: "trans-hub.client-protocol", revision: 1, schemaRevision: 1 },
+          projectionRevision: 1, discoveryId: "discovery", registryKey: "official-directory",
+          externalObjectId: "dataview", targetLocale: "zh-CN" as never,
+          catalogIdentityDigest: { algorithm: "sha256", domain: "logical_object", hex: exactIdentity.digest as never },
+          sourceVersionId: "source", stage: "blocked", updatedAt: "2026-09-09T00:00:00Z",
+        },
+      },
+      targetLocale: "zh-CN",
+    });
+    expect(result.kind).toBe("blocked");
+    expect(result.label).toContain("来源验证未通过");
+  });
+
   it("将公共目录发现的等待与阻断状态明确呈现", () => {
     const baseDiscovery = {
       discoveryId: "019f0000-0000-7000-8000-000000000001",
@@ -86,7 +196,7 @@ describe("describePluginLocalizationStatus", () => {
     expect(describePluginLocalizationStatus({
       publicDiscovery: retryableBlock,
       targetLocale: "zh-CN",
-    })).toEqual({ kind: "failed", label: "目录条目暂无法处理。点击右侧“重试此插件”。" });
+    })).toEqual({ kind: "failed", label: "目录条目暂无法处理。可使用重试操作恢复。" });
     expect(visiblePluginManualRetryKind({
       state: {
         ...EMPTY_PLUGIN_STATE,
@@ -189,10 +299,8 @@ describe("describePluginLocalizationStatus", () => {
   });
 
   it.each([
-    { retryAllowed: false, retryAfterSeconds: 0, reason: "registry_projection_stale" },
-    { retryAllowed: true, retryAfterSeconds: 30, reason: "registry_projection_stale" },
     { retryAllowed: true, retryAfterSeconds: 0, reason: "executor_retry_exhausted" },
-  ] as const)("只允许服务端明确可恢复的阻断重提：$reason", (contract) => {
+  ] as const)("非目录过期阻断仍须服务端明确允许重提：$reason", (contract) => {
     const discovery = {
       discoveryId: "019f0000-0000-7000-8000-000000000001",
       receiptId: "019f0000-0000-7000-8000-000000000003",
@@ -216,6 +324,29 @@ describe("describePluginLocalizationStatus", () => {
       sourceSelectable: true,
       hasSession: true,
     })).toBeNull();
+  });
+
+  it("目录 projection 过期时允许手动提交新的恢复观察", () => {
+    const discovery = {
+      discoveryId: "019f0000-0000-7000-8000-000000000001",
+      receiptId: "019f0000-0000-7000-8000-000000000003",
+      statusRevision: 2 as const,
+      targetLocales: ["zh-CN"] as const,
+      classification: "blocked",
+      taskState: "blocked",
+      retryAllowed: false,
+      retryAfterSeconds: 0,
+      blockedReasonCode: "registry_projection_stale",
+      installationId: "019f0000-0000-7000-8000-000000000002",
+      submittedAt: "2026-09-08T00:00:00Z",
+    };
+    expect(visiblePluginManualRetryKind({
+      state: { ...EMPTY_PLUGIN_STATE, publicPluginDiscoveries: { dataview: discovery } },
+      pluginId: "dataview",
+      targetLocale: "zh-CN",
+      sourceSelectable: true,
+      hasSession: true,
+    })).toBe("resubmit");
   });
 
   it.each([
@@ -250,7 +381,7 @@ describe("describePluginLocalizationStatus", () => {
     })).toBeNull();
   });
 
-  it("发现虽可恢复但当前本地化投影健康在途时禁止重提", () => {
+  it("目录来源已过期时以服务端阻断结果为准并允许重新观察", () => {
     expect(visiblePluginManualRetryKind({
       state: {
         ...EMPTY_PLUGIN_STATE,
@@ -278,7 +409,70 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
       sourceSelectable: true,
       hasSession: true,
+    })).toBe("resubmit");
+  });
+
+  it("同一失效来源收到恢复回执后不能反复创建观察", () => {
+    const discovery = {
+      statusRevision: 2, targetLocales: ["zh-CN"], classification: "blocked",
+      taskState: "blocked", blockedReasonCode: "registry_binding_changed",
+      retryAllowed: true, retryAfterSeconds: 0, retryGeneration: 0,
+    };
+    expect(isPublicDiscoveryManuallyRetryable(discovery as never, "zh-CN")).toBe(true);
+    expect(isPublicDiscoveryManuallyRetryable({ ...discovery, retryGeneration: 1 } as never, "zh-CN")).toBe(false);
+    expect(visiblePluginManualRetryKind({
+      state: { ...EMPTY_PLUGIN_STATE, publicPluginDiscoveries: { dataview: { ...discovery, retryGeneration: 1 } },
+        pluginSubmissions: { dataview: { ...baseSubmission, contributionState: "rejected" } } } as never,
+      pluginId: "dataview", targetLocale: "zh-CN", sourceSelectable: true, hasSession: true,
     })).toBeNull();
+  });
+
+  it("仅对未恢复过的失效目录绑定执行一次启动恢复", () => {
+    const discovery = {
+      statusRevision: 2,
+      targetLocales: ["zh-CN"],
+      classification: "blocked",
+      taskState: "blocked",
+      blockedReasonCode: "registry_binding_changed",
+      retryGeneration: 0,
+    };
+    expect(requiresOneTimeRegistryBindingRecovery(discovery as never, "zh-CN")).toBe(true);
+    expect(requiresOneTimeRegistryBindingRecovery({ ...discovery, retryGeneration: 1 } as never, "zh-CN")).toBe(false);
+    expect(requiresOneTimeRegistryBindingRecovery({ ...discovery, blockedReasonCode: "registry_projection_stale" } as never, "zh-CN")).toBe(false);
+  });
+
+  it.each([true, false])("空缓存不能遮挡最新翻译进度或复活旧拒绝状态（精确目录=$0）", (exact) => {
+    const digest = exactIdentity.digest;
+    const result = describePluginLocalizationStatus({
+      catalog: {
+        pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+        sourceLocale: "en", digest, artifactDigest: exactIdentity.artifactDigest,
+        catalogIdentity: exactIdentity, scannedAt: "2026-09-09T00:00:00Z",
+        strings: [{ key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" }],
+      },
+      submission: { ...baseSubmission, catalogDigest: digest, contributionState: "rejected" },
+      translation: {
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "current-source",
+        targetLocale: "zh-CN", entries: [], publishedUnitCount: 0, upstreamNativeCount: 0,
+        ...(exact ? { catalogIdentity: exactIdentity, artifactDigest: exactIdentity.artifactDigest } : {}),
+        pulledAt: "2026-09-09T00:00:00Z",
+      },
+      publicDiscovery: {
+        discoveryId: "discovery", installationId: "installation", targetLocales: ["zh-CN"],
+        classification: "eligible_for_processing", taskState: "result_verified",
+        catalogIdentityDigest: digest, submittedAt: "2026-09-09T00:00:00Z",
+        localizationProjection: {
+          kind: "public_localization_status_projection",
+          protocol: { protocol: "trans-hub.client-protocol", revision: 1, schemaRevision: 1 },
+          projectionRevision: 1, discoveryId: "discovery", registryKey: "official-directory",
+          externalObjectId: "dataview", targetLocale: normalizePlatformLocale("zh-CN"), catalogIdentityDigest: null,
+          sourceVersionId: "current-source", stage: "translating", updatedAt: "2026-09-09T00:00:00Z",
+        },
+      },
+      targetLocale: "zh-CN",
+    });
+    expect(result.kind).toBe("waiting");
+    expect(result.label).not.toContain("拒绝");
   });
 
   it("does not let an in-flight public discovery hide an exact published translation", () => {
@@ -598,7 +792,7 @@ describe("describePluginLocalizationStatus", () => {
     expect(status.coverage?.complete).toBe(false);
   });
 
-  it("当前目录重建失败时不被旧译文的目录差异状态遮挡", () => {
+  it("目录重建失败且旧包缺少跨版本证明时显示可操作错误", () => {
     const catalog = {
       pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.69",
       sourceLocale: "en", digest: "current", artifactDigest: "artifact",
@@ -621,12 +815,11 @@ describe("describePluginLocalizationStatus", () => {
       pulledAt: "2026-07-27T00:00:00Z",
     };
 
-    expect(describePluginLocalizationStatus({
+    const result = describePluginLocalizationStatus({
       catalog, submission, translation, targetLocale: "zh-CN",
-    })).toEqual({
-      kind: "failed",
-      label: "同步失败：目录观察提交失败。点击右侧“重试此插件”，无需关闭开关。",
     });
+    expect(result.kind).toBe("failed");
+    expect(result.label).toContain("目录观察提交失败");
     expect(pluginManualRetryKind({
       catalog, submission, translation, targetLocale: "zh-CN",
     })).toBe("resynchronize");

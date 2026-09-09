@@ -188,7 +188,7 @@ export class PluginAutomationController {
       // The scanner is CPU-bound for large community bundles and runs on
       // Obsidian's UI thread. A matching exact artifact plus unchanged
       // manifest metadata is sufficient to reuse the immutable catalog.
-      if (canReuseScannedPluginCatalog(previous, plugin, artifactDigest)) {
+      if (canReuseScannedPluginCatalog(previous, plugin, artifactDigest, settings.targetLocale)) {
         catalogs[plugin.id] = previous;
         stringCount += previous.strings.length;
         continue;
@@ -498,12 +498,14 @@ export function canReuseScannedPluginCatalog(
   previous: PluginUiCatalog | undefined,
   plugin: Pick<InstalledObsidianPlugin, "name" | "version">,
   artifactDigest: string,
+  targetLocale: TargetLocale,
 ): boolean {
   return previous?.catalogIdentity !== undefined
     && previous.pluginVersion === plugin.version
     && previous.pluginName === plugin.name
     && previous.artifactDigest === artifactDigest
-    && previous.patchEvidenceRevision === 10;
+    && previous.scannerTargetLocale === targetLocale
+    && previous.patchEvidenceRevision === 11;
 }
 
 export function selectApplicablePluginTranslations(

@@ -194,7 +194,7 @@ describe("scanPluginUiStrings", () => {
       sourceLocale: "en",
       bundle: 'el.textContent = "Fresh sink";',
     });
-    expect(catalog.patchEvidenceRevision).toBe(10);
+    expect(catalog.patchEvidenceRevision).toBe(11);
   });
 
   it("merges a partial embedded locale pack with the hardcoded UI scan", async () => {
@@ -820,7 +820,27 @@ describe("scanPluginUiStrings", () => {
       nativeTarget: "通用译文",
       nativeTargetLocale: "zh-CN",
     });
+    expect(catalog.scannerTargetLocale).toBe("zh-CN");
     expect(catalog.strings.map((item) => item.source)).not.toContain("Fallback source");
+  });
+
+  it("keeps source identity locale-independent while recomputing native targets", async () => {
+    const bundle = [
+      'var en={save:"Save"};',
+      'var zh={save:"保存"};',
+      'var ja={save:"保存する"};',
+      "var locales={en:en,'zh-CN':zh,ja:ja};",
+    ].join("");
+    const [zhCatalog, jaCatalog] = await Promise.all([
+      scanPluginUiStrings({ plugin, sourceLocale: "en", targetLocale: "zh-CN", bundle }),
+      scanPluginUiStrings({ plugin, sourceLocale: "en", targetLocale: "ja", bundle }),
+    ]);
+
+    expect(zhCatalog.digest).toBe(jaCatalog.digest);
+    expect(zhCatalog.scannerTargetLocale).toBe("zh-CN");
+    expect(jaCatalog.scannerTargetLocale).toBe("ja");
+    expect(zhCatalog.strings.find((item) => item.source === "Save")).toMatchObject({ nativeTarget: "保存" });
+    expect(jaCatalog.strings.find((item) => item.source === "Save")).toMatchObject({ nativeTarget: "保存する" });
   });
 
   it("fails closed for untranslated and conflicting native targets", async () => {

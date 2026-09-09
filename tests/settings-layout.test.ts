@@ -32,8 +32,8 @@ describe("Obsidian settings page layout", () => {
 
   it("keeps recovery actions inside the plugin manager instead of the settings page", () => {
     expect(settingsSource).not.toContain("renderRecovery");
-    expect(settingsSource).toContain("refreshSelectedPluginStatus");
-    expect(settingsSource).toContain("refreshPluginStatusBatch(");
+    expect(settingsSource).not.toContain("refreshSelectedPluginStatus");
+    expect(settingsSource).toContain("retryRecoverablePlugins");
     expect(settingsSource).not.toContain("syncInstalledPluginTranslations(");
     expect(settingsSource).toContain("processSelectedPlugins()");
     expect(settingsSource).not.toContain("processSelectedPlugins(true)");

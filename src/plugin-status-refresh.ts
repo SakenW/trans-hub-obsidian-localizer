@@ -324,8 +324,8 @@ export async function refreshPluginStatuses(
   for (const { pluginId } of discoveryQueries) {
     const discovery = input.getState().publicPluginDiscoveries[pluginId];
     if (
-      discovery?.taskState === "blocked"
-      || discovery?.localizationProjection?.stage === "blocked"
+      discovery?.localizationProjection?.stage === "blocked"
+      || (discovery?.localizationProjection === undefined && discovery?.taskState === "blocked")
     ) {
       if (isPublicDiscoveryManuallyRetryable(discovery, input.targetLocale)) {
         discoveryFailed.add(pluginId);

@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { TransportClient } from "../src/http-transport";
 import {
   resolvePublishedPluginArtifactDigestFromCatalog,
   resolvePublishedPluginSource,
+  loadPublishedEcosystemCatalog,
 } from "../src/plugin-source-resolution";
 
 const SOURCE_VERSION_ID = "019f0000-0000-7000-8000-000000000001";
@@ -23,6 +24,41 @@ const CATALOG_IDENTITY = {
 } as const;
 
 describe("resolvePublishedPluginSource", () => {
+  it("isolates one failing directory object while retaining published siblings", async () => {
+    const send = vi.fn((request: { path: string }) => {
+      const ids = new URL(request.path, "https://example.test").searchParams.getAll("object_slug");
+      return Promise.resolve(ids.includes("broken")
+        ? { status: 500, body: null }
+        : { status: 200, body: { items: ids.map((slug) => ({ slug })) } });
+    });
+    const result = await loadPublishedEcosystemCatalog({ send } as unknown as TransportClient,
+      ["first", "broken", "last"].map((pluginId) => ({ pluginId, pluginVersion: "1" })), "zh-CN");
+    expect(result).toEqual({ objects: [{ slug: "first" }, { slug: "last" }], failedPluginIds: ["broken"] });
+    expect(send).toHaveBeenCalledTimes(5);
+  });
+
+  it("does not fan out directory requests when rate limited", async () => {
+    const send = vi.fn(() => Promise.resolve({ status: 429, body: null }));
+    await expect(loadPublishedEcosystemCatalog({ send } as unknown as TransportClient,
+      ["first", "last"].map((pluginId) => ({ pluginId, pluginVersion: "1" })), "zh-CN"))
+      .rejects.toThrow("HTTP 429");
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("recovers all objects when only the large batch fails", async () => {
+    const send = vi.fn((request: { path: string }) => {
+      const ids = new URL(request.path, "https://example.test").searchParams.getAll("object_slug");
+      return Promise.resolve(ids.length > 2
+        ? { status: 500, body: null }
+        : { status: 200, body: { items: ids.map((slug) => ({ slug })) } });
+    });
+    const ids = ["one", "two", "three", "four"];
+    const result = await loadPublishedEcosystemCatalog({ send } as unknown as TransportClient,
+      ids.map((pluginId) => ({ pluginId, pluginVersion: "1" })), "zh-CN");
+    expect(result?.objects.map((item) => item.slug)).toEqual(ids);
+    expect(result?.failedPluginIds ?? []).toEqual([]);
+    expect(send).toHaveBeenCalledTimes(3);
+  });
   it("reads the immutable release artifact even before locale coverage exists", () => {
     const body = catalog();
     body.objects[0].coverage = [];
@@ -244,6 +280,49 @@ describe("resolvePublishedPluginSource", () => {
       publishedUnitCount: 0,
       missingUnitCount: 0,
     });
+  });
+
+  it("keeps a stale null coverage row distinct from zero coverage", async () => {
+    const body = catalog();
+    Object.assign(body.objects[0].coverage[0], {
+      coverage_freshness: "stale",
+      coverage_source: "unavailable",
+      total_unit_count: null,
+      upstream_unit_count: null,
+      published_unit_count: null,
+      missing_unit_count: null,
+    });
+
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body), pluginId: "dataview", pluginVersion: "0.5.68",
+      targetLocale: "zh-CN", localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
+    })).resolves.toEqual({ coverageFreshness: "stale", coverageSource: "unavailable" });
+  });
+
+  it.each(["stale", "unbuilt"])("uses live automatic coverage while reviewed coverage is %s", async (freshness) => {
+    const body = catalog();
+    Object.assign(body.objects[0].coverage[0], {
+      coverage_freshness: freshness, coverage_source: "automatic",
+    });
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body), pluginId: "dataview", pluginVersion: "0.5.68",
+      targetLocale: "zh-CN", localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
+    })).resolves.toMatchObject({ sourceVersionId: SOURCE_VERSION_ID, publishedUnitCount: 77 });
+  });
+
+  it("uses live upstream coverage while reviewed coverage is unbuilt", async () => {
+    const body = catalog();
+    Object.assign(body.objects[0].coverage[0], {
+      coverage_freshness: "unbuilt", coverage_source: "upstream",
+      published_unit_count: 0, upstream_unit_count: 77,
+    });
+    await expect(resolvePublishedPluginSource({
+      transport: transport(200, body), pluginId: "dataview", pluginVersion: "0.5.68",
+      targetLocale: "zh-CN", localCatalogIdentity: CATALOG_IDENTITY,
+      authoritativeSourceVersionId: SOURCE_VERSION_ID,
+    })).resolves.toMatchObject({ sourceVersionId: SOURCE_VERSION_ID, upstreamNativeCount: 77, publishedUnitCount: 0 });
   });
 
   it("resolves native-only coverage without pretending a TH pack exists", async () => {

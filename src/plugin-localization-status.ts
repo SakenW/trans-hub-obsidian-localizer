@@ -5,6 +5,7 @@ import {
   comparePluginCatalogIdentity,
   isPluginInterfaceString,
   mergeCatalogNativeTranslations,
+  unmatchedPluginInterfaceStrings,
 } from "./plugin-catalog-diff";
 import { translate } from "./client-localization";
 import {
@@ -73,14 +74,50 @@ export function isPublicDiscoveryManuallyRetryable(
   const healthyProjectionInFlight = projection?.targetLocale === targetLocale
     && ["discovery", "validating", "parsing", "translating", "publishing"]
       .includes(projection.stage);
+  const requiresFreshRegistryObservation = [
+    "registry_projection_stale",
+    "registry_binding_changed",
+  ].includes(discovery.blockedReasonCode ?? "");
   return discovery.statusRevision === 2
     && discovery.classification === "blocked"
     && discovery.taskState === "blocked"
-    && discovery.retryAllowed === true
-    && discovery.retryAfterSeconds === 0
-    && ["registry_entry_unknown", "registry_projection_stale", "registry_binding_changed"]
-      .includes(discovery.blockedReasonCode ?? "")
-    && !healthyProjectionInFlight;
+    && (
+      // A stale projection or changed binding has no current source authority.
+      // A user-clicked retry submits a fresh observation only; Stage A
+      // revalidates the registry before any source or translation work exists.
+      (requiresFreshRegistryObservation && (discovery.retryGeneration ?? 0) === 0)
+      || (
+        discovery.retryAllowed === true
+        && discovery.retryAfterSeconds === 0
+        && ["registry_entry_unknown"]
+          .includes(discovery.blockedReasonCode ?? "")
+      )
+    )
+    // The server's blocked result supersedes a cached in-flight projection for
+    // a fresh registry observation. Other retryable failures still wait for a
+    // healthy in-flight projection to settle.
+    && (requiresFreshRegistryObservation || !healthyProjectionInFlight);
+}
+
+/**
+ * A pre-recovery receipt can retain an invalid registry binding while its
+ * cached localization projection still says it is translating. Re-observe
+ * that exact state once after the client has learned how to recover it.
+ *
+ * Ordinary stale projections and receipts that already consumed a recovery
+ * generation are excluded, so periodic synchronization cannot create an
+ * unbounded submission loop.
+ */
+export function requiresOneTimeRegistryBindingRecovery(
+  discovery: PublicPluginDiscoveryState | undefined,
+  targetLocale: TargetLocale,
+): boolean {
+  return discovery?.statusRevision === 2
+    && discovery.targetLocales.includes(targetLocale)
+    && discovery.classification === "blocked"
+    && discovery.taskState === "blocked"
+    && discovery.blockedReasonCode === "registry_binding_changed"
+    && (discovery.retryGeneration ?? 0) === 0;
 }
 
 export function visiblePluginManualRetryKind(input: {
@@ -91,6 +128,20 @@ export function visiblePluginManualRetryKind(input: {
   readonly hasSession: boolean;
 }): PluginManualRetryKind | null {
   if (!input.sourceSelectable || !input.hasSession) return null;
+  const submission = getPluginSubmissionForLocale(input.state, input.pluginId, input.targetLocale);
+  const translation = getPluginTranslation(input.state, input.pluginId, input.targetLocale);
+  const catalog = input.state.pluginCatalogs[input.pluginId];
+  // A historical discovery or synchronization error must not leave a retry
+  // affordance on a card whose exact current catalog is already complete.
+  if (submission !== undefined && hasCompleteAuthoritativeTranslation({
+    translation, catalog, targetLocale: input.targetLocale,
+  }, submission)) return null;
+  const current = describePluginLocalizationStatus({
+    submission, translation, catalog,
+    publicDiscovery: input.state.publicPluginDiscoveries[input.pluginId],
+    targetLocale: input.targetLocale, hasSession: input.hasSession,
+  });
+  if (current.kind === "localized" || current.kind === "preserved-source") return null;
   const discovery = input.state.publicPluginDiscoveries[input.pluginId];
   if (isPublicDiscoveryManuallyRetryable(
     discovery,
@@ -98,10 +149,11 @@ export function visiblePluginManualRetryKind(input: {
   )) {
     return "resubmit";
   }
+  if (discovery?.taskState === "blocked") return null;
   return pluginManualRetryKind({
-    submission: getPluginSubmissionForLocale(input.state, input.pluginId, input.targetLocale),
-    translation: getPluginTranslation(input.state, input.pluginId, input.targetLocale),
-    catalog: input.state.pluginCatalogs[input.pluginId],
+    submission,
+    translation,
+    catalog,
     targetLocale: input.targetLocale,
   });
 }
@@ -119,6 +171,8 @@ export function pluginManualRetryKind(input: {
     && submission.catalogDigest === input.catalog.digest
     && submission.pluginVersion === input.catalog.pluginVersion;
   if (submission === undefined) return null;
+  if (currentCatalogSubmission && submission.lastError?.code === "public_catalog_unavailable"
+    && isCurrentLocaleSynchronizationError(submission.lastError, input.targetLocale)) return "resynchronize";
   if (submission.lastError?.code === "source_artifact_mismatch") {
     // A rejected mismatch contribution can be stale server-side: the object
     // version digest may predate the bundle-normalization change while the
@@ -214,10 +268,19 @@ export function describePluginLocalizationStatus(input: {
       label: translate(input.requiresReconnect ? "重新连接后继续同步" : "登录后同步"),
     };
   }
+  const availableProjection = matchingCurrentLocalizationProjection(input);
+  const usableCachedTranslation = hasUsableSafeCachedTranslation(input);
+  // A real server block/revocation is current authority truth even when an old
+  // exact cache exists. Published/in-flight projections still let safe cache
+  // use remain visible.
   const matchingProjection = !exactLocalPublishedTranslation
-    ? matchingCurrentLocalizationProjection(input)
+    || !usableCachedTranslation
+    || availableProjection?.stage === "blocked"
+    ? availableProjection
     : undefined;
   const currentProjection = matchingProjection !== undefined
+    && usableCachedTranslation
+    && matchingProjection.stage !== "blocked"
     && input.translation?.targetLocale === input.targetLocale
     && input.translation.sourceVersionId === matchingProjection.sourceVersionId
     ? undefined
@@ -237,7 +300,7 @@ export function describePluginLocalizationStatus(input: {
       case "published":
         return { kind: "waiting", label: translate("译文已发布，等待客户端下载") };
       case "blocked":
-        return { kind: "blocked", label: translate("当前权威版本暂无法公开发布") };
+        return { kind: "blocked", label: describeDiscoveryBlock(input.publicDiscovery?.blockedReasonCode) };
     }
   }
   if (
@@ -251,11 +314,11 @@ export function describePluginLocalizationStatus(input: {
         && isPublicDiscoveryManuallyRetryable(input.publicDiscovery, input.targetLocale)
         ? {
             kind: "failed",
-            label: translate("目录条目暂无法处理。点击右侧“重试此插件”。"),
+            label: translate("目录条目暂无法处理。可使用重试操作恢复。"),
           }
         : {
             kind: "blocked",
-            label: translate("目录条目已被服务端阻断，当前不可由客户端重试。"),
+            label: describeDiscoveryBlock(input.publicDiscovery.blockedReasonCode),
           };
     }
     if (input.publicDiscovery.taskState === "result_verified") {
@@ -265,22 +328,6 @@ export function describePluginLocalizationStatus(input: {
       };
     }
     return { kind: "waiting", label: translate("正在验证公共目录条目…") };
-  }
-  const errorSubmission = input.submission;
-  const recoverableSynchronizationError = errorSubmission?.lastError;
-  if (
-    recoverableSynchronizationError !== undefined
-    && recoverableSynchronizationError.code !== "source_artifact_mismatch"
-    && isCurrentLocaleSynchronizationError(recoverableSynchronizationError, input.targetLocale)
-    && errorSubmission !== undefined
-    && !hasCurrentPublishedTranslation(input, errorSubmission)
-  ) {
-    return {
-      kind: "failed",
-      label: translate("同步失败：{message}。点击右侧“重试此插件”，无需关闭开关。", {
-        message: recoverableSynchronizationError.message,
-      }),
-    };
   }
   const currentCatalogSubmission = input.submission !== undefined
     && input.catalog !== undefined
@@ -302,10 +349,11 @@ export function describePluginLocalizationStatus(input: {
   ) {
     return {
       kind: "failed",
-      label: translate("需求未被接受。点击右侧“重试此插件”。"),
+      label: translate("需求未被接受。可使用重试操作恢复。"),
     };
   }
-  if (input.translation?.targetLocale === input.targetLocale) {
+  if (input.translation?.targetLocale === input.targetLocale
+    && usableCachedTranslation) {
     if (input.catalog !== undefined) {
       const identity = comparePluginCatalogIdentity(input.catalog, input.translation);
       if (!identity.exact) return safeIntersectionStatus(input.translation, input.catalog, input.targetLocale);
@@ -380,6 +428,19 @@ export function describePluginLocalizationStatus(input: {
     };
   }
   const submission = input.submission;
+  const recoverableSynchronizationError = submission?.lastError;
+  if (
+    recoverableSynchronizationError !== undefined
+    && recoverableSynchronizationError.code !== "source_artifact_mismatch"
+    && isCurrentLocaleSynchronizationError(recoverableSynchronizationError, input.targetLocale)
+  ) {
+    return {
+      kind: "failed",
+      label: translate("同步失败：{message}。点击右侧“重试此插件”，无需关闭开关。", {
+        message: recoverableSynchronizationError.message,
+      }),
+    };
+  }
   if (submission === undefined) {
     return {
       kind: "waiting",
@@ -404,7 +465,7 @@ export function describePluginLocalizationStatus(input: {
   if (submission.contributionState === "rejected") {
     return {
       kind: "failed",
-      label: translate("需求未被接受。点击右侧“重试此插件”。"),
+      label: translate("需求未被接受。可使用重试操作恢复。"),
     };
   }
   if (submission.sourceVersionId !== undefined) return { kind: "waiting", label: translate("等待目标语言译文发布") };
@@ -425,6 +486,42 @@ function hasExactLocalPublishedTranslation(input: {
     && (translation.authorityPluginVersion ?? translation.pluginVersion) === catalog.pluginVersion
     && translation.targetLocale === input.targetLocale
     && comparePluginCatalogIdentity(catalog, translation).exact;
+}
+
+function hasUsableSafeCachedTranslation(input: {
+  readonly translation?: PluginTranslationState;
+  readonly catalog?: PluginUiCatalog;
+  readonly targetLocale: string;
+}): boolean {
+  if (input.translation?.targetLocale !== input.targetLocale) return false;
+  // Without a current scan we cannot claim an exact intersection, but an
+  // authenticated non-empty cache remains a pending cached state (not a
+  // localized result) and must not be discarded from the UI.
+  if (input.catalog === undefined) return input.translation.entries.length > 0;
+  const unmatched = new Set(unmatchedPluginInterfaceStrings(input.catalog, input.translation));
+  if (input.catalog.strings.some((entry) => isPluginInterfaceString(entry) && !unmatched.has(entry.source))) {
+    return true;
+  }
+  // A numeric upstream-native aggregate is a usable local-language signal only
+  // for the same authoritative artifact/version; it must not rescue an
+  // incompatible zero-match cached dictionary.
+  const authorityVersion = input.translation.authorityPluginVersion ?? input.translation.pluginVersion;
+  return (input.translation.upstreamNativeCount ?? 0) > 0
+    && authorityVersion === input.catalog.pluginVersion
+    && (input.translation.artifactDigest === undefined
+      || input.catalog.artifactDigest === undefined
+      || input.translation.artifactDigest === input.catalog.artifactDigest)
+    && (calculatePluginTranslationCoverage(input.catalog, input.translation, input.targetLocale)?.translatedCount ?? 0) > 0;
+}
+
+function describeDiscoveryBlock(reason: string | undefined): string {
+  switch (reason) {
+    case "executor_retry_exhausted": return translate("自动处理多次失败，需要服务端恢复；反复刷新不会重新启动。");
+    case "source_validation_rejected": return translate("插件来源验证未通过，需要服务端核查后才能继续。");
+    case "validator_not_approved": return translate("插件来源与当前验证规则不匹配，需要服务端核查。");
+    case "registry_binding_changed": return translate("插件来源绑定已变化，等待服务端确认。");
+    default: return translate("当前权威版本暂无法公开发布");
+  }
 }
 
 function matchingCurrentLocalizationProjection(input: {

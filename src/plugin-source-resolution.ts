@@ -23,8 +23,29 @@ export interface PublishedPluginSource {
   readonly missingUnitCount: number;
 }
 
+/**
+ * The public catalog can retain the authority coordinate while its coverage
+ * aggregate is rebuilding.  Its null totals do not say that the source,
+ * target locale, or a previously verified local pack disappeared.
+ */
+export interface PublishedPluginCoverageRefreshing extends Partial<PublishedPluginSource> {
+  readonly coverageFreshness: "stale" | "unbuilt";
+  readonly coverageSource?: "reviewed" | "automatic" | "upstream" | "unavailable";
+}
+
+export type PublishedPluginSourceResolution =
+  | PublishedPluginSource
+  | PublishedPluginCoverageRefreshing;
+
+export function isPublishedPluginCoverageRefreshing(
+  source: PublishedPluginSourceResolution,
+): source is PublishedPluginCoverageRefreshing {
+  return "coverageFreshness" in source;
+}
+
 export interface PublishedEcosystemCatalog {
   readonly objects: readonly Record<string, unknown>[];
+  readonly failedPluginIds?: readonly string[];
 }
 
 export interface PublishedCatalogCoordinate {
@@ -98,15 +119,38 @@ export async function loadPublishedEcosystemCatalog(
   // sourceVersionId to its owning version without sorting version strings.
   const pluginIds = [...new Set(coordinates.map((coordinate) => coordinate.pluginId))];
   const objects: Record<string, unknown>[] = [];
+  const failedPluginIds: string[] = [];
   for (let index = 0; index < pluginIds.length; index += 99) {
-    const page = await loadPublishedEcosystemObjectPage(
+    const page = await loadIsolatedObjectPage(
       transport,
       pluginIds.slice(index, index + 99),
     );
     if (page === undefined) return undefined;
     objects.push(...page.objects);
+    failedPluginIds.push(...page.failedPluginIds ?? []);
   }
-  return { objects };
+  return { objects, ...(failedPluginIds.length ? { failedPluginIds } : {}) };
+}
+
+async function loadIsolatedObjectPage(
+  transport: TransportClient,
+  pluginIds: readonly string[],
+): Promise<PublishedEcosystemCatalog | undefined> {
+  try {
+    return await loadPublishedEcosystemObjectPage(transport, pluginIds);
+  } catch (error) {
+    // Isolate a failed server batch without discarding healthy siblings.
+    // Rate limits and transport outages must not fan out into more requests.
+    if (!(error instanceof Error) || error.message !== "读取 Obsidian 公共目录失败：HTTP 500") throw error;
+    if (pluginIds.length === 1) return { objects: [], failedPluginIds: pluginIds };
+    const middle = Math.ceil(pluginIds.length / 2);
+    const left = await loadIsolatedObjectPage(transport, pluginIds.slice(0, middle));
+    const right = await loadIsolatedObjectPage(transport, pluginIds.slice(middle));
+    return {
+      objects: [...left?.objects ?? [], ...right?.objects ?? []],
+      failedPluginIds: [...left?.failedPluginIds ?? [], ...right?.failedPluginIds ?? []],
+    };
+  }
 }
 
 async function loadPublishedEcosystemObjectPage(
@@ -178,7 +222,7 @@ export async function resolvePublishedPluginSource(input: {
   readonly targetLocale: string;
   readonly localCatalogIdentity?: SourceCatalogIdentity;
   readonly authoritativeSourceVersionId?: string;
-}): Promise<PublishedPluginSource | undefined> {
+}): Promise<PublishedPluginSourceResolution | undefined> {
   const catalog = await loadPublishedEcosystemCatalog(
     input.transport,
     [{ pluginId: input.pluginId, pluginVersion: input.pluginVersion }],
@@ -197,7 +241,7 @@ export function resolvePublishedPluginSourceFromCatalog(
     localCatalogIdentity?: SourceCatalogIdentity;
     authoritativeSourceVersionId?: string;
   }>,
-): PublishedPluginSource | undefined {
+): PublishedPluginSourceResolution | undefined {
   const localCatalogIdentity = input.localCatalogIdentity;
   if (localCatalogIdentity === undefined || input.authoritativeSourceVersionId === undefined) {
     return undefined;
@@ -216,10 +260,6 @@ export function resolvePublishedPluginSourceFromCatalog(
     && item.source_version_id === input.authoritativeSourceVersionId
     && item.target_locale === input.targetLocale
     && item.target_variant === "default"
-    && typeof item.published_unit_count === "number"
-    && typeof item.upstream_unit_count === "number"
-    && typeof item.total_unit_count === "number"
-    && typeof item.missing_unit_count === "number"
   ));
   if (published.length === 0) return undefined;
   if (published.length !== 1) {
@@ -227,6 +267,20 @@ export function resolvePublishedPluginSourceFromCatalog(
   }
   const publishedEntry = published[0];
   if (publishedEntry === undefined) return undefined;
+  const coverageFreshness = coverageFreshnessFromCatalog(publishedEntry.coverage_freshness);
+  const coverageSource = coverageSourceFromCatalog(publishedEntry.coverage_source);
+  const liveCoverage = coverageSource === "automatic" || coverageSource === "upstream";
+  if (coverageFreshness !== "fresh" && !liveCoverage) {
+    // Do not reinterpret null rebuilding totals as a zero-coverage or missing
+    // authority response.  Synchronization keeps its verified local cache and
+    // waits for available coverage before changing source state or downloading.
+    // Automatic/upstream coverage is read from live authority and remains usable
+    // while the separate reviewed-coverage projection is stale or unbuilt.
+    return {
+      coverageFreshness,
+      ...(coverageSource === undefined ? {} : { coverageSource }),
+    };
+  }
   const objectVersionId = requiredString(
     publishedEntry.object_version_id,
     "译文覆盖缺少对象版本 ID",
@@ -346,6 +400,24 @@ function optionalNonNegativeNumber(value: unknown): number | undefined {
   return value === undefined || value === null
     ? undefined
     : requiredNonNegativeNumber(value, "插件自带范围数量无效");
+}
+
+function coverageFreshnessFromCatalog(value: unknown): "fresh" | "stale" | "unbuilt" {
+  // Catalogs published before freshness was added always carried numeric
+  // aggregates, so preserve that compatible wire form as fresh.
+  if (value === undefined) return "fresh";
+  if (value === "fresh" || value === "stale" || value === "unbuilt") return value;
+  throw new Error("插件覆盖新鲜度无效");
+}
+
+function coverageSourceFromCatalog(
+  value: unknown,
+): "reviewed" | "automatic" | "upstream" | "unavailable" | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === "reviewed" || value === "automatic" || value === "upstream" || value === "unavailable") {
+    return value;
+  }
+  throw new Error("插件覆盖来源无效");
 }
 
 function optionalNonNegativeNumberRecord(

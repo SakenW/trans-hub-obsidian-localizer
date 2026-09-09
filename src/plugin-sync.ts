@@ -20,6 +20,7 @@ import { ObsidianHttpTransport } from "./http-transport";
 import { mergePublishedPluginTranslation } from "./plugin-catalog-diff";
 import {
   loadPublishedEcosystemCatalog,
+  isPublishedPluginCoverageRefreshing,
   resolvePublishedPluginArtifactDigestFromCatalog,
   resolvePublishedPluginSourceFromCatalog,
   type PublishedPluginSource,
@@ -141,17 +142,13 @@ export async function synchronizeConfiguredPluginTranslations(input: {
       continue;
     }
     try {
+      if (publishedCatalog?.failedPluginIds?.includes(catalog.pluginId)) {
+        throw new Error("此插件的译文目录读取失败，请稍后重试。");
+      }
       const authoritativeSourceVersionId = projectionRefresh.sourceVersionIds.get(
         catalog.pluginId,
       );
-      if (authoritativeSourceVersionId !== undefined) {
-        await discardSupersededActiveTranslation(
-          input,
-          catalog.pluginId,
-          authoritativeSourceVersionId,
-        );
-      }
-      const published = publishedCatalog === undefined
+      const publishedResolution = publishedCatalog === undefined
         ? undefined
         : resolvePublishedPluginSourceFromCatalog(publishedCatalog, {
             pluginId: catalog.pluginId,
@@ -160,6 +157,26 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             localCatalogIdentity: catalog.catalogIdentity,
             authoritativeSourceVersionId,
           });
+      if (publishedResolution !== undefined && isPublishedPluginCoverageRefreshing(publishedResolution)) {
+        // Freshness rebuilding makes aggregate totals intentionally unknown.
+        // It is not permission loss or zero coverage, so leave any verified
+        // cache and its manifest reference untouched until available coverage arrives.
+        if (projectionRefresh.summary.blockedPluginIds?.includes(catalog.pluginId)) {
+          blockedPluginIds.push(catalog.pluginId);
+        } else {
+          waitingCount += 1;
+          waitingPluginIds.push(catalog.pluginId);
+        }
+        continue;
+      }
+      const published = publishedResolution;
+      if (authoritativeSourceVersionId !== undefined) {
+        await discardSupersededActiveTranslation(
+          input,
+          catalog.pluginId,
+          authoritativeSourceVersionId,
+        );
+      }
       // Prefer the resolved coverage identity digest: it is the current
       // authoritative scan digest, which is what the local scanner produces.
       // The raw catalog fallback only applies when no locale coverage exists.
@@ -217,6 +234,14 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             deliveryWaiting = true;
           }
         }
+        const currentProjection = input.getState().publicPluginDiscoveries[catalog.pluginId]?.localizationProjection;
+        if (!deliveryWaiting && currentProjection?.stage === "published"
+          && currentProjection.sourceVersionId === sourceVersionId
+          && currentProjection.targetLocale === input.targetLocale) {
+          // Missing local matches do not prove ongoing server work. The
+          // current source has published and its available export was pulled.
+          continue;
+        }
         const localCatalogUnitCount = catalog.catalogIdentity?.unitCount ?? catalog.strings.length;
         const publishedCatalogNeedsExpansion = !localArtifactVariant
           && !published.catalogIdentityExact
@@ -238,10 +263,11 @@ export async function synchronizeConfiguredPluginTranslations(input: {
       {
         const manualRecoveryDiscovery = manualResubmit.has(catalog.pluginId)
           && existingDiscovery?.statusRevision === 2
-          && isPublicDiscoveryManuallyRetryable(
-            existingDiscovery,
-            input.targetLocale,
-          );
+          && isPublicDiscoveryManuallyRetryable(existingDiscovery, input.targetLocale)
+          && visiblePluginManualRetryKind({
+            state: input.getState(), pluginId: catalog.pluginId,
+            targetLocale: input.targetLocale, sourceSelectable: true, hasSession: true,
+          }) === "resubmit";
         const targetLocales = normalizeDiscoveryLocales(
           existingDiscovery?.installationId === bootstrap.installationId
             ? [...existingDiscovery.targetLocales, input.targetLocale]
@@ -653,8 +679,8 @@ async function loadPublishedCatalogForSynchronization(
     );
   } catch (error) {
     if (!isTemporaryPublishedCatalogError(error)) throw error;
-    console.warn("[Trans-Hub] 权威公共目录暂不可用，已提交目录条目等待服务器验证：", error);
-    return undefined;
+    console.warn("[Trans-Hub] 权威公共目录暂不可用，保留已有译文并标记同步失败：", error);
+    return { objects: [], failedPluginIds: catalogs.map((catalog) => catalog.pluginId) };
   }
 }
 
@@ -677,6 +703,7 @@ function isGlobalSynchronizationError(error: unknown): boolean {
 }
 
 function synchronizationErrorCode(error: unknown): string {
+  if (error instanceof Error && error.message === "此插件的译文目录读取失败，请稍后重试。") return "public_catalog_unavailable";
   return isDiagnosticError(error) ? error.code : "plugin_sync_failed";
 }
 

@@ -187,6 +187,27 @@ describe("parsePluginState", () => {
     }]);
   });
 
+  it("保留扫描目标语言元数据，并兼容缺失该字段的旧目录缓存", () => {
+    const state = parsePluginState({
+      pluginCatalogs: {
+        current: {
+          pluginId: "current", pluginName: "Current", pluginVersion: "1.0.0",
+          sourceLocale: "en", digest: "current", artifactDigest: "artifact",
+          scannerTargetLocale: "ja", scannedAt: "2026-07-18T00:00:00.000Z", strings: [],
+        },
+        legacy: {
+          pluginId: "legacy", pluginName: "Legacy", pluginVersion: "1.0.0",
+          sourceLocale: "en", digest: "legacy", artifactDigest: "artifact",
+          scannedAt: "2026-07-18T00:00:00.000Z", strings: [],
+        },
+      },
+    });
+
+    expect(state.pluginCatalogs.current?.scannerTargetLocale).toBe("ja");
+    expect(state.pluginCatalogs.legacy).toBeDefined();
+    expect(state.pluginCatalogs.legacy?.scannerTargetLocale).toBeUndefined();
+  });
+
   it("rejects a catalog with malformed extraction evidence", () => {
     const state = parsePluginState({
       pluginCatalogs: {

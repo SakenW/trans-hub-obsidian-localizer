@@ -42,10 +42,6 @@ export function renderPluginPickerCoverageDetails(
       cls: "trans-hub-plugin-picker__provenance",
     });
   }
-  details.createDiv({
-    text: summary.headline,
-    cls: "trans-hub-plugin-picker__catalog-applied",
-  });
   if (summary.sourceMetrics.length > 0) {
     const sources = details.createDiv({ cls: "trans-hub-plugin-picker__coverage-sources" });
     for (const metric of summary.sourceMetrics) {

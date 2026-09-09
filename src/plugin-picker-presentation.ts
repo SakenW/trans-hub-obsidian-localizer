@@ -2,7 +2,7 @@ import { translate } from "./client-localization";
 import type { PluginLocalizationStatus } from "./plugin-localization-status";
 import type { PluginSourceState } from "./plugin-picker-source";
 
-export type PluginPickerDisplayKind = "localized" | "partial" | "processing" | "attention"
+export type PluginPickerDisplayKind = "localized" | "partial" | "processing" | "attention" | "restricted"
   | "off" | "paused" | "unsupported" | "source-pending" | "login-required" | "preserved-source";
 
 export const PLUGIN_PICKER_FILTERS: readonly { value: PluginPickerDisplayKind | "all"; label: string }[] = [
@@ -11,6 +11,7 @@ export const PLUGIN_PICKER_FILTERS: readonly { value: PluginPickerDisplayKind | 
   { value: "partial", label: "部分译文可用" },
   { value: "processing", label: "正在准备翻译" },
   { value: "attention", label: "需要处理" },
+  { value: "restricted", label: "服务端受限" },
   { value: "off", label: "已关闭" },
   { value: "paused", label: "已暂停" },
   { value: "login-required", label: "需要连接" },
@@ -36,12 +37,14 @@ export function presentPluginLocalization(input: {
   else switch (input.localization.kind) {
     case "localized": kind = input.localization.coverage?.complete === false ? "partial" : "localized"; break;
     case "waiting": case "unrecorded": case "catalog-mismatch": kind = "processing"; break;
-    case "blocked": case "failed": kind = "attention"; break;
+    case "blocked": kind = "restricted"; break;
+    case "failed": kind = "attention"; break;
     case "preserved-source": kind = "preserved-source"; break;
   }
   return {
     kind,
-    label: input.localization.label === translate("源语言，无需翻译") && kind === "localized"
+    label: (kind === "processing" && !input.processing && input.localization.kind === "waiting")
+      || (input.localization.label === translate("源语言，无需翻译") && kind === "localized")
       ? input.localization.label
       : translate(PLUGIN_PICKER_FILTERS.find((item) => item.value === kind)?.label ?? "需要处理"),
   };

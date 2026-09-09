@@ -62,8 +62,10 @@ export interface PluginUiCatalog {
   readonly sourceLocale: string;
   readonly digest: string;
   readonly artifactDigest: string;
+  /** Active target locale when this catalog's embedded native targets were scanned. */
+  readonly scannerTargetLocale?: string;
   /** Bumped when persisted catalogs gain patch-safe literal evidence. */
-  readonly patchEvidenceRevision?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  readonly patchEvidenceRevision?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
   /** Missing only on catalogs persisted before identity revision 1. */
   readonly catalogIdentity?: SourceCatalogIdentity;
   readonly strings: readonly PluginUiString[];

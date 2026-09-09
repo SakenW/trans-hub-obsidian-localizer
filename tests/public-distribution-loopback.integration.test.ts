@@ -157,7 +157,6 @@ describe("Obsidian public distribution loopback component integration", () => {
         pluginId: PLUGIN_ID,
         stringKey: STRING_KEY,
         translatedText: "设置",
-        translationDigest: `sha256:${"44".repeat(32)}`,
       }]);
       expect(fixture.ticketLifetimeMs).toBe(300_000);
       expect(fixture.packRequests).toBe(1);
@@ -549,7 +548,6 @@ function translationPackBytes(): Uint8Array {
   return new TextEncoder().encode(canonicalJson({
     items: [{
       occurrence_key: `obsidian:plugin-ui:${PLUGIN_ID}:${STRING_KEY}`,
-      payload_digest: `sha256:${"44".repeat(32)}`,
       structured_content: {},
       target_text: "设置",
     }],

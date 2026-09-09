@@ -15,6 +15,7 @@ import {
   type CandidateAggregate,
   type RenderedExpression,
 } from "./plugin-string-scanner-evidence";
+import { lazyLocaleCatalogs } from "./plugin-lazy-locale-catalog";
 
 const MAX_EMBEDDED_LOCALE_CATALOG_ENTRIES = 10_000;
 
@@ -44,6 +45,18 @@ export async function collectEmbeddedEnglishCatalog(
     assignments.set(name.raw, tokens.slice(index + 2, end + 1));
   }
   const packedEnglish = assignments.get("en");
+  const lazy = lazyLocaleCatalogs(tokens, assignments, targetLocale);
+  if (lazy !== undefined) {
+    const english = collectBoundedLocaleEntries(lazy.english);
+    const reference = new Map((collectBoundedLocaleEntries(lazy.englishReference) ?? [])
+      .map((entry) => [entry.path, entry.value.text]));
+    const native = collectBoundedLocaleEntries(lazy.native) ?? [];
+    if (english !== undefined && english.length >= 3
+      && english.filter((entry) => reference.get(entry.path) === entry.value.text).length / english.length >= 0.8) {
+      addLocaleEntries(target, english, sourceLocale);
+      return { nativeTargets: mapNativeTargets(english, native), tokens };
+    }
+  }
   if (targetLocale !== undefined && packedEnglish !== undefined) {
     const englishEntries = collectBoundedLocaleEntries(packedEnglish);
     if (englishEntries !== undefined) {

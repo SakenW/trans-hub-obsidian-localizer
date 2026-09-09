@@ -188,19 +188,26 @@ describe("selectApplicablePluginTranslations", () => {
       pluginName: "Large Plugin",
       pluginVersion: "1.0.0",
       artifactDigest: "a".repeat(64),
-      patchEvidenceRevision: 10,
+      scannerTargetLocale: "zh-CN",
+      patchEvidenceRevision: 11,
       catalogIdentity: {},
     } as Parameters<typeof canReuseScannedPluginCatalog>[0];
 
     expect(canReuseScannedPluginCatalog(catalog, {
       name: "Large Plugin", version: "1.0.0",
-    }, "a".repeat(64))).toBe(true);
+    }, "a".repeat(64), "zh-CN")).toBe(true);
+    expect(canReuseScannedPluginCatalog({ ...catalog!, patchEvidenceRevision: 10 }, {
+      name: "Large Plugin", version: "1.0.0",
+    }, "a".repeat(64), "zh-CN")).toBe(false);
     expect(canReuseScannedPluginCatalog(catalog, {
       name: "Renamed Plugin", version: "1.0.0",
-    }, "a".repeat(64))).toBe(false);
+    }, "a".repeat(64), "zh-CN")).toBe(false);
     expect(canReuseScannedPluginCatalog(catalog, {
       name: "Large Plugin", version: "1.0.0",
-    }, "b".repeat(64))).toBe(false);
+    }, "b".repeat(64), "zh-CN")).toBe(false);
+    expect(canReuseScannedPluginCatalog(catalog, {
+      name: "Large Plugin", version: "1.0.0",
+    }, "a".repeat(64), "ja")).toBe(false);
   });
 
   it("forces a rescan when a persisted catalog predates patch-safe literal evidence", () => {
@@ -214,7 +221,7 @@ describe("selectApplicablePluginTranslations", () => {
 
     expect(canReuseScannedPluginCatalog(legacyCatalog, {
       name: "Large Plugin", version: "1.0.0",
-    }, "a".repeat(64))).toBe(false);
+    }, "a".repeat(64), "zh-CN")).toBe(false);
   });
 
   it("attaches popout translation observers and releases them on close", () => {

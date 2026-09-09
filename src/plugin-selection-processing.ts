@@ -7,7 +7,7 @@ export type PluginSelectionProcessingResult =
   | { readonly kind: "login-required"; readonly scan: PluginScanResult }
   | { readonly kind: "synchronized"; readonly scan: PluginScanResult; readonly sync: PluginSyncSummary };
 
-export type PluginSelectionProcessingScope = "full" | "selected" | "single-retry";
+export type PluginSelectionProcessingScope = "full" | "selected" | "single-retry" | "batch-retry";
 
 export class PluginProcessingQueue {
   private tail: Promise<void> = Promise.resolve();
@@ -66,6 +66,15 @@ export function describePluginSelectionProcessing(
   const failedCount = new Set(sync.failedPluginIds ?? []).size;
   const blockedCount = new Set(sync.blockedPluginIds ?? []).size;
   const exportPendingCount = sync.exportPendingCount ?? 0;
+  if (sync.pulledCount > 0) {
+    const parts = [translate("{scope}更新 {count} 个插件，本机安全应用 {translations} 条译文。", {
+      scope: processingScopeUpdateLabel(scope), count: sync.pulledCount, translations: sync.translationCount,
+    })];
+    if (sync.waitingCount > 0) parts.push(translate("仍有 {count} 个插件等待后续译文更新。", { count: sync.waitingCount }));
+    if (failedCount > 0) parts.push(translate("{count} 个插件同步失败，可单独重试。", { count: failedCount }));
+    if (blockedCount > 0) parts.push(translate("{count} 个插件受服务端限制。", { count: blockedCount }));
+    return parts.join(" ");
+  }
   if (sync.waitingCount > 0) {
     const detail = describeDemandStateCounts(sync);
     const summary = translate(
@@ -83,7 +92,7 @@ export function describePluginSelectionProcessing(
     const withDetail = detail === "" ? summary : `${summary}（${detail}）`;
     return failedCount === 0
       ? `${withDetail}。`
-      : translate("{summary}；{failed} 个需要重试，请点击对应插件的“重试此插件”。", {
+      : translate("{summary}；{failed} 个需要重试，可点击“重试失败项”。", {
           summary: withDetail,
           failed: failedCount,
         });
@@ -96,24 +105,17 @@ export function describePluginSelectionProcessing(
     });
   }
   if (failedCount > 0) {
-    return translate("{scope} {count} 个插件；{failed} 个需要重试，请点击对应插件的“重试此插件”。", {
+    return translate("{scope} {count} 个插件；{failed} 个需要重试，可点击“重试失败项”。", {
       scope: processingScopeLabel(scope),
       count: scan.scannedCount,
       failed: failedCount,
     });
   }
   if (blockedCount > 0) {
-    return translate("{scope} {count} 个插件；{blocked} 个已被服务端阻断，当前不可由客户端重试。", {
+    return translate("{scope} {count} 个插件；{blocked} 个服务端受限，请展开对应插件查看原因。", {
       scope: processingScopeLabel(scope),
       count: scan.scannedCount,
       blocked: blockedCount,
-    });
-  }
-  if (sync.pulledCount > 0) {
-    return translate("{scope}更新 {count} 个插件，本机安全应用 {translations} 条译文。", {
-      scope: processingScopeUpdateLabel(scope),
-      count: sync.pulledCount,
-      translations: sync.translationCount,
     });
   }
   return translate("{scope} {count} 个插件，目前没有新译文。", {
@@ -135,13 +137,13 @@ export function describePluginStatusRefresh(
   const blockedCount = new Set(sync.blockedPluginIds ?? []).size;
   const exportPendingCount = sync.exportPendingCount ?? 0;
   if (failedCount > 0) {
-    return translate("已刷新所选 {count} 个插件状态；{failed} 个需要重试，请点击对应插件的“重试此插件”。", {
+    return translate("已刷新所选 {count} 个插件状态；{failed} 个需要重试，可点击“重试失败项”。", {
       count,
       failed: failedCount,
     });
   }
   if (blockedCount > 0) {
-    return translate("已刷新所选 {count} 个插件状态；{blocked} 个已被服务端阻断，当前不可由客户端重试。", {
+    return translate("已刷新所选 {count} 个插件状态；{blocked} 个服务端受限，请展开对应插件查看原因。", {
       count,
       blocked: blockedCount,
     });
@@ -215,13 +217,15 @@ function demandCount(count: number | undefined, label: string): string {
 }
 
 function processingScopeLabel(scope: PluginSelectionProcessingScope): string {
+  if (scope === "batch-retry") return translate("已批量重试");
   if (scope === "selected") return translate("已检查所选");
   if (scope === "single-retry") return translate("已重试");
   return translate("已检查");
 }
 
 function processingScopeUpdateLabel(scope: PluginSelectionProcessingScope): string {
-  if (scope === "selected") return translate("已更新所选");
-  if (scope === "single-retry") return translate("已重试并更新");
+  if (scope === "batch-retry") return translate("已批量重试并");
+  if (scope === "selected") return translate("已为所选插件");
+  if (scope === "single-retry") return translate("已重试并");
   return translate("已");
 }

@@ -309,6 +309,9 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
   const sourceLocale = stringValue(value.sourceLocale);
   const digest = stringValue(value.digest);
   const artifactDigest = stringValue(value.artifactDigest);
+  const scannerTargetLocale = typeof value.scannerTargetLocale === "string" && value.scannerTargetLocale.trim() !== ""
+    ? value.scannerTargetLocale
+    : undefined;
   const scannedAt = stringValue(value.scannedAt);
   if ([pluginId, pluginName, pluginVersion, sourceLocale, digest, artifactDigest, scannedAt].some((item) => item === null)) return null;
   if (
@@ -321,6 +324,7 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
     && value.patchEvidenceRevision !== 6
     && value.patchEvidenceRevision !== 7
     && value.patchEvidenceRevision !== 10
+    && value.patchEvidenceRevision !== 11
   ) return null;
   let catalogIdentity: SourceCatalogIdentity | undefined;
   try {
@@ -372,6 +376,7 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
   return {
     pluginId: pluginId!, pluginName: pluginName!, pluginVersion: pluginVersion!,
     sourceLocale: sourceLocale!, digest: digest!, artifactDigest: artifactDigest!, scannedAt: scannedAt!,
+    ...(scannerTargetLocale === undefined ? {} : { scannerTargetLocale }),
     ...(value.patchEvidenceRevision === undefined
       ? {}
       : { patchEvidenceRevision: value.patchEvidenceRevision }),

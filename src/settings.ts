@@ -8,6 +8,7 @@ import {
 } from "obsidian";
 
 import { errorMessage } from "./error-message";
+import { describeMissingTranslations } from "./plugin-missing-translations";
 import { isClientDisplayName, localizedClientName, translate } from "./client-localization";
 import type TransHubObsidianPlugin from "./main";
 import { localizedPluginDescription, localizedPluginDisplayName } from "./plugin-catalog-diff";
@@ -28,7 +29,6 @@ import {
 } from "./plugin-picker-source";
 import {
   describePluginSelectionProcessing,
-  describePluginStatusRefresh,
   pluginSelectionNeedsAttention,
 } from "./plugin-selection-processing";
 import {
@@ -72,6 +72,7 @@ export class TransHubSettingTab extends PluginSettingTab {
   private patchStateByPluginId = new Map<string, PluginFilePatchState>();
   private selectionStatusAt: Date | null = null;
   private connectionPending = false;
+  private managerActionPending = false;
   private readonly stalePluginIds = new Set<string>();
   private renderedContainerEl: HTMLElement | null = null;
   private managerContainerEl: HTMLElement | null = null;
@@ -256,7 +257,18 @@ export class TransHubSettingTab extends PluginSettingTab {
       .addButton((button) => button
         .setButtonText(translate("打开插件管理器"))
         .setCta()
-        .onClick(() => { void this.plugin.openPluginManager(); }));
+        .onClick(async () => {
+          button.setDisabled(true);
+          try {
+            // Obsidian's settings host can stay above workspace popouts.
+            // Close it before revealing the manager, including an existing one.
+            const host = this.app as typeof this.app & { setting?: { close?: () => void } };
+            host.setting?.close?.();
+            await this.plugin.openPluginManager();
+          } catch (error) {
+            new Notice(errorMessage(error), 10_000);
+          } finally { button.setDisabled(false); }
+        }));
 
     this.renderFileRecovery(containerEl);
     const advancedDetails = containerEl.createEl("details", { cls: "trans-hub-settings__advanced" });
@@ -531,8 +543,8 @@ export class TransHubSettingTab extends PluginSettingTab {
     let statusFilter = this.pluginStatusFilter;
     let selectAllButton: ButtonComponent;
     let clearButton: ButtonComponent;
-    let statusRefreshButton: ButtonComponent;
     let resyncButton: ButtonComponent;
+    let batchRetryButton: ButtonComponent;
 
     // Obsidian 1.13 compresses ItemView header descendants into an empty
     // visual strip. Keep the manager's live summary in a normal content row
@@ -545,7 +557,7 @@ export class TransHubSettingTab extends PluginSettingTab {
       .setDesc(this.plugin.settings.pluginTranslationEnabled
         ? this.stalePluginIds.size > 0
           ? translate("暂时无法更新进度，当前显示上次结果。请稍后检查进度。")
-          : translate("运行期间每 15 分钟自动检查新插件，也可点击“重新检查插件”立即检查。")
+          : translate("自动检查插件变化并同步译文，也可点击“同步译文”立即更新。")
         : translate("本地化已暂停。请在设置中开启后继续。"));
     context.settingEl.addClass("trans-hub-plugin-picker__context");
     if (!this.plugin.hasUserSession()) context.addButton((button) => button
@@ -605,26 +617,28 @@ export class TransHubSettingTab extends PluginSettingTab {
         });
       })
       .addButton((button) => {
-        statusRefreshButton = button
-          .setButtonText(translate("检查进度"))
-          .setTooltip(translate("查看所选插件的最新处理进度和可用译文状态。"))
-          .setCta()
-          .onClick(async () => { await this.refreshSelectedPluginStatus(list, eligiblePluginIds); });
-      })
-      .addButton((button) => {
         resyncButton = button
-          .setButtonText(translate("重新检查插件"))
-          .setTooltip(translate("检查已安装插件的变化并获取匹配译文；单个插件失败时使用其重试按钮。"))
+          .setButtonText(translate("同步译文"))
+          .setCta()
+          .setTooltip(translate("检查插件变化、更新处理进度并获取可用译文。"))
           .onClick(async () => { await this.refreshSelectedPlugins(list); });
       })
       .addButton((button) => {
-        selectAllButton = button.setButtonText(translate("全选")).onClick(async () => {
+        batchRetryButton = button
+          .setButtonText(translate("重试失败项（0）"))
+          .setTooltip(translate("重试已选择且可恢复的插件；服务端阻断项不会提交。"))
+          .onClick(async () => {
+            await this.retryRecoverablePlugins(list, this.selectedRecoverablePluginIds(plugins));
+          });
+      })
+      .addButton((button) => {
+        selectAllButton = button.setButtonText(translate("全部开启")).onClick(async () => {
           await persistSelection(setAllPluginsSelected(this.plugin.settings.excludedPluginIds, eligiblePluginIds, true));
           renderRows();
         });
       })
       .addButton((button) => {
-        clearButton = button.setButtonText(translate("取消全选")).onClick(async () => {
+        clearButton = button.setButtonText(translate("全部关闭")).onClick(async () => {
           await persistSelection(setAllPluginsSelected(this.plugin.settings.excludedPluginIds, eligiblePluginIds, false));
           renderRows();
         });
@@ -636,15 +650,18 @@ export class TransHubSettingTab extends PluginSettingTab {
 
     const updateSummary = (): void => {
       const selected = selectedPluginCount(eligiblePluginIds, this.plugin.settings.excludedPluginIds);
-      summaryText.setText(translate("已选择 {selected}", { selected }));
+      summaryText.setText(translate("已开启 {selected}", { selected }));
       summaryTotal.setText(translate("可本地化 {eligible} / 已启用 {total}", {
         eligible: eligiblePluginIds.length,
         total: plugins.length,
       }));
       selectAllButton.setDisabled(selected === eligiblePluginIds.length);
       clearButton.setDisabled(selected === 0);
-      statusRefreshButton.setDisabled(selected === 0 || !this.plugin.hasUserSession() || !this.plugin.settings.pluginTranslationEnabled);
       resyncButton.setDisabled(selected === 0 || !this.plugin.hasUserSession() || !this.plugin.settings.pluginTranslationEnabled);
+      const recoverableCount = this.selectedRecoverablePluginIds(plugins).length;
+      batchRetryButton.buttonEl.toggleClass("trans-hub-hidden", recoverableCount === 0);
+      batchRetryButton.setButtonText(translate("重试失败项（{count}）", { count: recoverableCount }));
+      batchRetryButton.setDisabled(recoverableCount === 0 || !this.plugin.settings.pluginTranslationEnabled);
     };
 
     const persistSelection = async (excludedPluginIds: string[]): Promise<void> => {
@@ -686,15 +703,17 @@ export class TransHubSettingTab extends PluginSettingTab {
           enabled: this.plugin.settings.pluginTranslationEnabled, localization: localizationStatus,
           processing: this.selectionProcessingPluginIds.has(plugin.id),
         });
-        return { ...plugin, displayName, localizationStatus, presentation };
+        return { ...plugin, displayName, localizationStatus, presentation, translation };
       });
       const currentCounts = rows.reduce((counts, row) => {
-        if (row.presentation.kind === "localized" || row.presentation.kind === "partial") counts.ready += 1;
+        if (row.presentation.kind === "localized") counts.complete += 1;
+        if (row.presentation.kind === "restricted") counts.restricted += 1;
+        if (row.presentation.kind === "partial") counts.partial += 1;
         if (row.presentation.kind === "processing") counts.processing += 1;
         if (["attention", "login-required", "source-pending"].includes(row.presentation.kind)) counts.attention += 1;
         return counts;
-      }, { ready: 0, processing: 0, attention: 0 });
-      summaryTotal.setText(translate("译文可用 {ready} · 准备中 {processing} · 需处理 {attention}", currentCounts));
+      }, { complete: 0, partial: 0, processing: 0, attention: 0, restricted: 0 });
+      summaryTotal.setText(translate("完整 {complete} · 部分 {partial} · 准备中 {processing} · 需处理 {attention} · 服务端受限 {restricted}", currentCounts));
       const visiblePlugins = filterSelectablePlugins(rows, query)
         .filter((plugin) => statusFilter === "all" || plugin.presentation.kind === statusFilter);
       if (visiblePlugins.length === 0) {
@@ -738,7 +757,7 @@ export class TransHubSettingTab extends PluginSettingTab {
         });
         descriptionEl.createDiv({ text: statusLabel, cls: "trans-hub-plugin-picker__provenance" });
         if (statusStale) descriptionEl.createDiv({ text: translate("进度可能已过期，请检查进度。"), cls: "mod-warning" });
-        if (presentation.kind === "processing" && !statusStale) {
+        if (presentation.kind === "processing" && !statusStale && localizationStatus.kind === "unrecorded") {
           descriptionEl.createDiv({
             text: translate("首次收录需要一些时间，期间可正常使用插件。"),
             cls: "trans-hub-plugin-picker__description",
@@ -753,13 +772,28 @@ export class TransHubSettingTab extends PluginSettingTab {
         if (!renderCoverageDetails) details.createDiv({ text: sourceStatus?.label ?? localizationStatus.label });
         if (presentation.kind === "processing" && localizationStatus.initialSubmission && !statusStale) {
           details.createDiv({
-            text: translate("点击“重新检查插件”可立即检查，无需等待下一轮。"),
+            text: translate("首次准备完成后会自动同步，无需反复重试。"),
           });
         }
         if (sourceStatus === null && localizationStatus.catalogMismatch !== undefined) {
           renderPluginPickerCatalogMismatchDetails(details, localizationStatus.catalogMismatch);
         } else if (renderCoverageDetails) {
           renderPluginPickerCoverageDetails(details, localizationStatus.coverage);
+        }
+        const catalog = pluginState.pluginCatalogs[plugin.id];
+        if (localizationStatus.coverage?.complete === false && catalog !== undefined && plugin.translation !== undefined) {
+          const missing = describeMissingTranslations(catalog, plugin.translation);
+          if (missing.length > 0) {
+            const missingDetails = details.createEl("details");
+            missingDetails.createEl("summary", { text: translate("未匹配文案（{count}）", { count: missing.length }) });
+            const items = missingDetails.createEl("ul");
+            for (const entry of missing.slice(0, 20)) {
+              const item = items.createEl("li");
+              item.createDiv({ text: entry.source });
+              item.createDiv({ text: entry.reason, cls: "setting-item-description" });
+            }
+            if (missing.length > 20) missingDetails.createDiv({ text: translate("仅展示前 20 条未匹配文案。") });
+          }
         }
         row.settingEl.addClass(`trans-hub-plugin-picker__item--${presentation.kind}`);
         if (!selectable || !selected || !this.plugin.settings.pluginTranslationEnabled) row.settingEl.addClass("is-disabled");
@@ -773,7 +807,7 @@ export class TransHubSettingTab extends PluginSettingTab {
         if (retryKind !== null && selected && this.plugin.settings.pluginTranslationEnabled) {
           row.addButton((button) => {
             button
-              .setButtonText(translate("重试此插件"))
+              .setButtonText(translate(retryKind === "resubmit" ? "重新检查来源" : "重试同步"))
               .setTooltip(translate("重新检查并重试 {pluginName}，无需关闭本地化开关", {
                 pluginName: displayName,
               }))
@@ -834,11 +868,12 @@ export class TransHubSettingTab extends PluginSettingTab {
     retryKind: PluginManualRetryKind,
     scrollSource: HTMLElement,
   ): Promise<void> {
+    if (this.managerActionPending) return;
+    this.managerActionPending = true;
     if (this.selectionProcessing !== null) await this.selectionProcessing;
     this.selectionStatus = translate("正在重试 {pluginName}…", { pluginName });
     this.selectionStatusFailed = false;
     this.updateStatusLine();
-    new Notice(this.selectionStatus);
     try {
       const result = await this.plugin.processSinglePlugin(
         pluginId,
@@ -853,17 +888,53 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.selectionStatus = translate("处理失败：{message}", { message: errorMessage(error) });
       this.selectionStatusFailed = true;
       new Notice(this.selectionStatus, 10_000);
-    } finally { this.refreshSettings(scrollSource); }
+    } finally { this.managerActionPending = false; this.refreshSettings(scrollSource); }
   }
 
-  private async refreshSelectedPlugins(scrollSource: HTMLElement): Promise<void> {
-    if (this.selectionProcessing !== null) await this.selectionProcessing;
-    this.selectionStatus = translate("正在检查所选插件…");
+  private selectedRecoverablePluginIds(plugins: readonly InstalledPluginWithSource[]): string[] {
+    const state = this.plugin.getPluginState();
+    const excluded = new Set(this.plugin.settings.excludedPluginIds);
+    const hasSession = this.plugin.hasUserSession();
+    return plugins.filter((plugin) => isPluginSourceSelectable(plugin.source)
+      && !excluded.has(plugin.id)
+      && visiblePluginManualRetryKind({
+        state,
+        pluginId: plugin.id,
+        targetLocale: this.plugin.settings.targetLocale,
+        sourceSelectable: true,
+        hasSession,
+      }) !== null).map((plugin) => plugin.id);
+  }
+
+  private async retryRecoverablePlugins(scrollSource: HTMLElement, pluginIds: readonly string[]): Promise<void> {
+    if (pluginIds.length === 0 || this.selectionProcessing !== null || this.managerActionPending) return;
+    this.managerActionPending = true;
+    this.selectionStatus = translate("正在批量重试 {count} 个可恢复插件…", { count: pluginIds.length });
     this.selectionStatusFailed = false;
     this.updateStatusLine();
     try {
-      // 普通“重新检查插件”只提交真实本地变化，不把全部已启用插件传为人工重提；
-      // 仅“重试此插件”会创建恢复观察（R-028/034 Phase 3，避免批量恢复放大）。
+      const result = await this.plugin.retryPluginIds(pluginIds);
+      this.selectionStatus = describePluginSelectionProcessing(result, "batch-retry");
+      this.selectionStatusFailed = pluginSelectionNeedsAttention(result);
+      if (result.kind === "synchronized") this.updateStalePluginStatus(result.sync.statusRead, result.sync.statusReadPluginIds ?? []);
+      new Notice(this.selectionStatus);
+    } catch (error) {
+      this.selectionStatus = translate("处理失败：{message}", { message: errorMessage(error) });
+      this.selectionStatusFailed = true;
+      new Notice(this.selectionStatus, 10_000);
+    } finally { this.managerActionPending = false; this.refreshSettings(scrollSource); }
+  }
+
+  private async refreshSelectedPlugins(scrollSource: HTMLElement): Promise<void> {
+    if (this.managerActionPending) return;
+    this.managerActionPending = true;
+    if (this.selectionProcessing !== null) await this.selectionProcessing;
+    this.selectionStatus = translate("正在同步译文…");
+    this.selectionStatusFailed = false;
+    this.updateStatusLine();
+    try {
+      // Normal synchronization checks changes and downloads available translations.
+      // Fresh recovery observations belong to the explicit retry action.
       const result = await this.plugin.processSelectedPlugins();
       this.selectionStatus = describePluginSelectionProcessing(result);
       this.selectionStatusFailed = pluginSelectionNeedsAttention(result);
@@ -874,32 +945,7 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.selectionStatus = translate("处理失败：{message}", { message: errorMessage(error) });
       this.selectionStatusFailed = true;
       new Notice(this.selectionStatus, 10_000);
-    } finally { this.refreshSettings(scrollSource); }
-  }
-
-  private async refreshSelectedPluginStatus(
-    scrollSource: HTMLElement,
-    eligiblePluginIds: readonly string[],
-  ): Promise<void> {
-    if (this.selectionProcessing !== null) await this.selectionProcessing;
-    const excluded = new Set(this.plugin.settings.excludedPluginIds);
-    const selectedPluginIds = eligiblePluginIds.filter((pluginId) => !excluded.has(pluginId));
-    if (selectedPluginIds.length === 0) return;
-    this.selectionStatus = translate("正在刷新所选插件状态…");
-    this.selectionStatusFailed = false;
-    this.updateStatusLine();
-    try {
-      const result = await this.plugin.refreshPluginStatusBatch(selectedPluginIds);
-      this.updateStalePluginStatus(result.statusRead, result.statusReadPluginIds ?? []);
-      this.selectionStatus = describePluginStatusRefresh(result, selectedPluginIds.length);
-      this.selectionStatusFailed = result.statusRead?.kind === "stale";
-      new Notice(this.selectionStatus, this.selectionStatusFailed ? 10_000 : 0);
-    } catch (error) {
-      console.error("[Trans-Hub] plugin status refresh failed", error);
-      this.selectionStatus = translate("处理失败：{message}", { message: errorMessage(error) });
-      this.selectionStatusFailed = true;
-      new Notice(this.selectionStatus, 10_000);
-    } finally { this.refreshSettings(scrollSource); }
+    } finally { this.managerActionPending = false; this.refreshSettings(scrollSource); }
   }
 
   private async refreshPluginPatchStates(pluginIds: readonly string[]): Promise<void> {

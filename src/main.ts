@@ -21,9 +21,7 @@ import {
 import {
   describePluginSelectionProcessing,
   pluginSelectionNeedsAttention,
-  MAX_PENDING_TRANSLATION_QUICK_RETRIES,
   pendingTranslationPluginIds,
-  pendingTranslationRetryDelay,
   PluginProcessingQueue,
   processPluginSelection,
   type PluginSelectionProcessingResult,
@@ -36,6 +34,7 @@ import {
   resetPluginLocalizationDerivedState,
   type PluginState,
 } from "./plugin-state";
+import { requiresOneTimeRegistryBindingRecovery } from "./plugin-localization-status";
 import {
   OBSIDIAN_AUTH_CALLBACK_ACTION,
   OBSIDIAN_ECOSYSTEM_SLUG,
@@ -51,6 +50,7 @@ import { DEFAULT_SETTINGS, loadSettings, type TransHubPluginSettings } from "./s
 import { ObsidianTranslationPackStore } from "./translation-pack-store";
 
 import type { PluginFilePatchState } from "./third-party-plugin-patcher";
+import { PluginRetrySchedule } from "./plugin-retry-schedule";
 
 const AUTOMATION_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -68,8 +68,7 @@ export default class TransHubObsidianPlugin extends Plugin {
   private settingTab!: TransHubSettingTab;
   private translationPackStore!: ObsidianTranslationPackStore;
   private pendingRetryTimer: number | null = null;
-  private pendingRetryAttempt = 0;
-  private readonly pendingRetryPluginIds = new Set<string>();
+  private readonly pendingRetries = new PluginRetrySchedule();
   private readonly pluginProcessingQueue = new PluginProcessingQueue();
   private readonly pluginFileQueue = new PluginProcessingQueue();
   private automaticPluginTranslationInFlight: Promise<void> | null = null;
@@ -260,6 +259,7 @@ export default class TransHubObsidianPlugin extends Plugin {
     const existingLeaf = this.app.workspace.getLeavesOfType(PLUGIN_MANAGER_VIEW_TYPE)[0];
     if (existingLeaf !== undefined) {
       await this.app.workspace.revealLeaf(existingLeaf);
+      existingLeaf.getContainer().win.focus();
       return;
     }
     try {
@@ -268,10 +268,12 @@ export default class TransHubObsidianPlugin extends Plugin {
       });
       await leaf.setViewState({ type: PLUGIN_MANAGER_VIEW_TYPE, active: true });
       await this.app.workspace.revealLeaf(leaf);
+      leaf.getContainer().win.focus();
     } catch (error) {
       const leaf = this.app.workspace.getLeaf("tab");
       await leaf.setViewState({ type: PLUGIN_MANAGER_VIEW_TYPE, active: true });
       await this.app.workspace.revealLeaf(leaf);
+      leaf.getContainer().win.focus();
       console.warn("[Trans-Hub] failed to open the plugin manager in a separate window", error);
       new Notice(translate("此设备无法打开独立窗口，已在工作区中打开插件管理器。"), 10_000);
     }
@@ -295,6 +297,7 @@ export default class TransHubObsidianPlugin extends Plugin {
   ): Promise<PluginSelectionProcessingResult | null> {
     const lifecycleRevision = this.lifecycleRevision;
     const localeChanged = this.settings.targetLocale !== targetLocale;
+    if (localeChanged) this.clearPendingTranslationRetry();
     const revision = ++this.targetLocaleRevision;
     this.settings.targetLocale = targetLocale;
     this.applyClientLocale(targetLocale);
@@ -360,6 +363,10 @@ export default class TransHubObsidianPlugin extends Plugin {
     return this.processPlugins(pluginIds);
   }
 
+  retryPluginIds(pluginIds: readonly string[]): Promise<PluginSelectionProcessingResult> {
+    return this.processPlugins(pluginIds, pluginIds);
+  }
+
   processSinglePlugin(
     pluginId: string,
     resubmitObservation = false,
@@ -414,7 +421,7 @@ export default class TransHubObsidianPlugin extends Plugin {
       applyCached: () => { this.applyCachedPluginTranslations(); },
     });
     if (this.isLifecycleCurrent(lifecycleRevision) && targetLocale === this.settings.targetLocale) {
-      this.schedulePendingTranslationRetry(result, lifecycleRevision);
+      this.schedulePendingTranslationRetry(result, lifecycleRevision, onlyPluginIds ?? this.state.enabledPluginIds);
     }
     return result;
   }
@@ -541,6 +548,19 @@ export default class TransHubObsidianPlugin extends Plugin {
     if (!this.settings.pluginTranslationEnabled) return;
     try {
       const result = await this.processSelectedPlugins();
+      // Older receipts can keep an invalid registry binding together with a
+      // stale in-flight projection. Recover only that exact legacy state once
+      // with a fresh Stage A observation; regular automatic refreshes never
+      // re-submit blocked entries.
+      const recoveryPluginIds = Object.entries(this.state.publicPluginDiscoveries)
+        .filter(([, discovery]) => requiresOneTimeRegistryBindingRecovery(
+          discovery,
+          this.settings.targetLocale,
+        ))
+        .map(([pluginId]) => pluginId);
+      if (recoveryPluginIds.length > 0 && this.isLifecycleCurrent(lifecycleRevision)) {
+        await this.processPlugins(recoveryPluginIds, recoveryPluginIds);
+      }
       if (!this.isLifecycleCurrent(lifecycleRevision)) return;
       if (announce) {
         this.settingTab.reportCommandStatus(describePluginSelectionProcessing(result), pluginSelectionNeedsAttention(result));
@@ -573,11 +593,13 @@ export default class TransHubObsidianPlugin extends Plugin {
   private schedulePendingTranslationRetry(
     result: PluginSelectionProcessingResult,
     lifecycleRevision: number,
+    checkedPluginIds: readonly string[],
   ): void {
     const pluginIds = pendingTranslationPluginIds(result);
-    if (pluginIds.length === 0) {
-      if (this.pendingRetryPluginIds.size === 0) this.clearPendingTranslationRetry();
-      return;
+    if (result.kind === "synchronized" && result.sync.statusRead?.kind !== "stale") {
+      for (const pluginId of checkedPluginIds) {
+        if (!pluginIds.includes(pluginId)) this.pendingRetries.complete(pluginId);
+      }
     }
     const retryAfterMs = result.kind === "synchronized"
       ? result.sync.nextRetryAfterMs
@@ -590,22 +612,22 @@ export default class TransHubObsidianPlugin extends Plugin {
     serverSuggestedMs?: number,
     lifecycleRevision = this.lifecycleRevision,
   ): void {
-    for (const pluginId of pluginIds) this.pendingRetryPluginIds.add(pluginId);
-    if (this.pendingRetryTimer !== null) return;
-    if (this.pendingRetryAttempt >= MAX_PENDING_TRANSLATION_QUICK_RETRIES) {
-      this.pendingRetryPluginIds.clear();
-      return;
+    for (const pluginId of pluginIds) {
+      this.pendingRetries.queue(pluginId, this.pluginRetryContext(pluginId), Date.now(), serverSuggestedMs);
     }
-    const delay = pendingTranslationRetryDelay(
-      this.pendingRetryAttempt,
-      serverSuggestedMs,
-    );
+    if (this.pendingRetryTimer !== null) window.clearTimeout(this.pendingRetryTimer);
+    this.pendingRetryTimer = null;
+    const delay = this.pendingRetries.nextDelay(Date.now());
+    if (delay === undefined) return;
     this.pendingRetryTimer = window.setTimeout(() => {
       this.pendingRetryTimer = null;
       if (!this.isLifecycleCurrent(lifecycleRevision)) return;
-      this.pendingRetryAttempt += 1;
-      const retryPluginIds = [...this.pendingRetryPluginIds];
-      this.pendingRetryPluginIds.clear();
+      const retryPluginIds = this.pendingRetries.takeDue(Date.now(), (pluginId) =>
+        this.settings.pluginTranslationEnabled && this.state.enabledPluginIds.includes(pluginId)
+        && !this.settings.excludedPluginIds.includes(pluginId)
+          ? this.pluginRetryContext(pluginId) : undefined).map(({ pluginId }) => pluginId);
+      this.queuePendingTranslationRetry([], undefined, lifecycleRevision);
+      if (retryPluginIds.length === 0) return;
       void this.processPlugins(retryPluginIds)
         // Keep the last announced summary stable. This background pull still
         // persists fresh plugin data and refreshes the settings cards, but its
@@ -623,11 +645,17 @@ export default class TransHubObsidianPlugin extends Plugin {
     }, delay);
   }
 
+  private pluginRetryContext(pluginId: string): string {
+    const discovery = this.state.publicPluginDiscoveries[pluginId];
+    return JSON.stringify([this.settings.targetLocale, this.state.pluginCatalogs[pluginId]?.digest,
+      discovery?.discoveryId, discovery?.taskId, discovery?.taskGeneration,
+      discovery?.localizationProjection?.sourceVersionId]);
+  }
+
   private clearPendingTranslationRetry(): void {
     if (this.pendingRetryTimer !== null) window.clearTimeout(this.pendingRetryTimer);
     this.pendingRetryTimer = null;
-    this.pendingRetryAttempt = 0;
-    this.pendingRetryPluginIds.clear();
+    this.pendingRetries.clear();
   }
 
   private advanceLifecycle(): number {

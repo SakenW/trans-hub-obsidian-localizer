@@ -750,3 +750,5 @@
   .trans-hub-plugin-picker__list .setting-item-control { flex-wrap: wrap; }
   .trans-hub-plugin-picker__coverage-source { white-space: normal; }
 }
+
+.trans-hub-hidden { display: none !important; }

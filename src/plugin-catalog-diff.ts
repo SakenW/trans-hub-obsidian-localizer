@@ -102,6 +102,19 @@ export function isPluginInterfaceString(item: PluginUiCatalog["strings"][number]
     && resolvePluginStringScopes(item.origins).some((scope) => scope === "runtime-ui" || scope === "metadata");
 }
 
+export function unmatchedPluginInterfaceStrings(
+  catalog: PluginUiCatalog,
+  translation: PluginTranslationState,
+): readonly string[] {
+  const current = mergeCatalogNativeTranslations(catalog, translation);
+  const groups = groupCatalogStringsBySource(catalog);
+  const crossVersion = authorityPluginVersion(current) !== catalog.pluginVersion;
+  const matched = new Set(current.entries.filter((entry) =>
+    isCompatibleCatalogEntry(entry, groups.get(entry.source), crossVersion)).map((entry) => entry.source));
+  return [...new Set(catalog.strings.filter(isPluginInterfaceString).map((item) => item.source))]
+    .filter((source) => !matched.has(source));
+}
+
 export function calculatePluginTranslationCoverage(
   catalog: PluginUiCatalog | undefined,
   translation: PluginTranslationState | undefined,

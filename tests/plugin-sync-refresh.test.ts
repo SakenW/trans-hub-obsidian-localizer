@@ -203,8 +203,8 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     expect(pruneUnreferenced).not.toHaveBeenCalled();
   });
 
-  it("公共目录暂时不可用时仅提交目录条目与目标语言", async () => {
-    mocks.loadCatalog.mockRejectedValue(new Error("读取 Obsidian 公共目录失败：HTTP 500"));
+  it.each([408, 429, 500, 503])("目录 HTTP %s 失败不伪造等待或提交新发现", async (status) => {
+    mocks.loadCatalog.mockRejectedValue(new Error(`读取 Obsidian 公共目录失败：HTTP ${status}`));
     vi.mocked(submitObsidianPluginDiscovery).mockResolvedValue(discoveryReceipt({
       discoveryId: "019f0000-0000-7000-8000-000000000001",
       classification: "pending_registry_verification",
@@ -237,21 +237,15 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       save: vi.fn().mockResolvedValue(undefined),
     });
 
-    expect(submitObsidianPluginDiscovery).toHaveBeenCalledOnce();
-    expect(submitObsidianPluginDiscovery).toHaveBeenCalledWith(expect.objectContaining({
-      targetLocales: ["zh-CN"],
-    }));
+    expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
     expect(submitObsidianLocalizationObservation).not.toHaveBeenCalled();
-    expect(summary).toEqual(expect.objectContaining({ submittedCount: 1, waitingCount: 1 }));
-    expect(state.publicPluginDiscoveries.dataview).toEqual(expect.objectContaining({
-      discoveryId: "019f0000-0000-7000-8000-000000000001",
-      targetLocales: ["zh-CN"],
-    }));
-    expect(state.pluginSubmissions.dataview).toBeUndefined();
+    expect(summary).toEqual(expect.objectContaining({ submittedCount: 0, waitingCount: 0, failedPluginIds: ["dataview"] }));
+    expect(state.publicPluginDiscoveries.dataview).toBeUndefined();
+    expect(state.pluginSubmissions.dataview?.lastError?.code).toBe("public_catalog_unavailable");
   });
 
   it("不让客户端目录策略版本触发公共发现重提", async () => {
-    mocks.loadCatalog.mockRejectedValue(new Error("读取 Obsidian 公共目录失败：HTTP 500"));
+    mocks.loadCatalog.mockResolvedValue(undefined);
     let state: PluginState = {
       ...EMPTY_PLUGIN_STATE,
       pluginCatalogs: {
@@ -309,7 +303,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
   });
 
   it("来源目录版本变化时创建新公共发现任务", async () => {
-    mocks.loadCatalog.mockRejectedValue(new Error("读取 Obsidian 公共目录失败：HTTP 500"));
+    mocks.loadCatalog.mockResolvedValue(undefined);
     vi.mocked(submitObsidianPluginDiscovery).mockResolvedValue(discoveryReceipt({
       discoveryId: "019f0000-0000-7000-8000-000000000012",
       classification: "pending_registry_verification",
@@ -360,7 +354,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
   });
 
   it("为同一目录对象合并新增目标语言，并将阻断结果显示为失败", async () => {
-    mocks.loadCatalog.mockRejectedValue(new Error("读取 Obsidian 公共目录失败：HTTP 500"));
+    mocks.loadCatalog.mockResolvedValue(undefined);
     vi.mocked(submitObsidianPluginDiscovery).mockResolvedValue(discoveryReceipt({
       discoveryId: "019f0000-0000-7000-8000-000000000021",
       classification: "blocked",
@@ -417,7 +411,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
   });
 
   it("旧在途需求在目录缺失时改用公共发现", async () => {
-    mocks.loadCatalog.mockRejectedValue(new Error("读取 Obsidian 公共目录失败：HTTP 500"));
+    mocks.loadCatalog.mockResolvedValue(undefined);
     const getLocalizationDemandStatus = vi.fn().mockResolvedValue({ state: "mt_running" });
     let state: PluginState = {
       ...EMPTY_PLUGIN_STATE,
@@ -780,13 +774,19 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     });
   });
 
-  it.each([false, true])("retires a superseded manifest only after its last dictionary reference (shared=%s)", async (shared) => {
-    mocks.resolvePublished.mockReturnValue({
-      sourceVersionId: "new-source", objectVersionId: "new-object",
-      authorityPluginVersion: "0.5.70", artifactDigest: "b".repeat(64),
-      catalogIdentityExact: false, sourceUnitCount: 1, upstreamNativeCount: 0,
-      publishedUnitCount: 1, missingUnitCount: 0,
-    });
+  it.each([
+    { shared: false, coverageRefreshing: false },
+    { shared: true, coverageRefreshing: false },
+    { shared: false, coverageRefreshing: true },
+  ])("retires a superseded manifest only after fresh coverage (shared=$shared, rebuilding=$coverageRefreshing)", async ({ shared, coverageRefreshing }) => {
+    mocks.resolvePublished.mockReturnValue(coverageRefreshing
+      ? { coverageFreshness: "stale" }
+      : {
+          sourceVersionId: "new-source", objectVersionId: "new-object",
+          authorityPluginVersion: "0.5.70", artifactDigest: "b".repeat(64),
+          catalogIdentityExact: false, sourceUnitCount: 1, upstreamNativeCount: 0,
+          publishedUnitCount: 1, missingUnitCount: 0,
+        });
     mocks.download.mockRejectedValue(new Error("offline"));
     const oldExport = { etag: '"old"', manifest: exportManifest } as never;
     let state: PluginState = {
@@ -868,10 +868,14 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     expect(mocks.resolvePublished).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       authoritativeSourceVersionId: "new-source",
     }));
-    expect(getPluginTranslation(state, "dataview", "zh-CN")).toBeUndefined();
-    expect(state.translationExportStates["old-source:zh-CN:default"]).toBe(shared ? oldExport : undefined);
-    expect(pruneUnreferenced).toHaveBeenCalledOnce();
-    expect(result.failedPluginIds).toEqual(["dataview"]);
+    expect(getPluginTranslation(state, "dataview", "zh-CN")).toEqual(
+      coverageRefreshing ? expect.objectContaining({ sourceVersionId: "old-source" }) : undefined,
+    );
+    expect(state.translationExportStates["old-source:zh-CN:default"])
+      .toBe(coverageRefreshing || shared ? oldExport : undefined);
+    expect(pruneUnreferenced).toHaveBeenCalledTimes(coverageRefreshing ? 0 : 1);
+    expect(mocks.download).toHaveBeenCalledTimes(coverageRefreshing ? 0 : 1);
+    expect(result.failedPluginIds).toEqual(coverageRefreshing ? [] : ["dataview"]);
   });
 
   it("官方当前快照缺项时提交公共发现需求，不提交仓库地址", async () => {
@@ -3145,7 +3149,32 @@ describe("shared status refresh boundaries", () => {
     vi.mocked(submitObsidianPluginDiscovery).mockResolvedValue(discoveryReceipt({}));
   });
 
-  it.each([false, true])("automatically follows queued to blocked without projection (retry=%s)", async (retryAllowed) => {
+  it("does not count a historical blocked receipt when the current source is published", async () => {
+    const f = statusRefreshFixture();
+    f.client.getPublicDiscoveryStatus.mockResolvedValue(discoveryStatus({
+      discoveryId: "discovery-0", receiptId: "receipt-0", taskState: "blocked",
+      classification: "blocked", blockedReasonCode: "registry_binding_changed",
+      updatedAt: "2026-09-07T00:00:00Z",
+    }));
+    f.client.getPublicLocalizationStatusBatch.mockResolvedValue({ items: [{
+      discoveryId: "discovery-0", targetLocale: "zh-CN", found: true,
+      projection: bulkProjection("discovery-0", "current-source", "published"),
+    }] });
+    const result = await f.run("manual");
+    expect(result.blockedPluginIds ?? []).toEqual([]);
+    expect(result.waitingCount).toBe(0);
+  });
+
+  it("keeps a directory failure actionable instead of submitting another discovery", async () => {
+    const f = statusRefreshFixture();
+    mocks.loadCatalog.mockResolvedValue({ objects: [], failedPluginIds: ["plugin-0"] });
+    const result = await f.run("automatic");
+    expect(result.failedPluginIds).toContain("plugin-0");
+    expect(f.state().pluginSubmissions["plugin-0"]?.lastError?.code).toBe("public_catalog_unavailable");
+    expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("自动刷新不重提过期目录，但标记为可手动恢复 (retry=%s)", async (retryAllowed) => {
     const f = statusRefreshFixture();
     f.client.getPublicDiscoveryStatus.mockResolvedValue(discoveryStatus({
       discoveryId: "discovery-0", receiptId: "receipt-0", taskState: "blocked",
@@ -3160,7 +3189,7 @@ describe("shared status refresh boundaries", () => {
     });
     expect(first.waitingCount).toBe(0);
     expect(second.waitingCount).toBe(0);
-    expect(retryAllowed ? first.failedPluginIds : first.blockedPluginIds).toEqual(["plugin-0"]);
+    expect(first.failedPluginIds).toEqual(["plugin-0"]);
     expect(f.save).toHaveBeenCalledOnce();
     expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
   });

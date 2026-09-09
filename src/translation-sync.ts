@@ -35,14 +35,12 @@ export interface TranslationRow {
   readonly noteId: string;
   readonly blockId: string;
   readonly translatedText: string;
-  readonly translationDigest: string;
 }
 
 export interface PluginTranslationRow {
   readonly pluginId: string;
   readonly stringKey: string;
   readonly translatedText: string;
-  readonly translationDigest: string;
   readonly provenanceKind?: PluginTranslationProvenanceKind;
   readonly application?: PluginTranslationApplication;
   readonly nativeTarget?: string;
@@ -58,7 +56,6 @@ export interface TranslationSyncOutput<Row> {
 interface TranslationOccurrence {
   readonly occurrenceKey: string;
   readonly translatedText: string;
-  readonly translationDigest: string;
   readonly structuredContent: Readonly<Record<string, unknown>>;
 }
 
@@ -82,7 +79,7 @@ export async function downloadTranslations(input: DownloadInput & {
     const match = /^obsidian:block:([^:]+):([^:]+)$/u.exec(row.occurrenceKey);
     if (match === null) throw new Error(`译文 occurrence 不属于 Obsidian 笔记：${row.occurrenceKey}`);
     if (match[1] !== input.expectedNoteId) throw new Error(`译文 occurrence 与当前笔记不匹配：${match[1]}`);
-    return { noteId: match[1], blockId: match[2], translatedText: row.translatedText, translationDigest: row.translationDigest };
+    return { noteId: match[1], blockId: match[2], translatedText: row.translatedText };
   });
   assertUnique(rows.map((row) => `${row.noteId}\u0000${row.blockId}`), "译文 occurrence 重复");
   return { manifest: result.manifest, rows, etag: result.etag };
@@ -98,7 +95,6 @@ export async function downloadPluginTranslations(input: DownloadInput & {
       pluginId: input.expectedPluginId,
       stringKey,
       translatedText: row.translatedText,
-      translationDigest: row.translationDigest,
       ...parseDeliveryProvenance(row.structuredContent),
       ...parseSourceCompatibility(row.structuredContent),
     };
@@ -115,7 +111,7 @@ export function parseObsidianTranslationPack(
   return parseTranslationPack(bytes, manifest, pack).map((row) => {
     const match = /^obsidian:block:([^:]+):([^:]+)$/u.exec(row.occurrenceKey);
     if (match === null) throw new Error(`译文 occurrence 不属于 Obsidian 笔记：${row.occurrenceKey}`);
-    return { noteId: match[1], blockId: match[2], translatedText: row.translatedText, translationDigest: row.translationDigest };
+    return { noteId: match[1], blockId: match[2], translatedText: row.translatedText };
   });
 }
 
@@ -131,7 +127,6 @@ export function parsePluginTranslationPack(
       pluginId: expectedPluginId,
       stringKey,
       translatedText: row.translatedText,
-      translationDigest: row.translationDigest,
       ...parseDeliveryProvenance(row.structuredContent),
       ...parseSourceCompatibility(row.structuredContent),
     };
@@ -208,7 +203,6 @@ function parseTranslationPack(
     return {
       occurrenceKey: requiredString(item.occurrence_key),
       translatedText: typeof item.target_text === "string" ? item.target_text : (() => { throw new Error("译文文本无效。"); })(),
-      translationDigest: requiredString(item.payload_digest),
       structuredContent: record(item.structured_content, "translation_structured_content_invalid"),
     };
   });
