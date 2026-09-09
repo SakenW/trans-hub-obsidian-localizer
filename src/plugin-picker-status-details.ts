@@ -58,5 +58,11 @@ export function renderPluginPickerCoverageDetails(
     text: translate("覆盖范围"),
     cls: "trans-hub-plugin-picker__coverage-scope-label",
   });
-  scope.createSpan({ text: summary.scopeMetrics.join(" · ") });
+  const metrics = scope.createDiv({ cls: "trans-hub-plugin-picker__coverage-scope-metrics" });
+  for (const metric of summary.scopeMetrics) {
+    metrics.createSpan({
+      text: metric,
+      cls: "trans-hub-plugin-picker__coverage-scope-metric",
+    });
+  }
 }

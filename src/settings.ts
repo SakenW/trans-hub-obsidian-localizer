@@ -799,13 +799,32 @@ export class TransHubSettingTab extends PluginSettingTab {
             renderPluginPickerCoverageDetails(details, localizationStatus.coverage);
           }
           if (missing.length > 0) {
-            const missingDetails = details.createEl("details");
+            const missingDetails = details.createEl("details", {
+              cls: "trans-hub-plugin-picker__missing-details",
+            });
             missingDetails.createEl("summary", { text: translate("未匹配文案（{count}）", { count: missing.length }) });
-            const items = missingDetails.createEl("ul");
+            const reasons = [...new Set(missing.map((entry) => entry.reason))];
+            const singleReason = reasons.length === 1 ? reasons[0] : undefined;
+            if (singleReason !== undefined) {
+              missingDetails.createDiv({
+                text: singleReason,
+                cls: "trans-hub-plugin-picker__missing-reason",
+              });
+            }
+            const items = missingDetails.createEl("ul", {
+              cls: "trans-hub-plugin-picker__missing-list",
+            });
             for (const entry of missing.slice(0, 20)) {
-              const item = items.createEl("li");
-              item.createDiv({ text: entry.source });
-              item.createDiv({ text: entry.reason, cls: "setting-item-description" });
+              const item = items.createEl("li", {
+                text: entry.source,
+                cls: "trans-hub-plugin-picker__missing-item",
+              });
+              if (singleReason === undefined) {
+                item.createDiv({
+                  text: entry.reason,
+                  cls: "trans-hub-plugin-picker__missing-item-reason",
+                });
+              }
             }
             if (missing.length > 20) missingDetails.createDiv({ text: translate("仅展示前 20 条未匹配文案。") });
           }
