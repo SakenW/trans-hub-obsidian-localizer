@@ -203,6 +203,13 @@ export async function synchronizeConfiguredPluginTranslations(input: {
         ) < published.sourceUnitCount;
         const sourceVersionId = published.sourceVersionId;
         const existingSubmission = input.getState().pluginSubmissions[catalog.pluginId];
+        const activeBeforePull = getPluginTranslation(
+          input.getState(),
+          catalog.pluginId,
+          input.targetLocale,
+        );
+        const hasRetainedLocalEntries = activeBeforePull?.sourceVersionId === sourceVersionId
+          && activeBeforePull.entries.length > 0;
         let deliveryWaiting = false;
         try {
           const count = await pullPluginTranslation({
@@ -218,7 +225,8 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           translationCount += count;
         } catch (error) {
           if (!isPublishedExportPending(error)) throw error;
-          if (isPublishedExportWithdrawn(error)) {
+          const exportWithdrawn = isPublishedExportWithdrawn(error);
+          if (exportWithdrawn) {
             withdrawnExportPluginIds.push(catalog.pluginId);
           }
           await saveNativeCoverage(
@@ -226,9 +234,16 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             catalog,
             published,
             published.upstreamNativeCount,
+            !exportWithdrawn,
           );
+          if (exportWithdrawn) {
+            // A 410 is an explicit revocation, unlike a transient 404 while
+            // the published manifest is being restored.  Clear the retired
+            // payload above, then retain the failure signal for the UI.
+            throw new Error("服务器公开目录与译文制品状态不一致，请稍后重试。");
+          }
           const catalogUnitCount = new Set(catalog.strings.map((item) => item.source)).size;
-          if (published.upstreamNativeCount >= catalogUnitCount) {
+          if (published.upstreamNativeCount >= catalogUnitCount || hasRetainedLocalEntries) {
             pulledCount += 1;
           } else {
             deliveryWaiting = true;
@@ -452,12 +467,22 @@ async function saveNativeCoverage(
   catalog: PluginUiCatalog,
   published: PublishedPluginSource,
   upstreamNativeCount = 0,
+  preserveSameSourceEntries = true,
 ): Promise<void> {
   const state = input.getState();
   const exportStateKey = translationExportStateKey(published.sourceVersionId, input.targetLocale);
   const { [exportStateKey]: discardedExportState, ...remainingExportStates } =
     state.translationExportStates;
   void discardedExportState;
+  const active = getPluginTranslation(state, catalog.pluginId, input.targetLocale);
+  // A 404 is a transient disagreement between the public directory and pack
+  // delivery.  Keep a verified dictionary for this exact source rather than
+  // replacing a usable local UI with an empty one.  A withdrawn (410) export
+  // follows the separate clearing path above this helper.
+  const retainedEntries = preserveSameSourceEntries
+    && active?.sourceVersionId === published.sourceVersionId
+    ? active.entries
+    : [];
   const nextState = setPluginTranslation({
     ...state,
     pluginSubmissions: clearedPluginSubmissions(state, catalog.pluginId),
@@ -487,8 +512,10 @@ async function saveNativeCoverage(
       : { upstreamScopeCoverage: published.upstreamScopeCoverage }),
     publishedUnitCount: published.publishedUnitCount,
     missingUnitCount: published.missingUnitCount,
-    entries: [],
-    pulledAt: new Date().toISOString(),
+    entries: retainedEntries,
+    pulledAt: preserveSameSourceEntries && active?.sourceVersionId === published.sourceVersionId
+      ? active.pulledAt
+      : new Date().toISOString(),
   });
   input.replaceState(nextState);
   try {

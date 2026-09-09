@@ -1978,6 +1978,56 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     );
   });
 
+  it("keeps a same-source local dictionary while a published manifest is temporarily unavailable", async () => {
+    mocks.resolvePublished.mockReturnValue({
+      sourceVersionId: "current-source", objectVersionId: "object-version",
+      artifactDigest: "a".repeat(64), catalogIdentityExact: true,
+      sourceUnitCount: 1, upstreamNativeCount: 0, publishedUnitCount: 1,
+      missingUnitCount: 0,
+    });
+    mocks.download.mockRejectedValue(new Error("translation_manifest_unavailable:404"));
+    let state: PluginState = {
+      ...EMPTY_PLUGIN_STATE,
+      pluginCatalogs: {
+        dataview: {
+          pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+          sourceLocale: "en", digest: "catalog-digest", artifactDigest: "a".repeat(64),
+          scannedAt: "2026-07-18T00:00:00.000Z",
+          strings: [{ key: STRING_KEY, source: "Current source", origins: ["ui-call"], placeholderSignature: "" }],
+        },
+      },
+      pluginTranslations: {
+        dataview: {
+          "zh-CN": {
+            pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "current-source",
+            targetLocale: "zh-CN", entries: [{ pluginId: "dataview", source: "Current source", target: "已有译文" }],
+            pulledAt: "2026-07-18T00:00:00.000Z",
+          },
+        },
+      },
+      translationExportStates: {
+        "current-source:zh-CN:default": { etag: '"old"', manifest: exportManifest },
+      },
+    };
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: {},
+        bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+
+    const summary = await synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "http://127.0.0.1:8000", targetLocale: "zh-CN", excludedPluginIds: [],
+      activationStore, translationPackStore, getState: () => state,
+      replaceState: (next) => { state = next; }, save: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(getPluginTranslation(state, "dataview", "zh-CN")?.entries[0]?.target).toBe("已有译文");
+    expect(summary.waitingPluginIds).toEqual([]);
+    expect(summary.pulledCount).toBe(1);
+  });
+
   it.each([
     {
       name: "机器翻译运行中",
