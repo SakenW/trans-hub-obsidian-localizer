@@ -157,11 +157,9 @@ export async function refreshPluginStatuses(
     }
   }
   const previousState = input.getState();
-  for (const { query, item } of projectionResults) {
+  for (const { query } of projectionResults) {
     const current = currentDiscoveryForStatusQuery(previousState, query);
-    if (current === undefined || (item?.projection !== null && item?.projection !== undefined
-      && current.localizationProjection?.targetLocale === item.projection.targetLocale
-      && Date.parse(item.projection.updatedAt) < Date.parse(current.localizationProjection.updatedAt))) {
+    if (current === undefined) {
       failedStatusPluginIds.add(query.pluginId);
       failedStatusSources.add("public-localization");
     }
@@ -267,12 +265,10 @@ export async function refreshPluginStatuses(
         item.projection.externalObjectId !== expectedQuery.pluginId
         || item.projection.discoveryId !== discovery.discoveryId
         || item.projection.targetLocale !== expectedQuery.targetLocale
-        || (
-          discovery.localizationProjection?.targetLocale === item.projection.targetLocale
-          && Date.parse(item.projection.updatedAt)
-            < Date.parse(discovery.localizationProjection.updatedAt)
-        )
       ) continue;
+      // The authenticated status endpoint is authoritative. Its timestamp is
+      // diagnostic metadata, not a monotonic client cursor: recovery may
+      // rebuild a projection from an earlier source event.
       if (item.projection.sourceVersionId) {
         sourceVersionIds.set(expectedQuery.pluginId, item.projection.sourceVersionId);
       }

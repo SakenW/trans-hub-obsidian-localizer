@@ -3224,6 +3224,31 @@ describe("shared status refresh boundaries", () => {
     expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
   });
 
+  it("uses the authenticated server projection when an old local timestamp is later", async () => {
+    const f = statusRefreshFixture();
+    const local = bulkProjection("discovery-0", "current-source", "published");
+    f.replace({
+      ...f.state(),
+      publicPluginDiscoveries: {
+        ...f.state().publicPluginDiscoveries,
+        "plugin-0": {
+          ...f.state().publicPluginDiscoveries["plugin-0"],
+          localizationProjection: { ...local, updatedAt: "2026-09-10T00:00:00.000Z" },
+        },
+      },
+    });
+    f.client.getPublicLocalizationStatusBatch.mockResolvedValue({ items: [{
+      discoveryId: "discovery-0", targetLocale: "zh-CN", found: true,
+      projection: bulkProjection("discovery-0", "current-source", "parsing"),
+    }] });
+
+    const result = await f.run("manual");
+
+    expect(result.statusRead).toEqual({ kind: "fresh" });
+    expect(f.state().publicPluginDiscoveries["plugin-0"]?.localizationProjection?.stage)
+      .toBe("parsing");
+  });
+
   it.each([false, true])("自动刷新不重提过期目录，但标记为可手动恢复 (retry=%s)", async (retryAllowed) => {
     const f = statusRefreshFixture();
     f.client.getPublicDiscoveryStatus.mockResolvedValue(discoveryStatus({
