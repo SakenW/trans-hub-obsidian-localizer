@@ -186,21 +186,18 @@ export class TransHubSettingTab extends PluginSettingTab {
     facts.createSpan({ text: translate("插件自带译文优先") });
     facts.createSpan({ text: translate("仅处理已选插件") });
     facts.createSpan({ text: translate("译文按版本匹配") });
-    const scope = header.createDiv({ cls: "trans-hub-settings__scope" });
-    scope.createSpan({ text: translate("仅支持官方社区插件"), cls: "trans-hub-settings__scope-label" });
-    scope.createSpan({
+    const scope = header.createEl("details", { cls: "trans-hub-settings__scope" });
+    scope.createEl("summary", {
+      text: translate("仅支持官方社区插件"),
+      cls: "trans-hub-settings__scope-label",
+    });
+    scope.createEl("p", {
       text: translate("仅处理官方社区目录中来源可验证的插件；未收录或来源暂时无法确认时，会保留原文并显示原因。"),
       cls: "trans-hub-settings__scope-description",
     });
     header.createEl("p", {
       text: translate("当前多数译文由机器翻译生成，未经人工校对；插件管理器会标明译文来源。"),
-      cls: "trans-hub-settings__notice setting-item-description",
-    });
-    header.createEl("a", {
-      text: translate("查看进展并参与贡献"),
-      href: TRANS_HUB_OBSIDIAN_ECOSYSTEM_URL,
-      cls: "trans-hub-settings__help-link",
-      attr: { target: "_blank", rel: "noopener noreferrer" },
+      cls: "trans-hub-settings__notice",
     });
     this.renderConnection(containerEl);
     const preferencesHeading = new Setting(containerEl).setName(translate("本地化设置")).setHeading();
@@ -376,7 +373,10 @@ export class TransHubSettingTab extends PluginSettingTab {
           : translate("将在系统默认浏览器中登录并授权此设备；Obsidian 内置浏览器无法完成回调。注册目前为邀请制，插件不会接触或保存账号密码。"));
     connection.settingEl.addClass("trans-hub-settings__card", "trans-hub-settings__connection");
     if (this.selectionStatusAt !== null) {
-      const feedback = container.createDiv({ text: this.describeLastAction(), cls: "trans-hub-settings__feedback" });
+      const feedback = connection.settingEl.createDiv({
+        text: this.describeLastAction(),
+        cls: "trans-hub-settings__feedback",
+      });
       feedback.setAttrs({ role: "status", "aria-live": "polite" });
       feedback.toggleClass("mod-warning", this.selectionStatusFailed);
     }
