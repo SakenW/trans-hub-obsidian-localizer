@@ -210,3 +210,18 @@ function manifestFixture(): TranslationExportManifest {
     packs: [pack],
   };
 }
+
+describe("translation package validation diagnostics", () => {
+  it("identifies the malformed row and field without exposing an internal code", () => {
+    const manifest = manifestFixture();
+    const pack = manifest.packs[0];
+    const payload = new TextEncoder().encode(JSON.stringify({
+      schema: "trans-hub.translation-pack", version: 1,
+      source_version_id: manifest.sourceVersionId, target_locale: manifest.targetLocale,
+      target_variant: manifest.targetVariant, pack_index: 0,
+      items: [{ target_text: "译文", structured_content: {} }],
+    }));
+    expect(() => parsePluginTranslationPack(payload, manifest, pack, "sample-plugin"))
+      .toThrow(`译文包第 1 条缺少有效 occurrence_key：${pack.packId}`);
+  });
+});

@@ -1222,3 +1222,30 @@ describe("describePluginLocalizationStatus", () => {
     });
   });
 });
+
+describe("translation package validation failure", () => {
+  it("keeps the package failure visible without offering a futile retry", () => {
+    const catalog = {
+      pluginId: "iconize", pluginName: "Iconize", pluginVersion: "2.14.7",
+      sourceLocale: "en", digest: "iconize-catalog", artifactDigest: "iconize-artifact",
+      scannedAt: "2026-09-10T00:00:00Z",
+      strings: [{ key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
+    };
+    const submission = {
+      ...baseSubmission,
+      pluginId: "iconize",
+      pluginVersion: "2.14.7",
+      catalogDigest: "iconize-catalog",
+      lastError: {
+        code: "translation_pack_invalid",
+        message: "译文包第 1 条缺少有效 occurrence_key：pack-1",
+        targetLocale: "zh-CN" as const,
+        updatedAt: "2026-09-10T00:01:00Z",
+      },
+    };
+    const result = describePluginLocalizationStatus({ catalog, submission, targetLocale: "zh-CN" });
+    expect(result.kind).toBe("failed");
+    expect(result.label).toContain("无需重试");
+    expect(pluginManualRetryKind({ catalog, submission, targetLocale: "zh-CN" })).toBeNull();
+  });
+});

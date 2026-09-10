@@ -731,6 +731,7 @@ function isGlobalSynchronizationError(error: unknown): boolean {
 
 function synchronizationErrorCode(error: unknown): string {
   if (error instanceof Error && error.message === "此插件的译文目录读取失败，请稍后重试。") return "public_catalog_unavailable";
+  if (error instanceof Error && error.message.startsWith("译文包第 ")) return "translation_pack_invalid";
   return isDiagnosticError(error) ? error.code : "plugin_sync_failed";
 }
 

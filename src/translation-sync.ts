@@ -201,9 +201,9 @@ function parseTranslationPack(
   return value.items.map((item, index) => {
     if (!isRecord(item)) throw new Error(`译文行无效：${pack.packId}:${index}`);
     return {
-      occurrenceKey: requiredString(item.occurrence_key),
-      translatedText: typeof item.target_text === "string" ? item.target_text : (() => { throw new Error("译文文本无效。"); })(),
-      structuredContent: record(item.structured_content, "translation_structured_content_invalid"),
+      occurrenceKey: requiredPackString(item.occurrence_key, "occurrence_key", pack.packId, index),
+      translatedText: requiredPackString(item.target_text, "target_text", pack.packId, index),
+      structuredContent: record(item.structured_content, `译文包第 ${index + 1} 条结构无效：${pack.packId}`),
     };
   });
 }
@@ -288,8 +288,10 @@ function assertUnique(values: readonly string[], prefix: string): void {
   }
 }
 
-function requiredString(value: unknown): string {
-  if (typeof value !== "string" || value === "") throw new Error("translation_field_missing");
+function requiredPackString(value: unknown, field: string, packId: string, index: number): string {
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`译文包第 ${index + 1} 条缺少有效 ${field}：${packId}`);
+  }
   return value;
 }
 

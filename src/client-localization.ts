@@ -274,6 +274,7 @@ const ENGLISH_MESSAGES: Readonly<Record<string, string>> = {
   "本地化需求未被接受。可使用重试操作恢复。": "The localization request was not accepted. Select “Retry this plugin” on the right.",
   "需求未被接受。可使用重试操作恢复。": "The request was not accepted. Select “Retry this plugin” on the right.",
   "同步失败：{message}。点击右侧“重试此插件”，无需关闭开关。": "Synchronization failed: {message}. Select “Retry this plugin” on the right; you do not need to turn localization off.",
+  "译文包校验未通过，已保留现有译文；无需重试，等待服务端修复。": "The translation package did not pass validation. Existing translations were kept; retrying will not help while the server fixes it.",
   "机器翻译无法安全处理当前来源中的复杂占位符；该条将保留原文。": "Machine translation cannot safely process a complex placeholder in this source, so the original text will be preserved.",
   "机器翻译失败，服务器已停止自动重试。可使用重试操作恢复。": "Machine translation failed and automatic server retries have stopped. Select “Retry this plugin” on the right.",
   "等待目标语言译文发布": "Awaiting target-language publication",

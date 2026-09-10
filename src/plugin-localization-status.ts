@@ -219,6 +219,7 @@ export function pluginManualRetryKind(input: {
     && isCurrentLocaleSynchronizationError(submission.lastError, input.targetLocale)
   ) return "resynchronize";
   if (hasCurrentPublishedTranslation(input, submission)) return null;
+  if (submission.lastError?.code === "translation_pack_invalid") return null;
   if (
     submission.contributionState === "rejected"
     && !hasCompleteAuthoritativeTranslation(input, submission)
@@ -460,6 +461,12 @@ export function describePluginLocalizationStatus(input: {
   }
   const submission = input.submission;
   const recoverableSynchronizationError = submission?.lastError;
+  if (recoverableSynchronizationError?.code === "translation_pack_invalid") {
+    return {
+      kind: "failed",
+      label: translate("译文包校验未通过，已保留现有译文；无需重试，等待服务端修复。"),
+    };
+  }
   if (
     recoverableSynchronizationError !== undefined
     && recoverableSynchronizationError.code !== "source_artifact_mismatch"
