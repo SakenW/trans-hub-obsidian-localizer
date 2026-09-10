@@ -32,6 +32,7 @@ import {
   parsePluginState,
   PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION,
   resetPluginLocalizationDerivedState,
+  getPluginTranslation,
   type PluginState,
 } from "./plugin-state";
 import { requiresOneTimeRegistryBindingRecovery } from "./plugin-localization-status";
@@ -547,7 +548,16 @@ export default class TransHubObsidianPlugin extends Plugin {
     const lifecycleRevision = this.lifecycleRevision;
     if (!this.settings.pluginTranslationEnabled) return;
     try {
-      const result = await this.processSelectedPlugins();
+      // A complete or partial cached dictionary is refreshed once at startup
+      // (announce=true) or by an explicit user sync. Periodic work is only for
+      // selected plugins that have no usable dictionary yet.
+      const periodicPluginIds = announce ? undefined : this.state.enabledPluginIds.filter((pluginId) =>
+        getPluginTranslation(this.state, pluginId, this.settings.targetLocale) === undefined,
+      );
+      if (periodicPluginIds !== undefined && periodicPluginIds.length === 0) return;
+      const result = periodicPluginIds === undefined
+        ? await this.processSelectedPlugins()
+        : await this.processPlugins(periodicPluginIds);
       // Older receipts can keep an invalid registry binding together with a
       // stale in-flight projection. Recover only that exact legacy state once
       // with a fresh Stage A observation; regular automatic refreshes never
