@@ -197,6 +197,10 @@ export class ActivationStore {
     return this.reconnectRequired;
   }
 
+  invalidateConnection(): void {
+    this.invalidate();
+  }
+
   clear(): void {
     this.lifecycleRevision += 1;
     this.reconnectRequired = false;

@@ -337,7 +337,10 @@ export async function synchronizeConfiguredPluginTranslations(input: {
         continue;
       }
     } catch (error) {
-      if (isGlobalSynchronizationError(error)) throw error;
+      if (isGlobalSynchronizationError(error)) {
+        if (isAuthorizationSynchronizationError(error)) input.activationStore.invalidateConnection();
+        throw error;
+      }
       failedPluginIds.push(catalog.pluginId);
       await saveSynchronizationError(input, catalog, bootstrap.installationId, error);
     }
@@ -717,9 +720,13 @@ function isTemporaryPublishedCatalogError(error: unknown): boolean {
 }
 
 
+function isAuthorizationSynchronizationError(error: unknown): boolean {
+  return isDiagnosticError(error) && (error.diagnostic.status === 401 || error.diagnostic.status === 403);
+}
+
 function isGlobalSynchronizationError(error: unknown): boolean {
   if (!isDiagnosticError(error)) return false;
-  if (error.diagnostic.status === 401 || error.diagnostic.status === 403) return true;
+  if (isAuthorizationSynchronizationError(error)) return true;
   return [
     "PC_CONFIGURATION",
     "PC_CREDENTIAL_AUDIENCE",
