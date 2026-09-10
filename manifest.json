@@ -1,7 +1,7 @@
 {
   "id": "trans-hub-plugin-localizer",
   "name": "Trans-Hub Localizer",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "minAppVersion": "1.11.4",
   "description": "Runtime i18n to translate and localize community plugins with server-authoritative, version-aware translations. Third-party files stay untouched by default; an opt-in mode patches verified static UI text locally.",
   "author": "Trans-Hub",
