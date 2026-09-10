@@ -204,10 +204,9 @@
 
 .trans-hub-settings__connection {
   align-items: start;
-  column-gap: 1.25rem;
   display: grid;
+  gap: 0 1.25rem;
   grid-template-columns: minmax(0, 1fr) auto;
-  row-gap: 0;
 }
 
 .trans-hub-settings__connection .setting-item-info {
@@ -850,4 +849,4 @@
   .trans-hub-plugin-picker__coverage-source { white-space: normal; }
 }
 
-.trans-hub-hidden { display: none !important; }
+.trans-hub-plugin-picker__actions button.trans-hub-hidden { display: none; }
