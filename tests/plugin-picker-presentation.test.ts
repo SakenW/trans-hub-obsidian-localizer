@@ -23,3 +23,9 @@ describe("plugin picker presentation", () => {
     expect(filterSelectablePlugins([{ ...plugins[0], displayName: "データビュー" }], "データビュー")).toHaveLength(1);
   });
 });
+
+  it("将权威制品不匹配列为需要处理，不伪装成准备翻译", () => {
+    expect(presentPluginLocalization({ ...input,
+      localization: { kind: "catalog-mismatch", label: "本地安装与权威目录的精确制品不一致，已暂停同步" },
+    }).kind).toBe("attention");
+  });

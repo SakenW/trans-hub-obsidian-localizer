@@ -36,7 +36,8 @@ export function presentPluginLocalization(input: {
   else if (input.processing) kind = "processing";
   else switch (input.localization.kind) {
     case "localized": kind = input.localization.coverage?.complete === false ? "partial" : "localized"; break;
-    case "waiting": case "unrecorded": case "catalog-mismatch": kind = "processing"; break;
+    case "waiting": case "unrecorded": kind = "processing"; break;
+    case "catalog-mismatch": kind = "attention"; break;
     case "blocked": kind = "restricted"; break;
     case "failed": kind = "attention"; break;
     case "preserved-source": kind = "preserved-source"; break;
