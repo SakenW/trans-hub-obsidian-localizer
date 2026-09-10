@@ -92,7 +92,7 @@ export function describePluginSelectionProcessing(
     const withDetail = detail === "" ? summary : `${summary}（${detail}）`;
     return failedCount === 0
       ? `${withDetail}。`
-      : translate("{summary}；{failed} 个需要重试，可点击“重试失败项”。", {
+      : translate("{summary}；仍有 {failed} 个可恢复项，可点击“重试可恢复项”。", {
           summary: withDetail,
           failed: failedCount,
         });
@@ -105,7 +105,7 @@ export function describePluginSelectionProcessing(
     });
   }
   if (failedCount > 0) {
-    return translate("{scope} {count} 个插件；{failed} 个需要重试，可点击“重试失败项”。", {
+    return translate("{scope} {count} 个插件；{failed} 个可恢复项，可点击“重试可恢复项”。", {
       scope: processingScopeLabel(scope),
       count: scan.scannedCount,
       failed: failedCount,
@@ -137,7 +137,7 @@ export function describePluginStatusRefresh(
   const blockedCount = new Set(sync.blockedPluginIds ?? []).size;
   const exportPendingCount = sync.exportPendingCount ?? 0;
   if (failedCount > 0) {
-    return translate("已刷新所选 {count} 个插件状态；{failed} 个需要重试，可点击“重试失败项”。", {
+    return translate("已刷新所选 {count} 个插件状态；{failed} 个可恢复项，可点击“重试可恢复项”。", {
       count,
       failed: failedCount,
     });

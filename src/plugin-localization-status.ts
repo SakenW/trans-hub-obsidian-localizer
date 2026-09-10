@@ -149,13 +149,24 @@ export function visiblePluginManualRetryKind(input: {
   )) {
     return "resubmit";
   }
-  if (discovery?.taskState === "blocked") return null;
-  return pluginManualRetryKind({
+  const retryKind = pluginManualRetryKind({
     submission,
     translation,
     catalog,
     targetLocale: input.targetLocale,
   });
+  // A current server projection owns the next source transition. In
+  // particular, `published` only needs the ordinary sync pull; resubmitting
+  // source discovery cannot make that download faster and made published
+  // cards look failed. Keep a genuine local resynchronization error visible.
+  if (
+    discovery?.localizationProjection?.targetLocale === input.targetLocale
+    && ["discovery", "validating", "parsing", "translating", "publishing", "published"]
+      .includes(discovery.localizationProjection.stage)
+    && retryKind === "resubmit"
+  ) return null;
+  if (discovery?.taskState === "blocked") return null;
+  return retryKind;
 }
 
 export function pluginManualRetryKind(input: {
@@ -171,8 +182,6 @@ export function pluginManualRetryKind(input: {
     && submission.catalogDigest === input.catalog.digest
     && submission.pluginVersion === input.catalog.pluginVersion;
   if (submission === undefined) return null;
-  if (currentCatalogSubmission && submission.lastError?.code === "public_catalog_unavailable"
-    && isCurrentLocaleSynchronizationError(submission.lastError, input.targetLocale)) return "resynchronize";
   if (submission.lastError?.code === "source_artifact_mismatch") {
     // A rejected mismatch contribution can be stale server-side: the object
     // version digest may predate the bundle-normalization change while the
@@ -187,6 +196,11 @@ export function pluginManualRetryKind(input: {
     }
     return null;
   }
+  if (
+    currentCatalogSubmission
+    && ["public_catalog_unavailable", "plugin_sync_failed"].includes(submission.lastError?.code ?? "")
+    && isCurrentLocaleSynchronizationError(submission.lastError, input.targetLocale)
+  ) return "resynchronize";
   if (hasCurrentPublishedTranslation(input, submission)) return null;
   if (
     submission.contributionState === "rejected"

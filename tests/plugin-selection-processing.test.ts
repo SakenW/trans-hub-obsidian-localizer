@@ -133,7 +133,7 @@ describe("processPluginSelection", () => {
     expect(describePluginSelectionProcessing(result)).toContain("已检查 1 个插件");
   });
 
-  it("轻量刷新状态优先提示需要重试的插件", () => {
+  it("轻量刷新状态优先提示可恢复项", () => {
     expect(describePluginStatusRefresh({
       submittedCount: 0,
       requestedCount: 0,
@@ -142,7 +142,7 @@ describe("processPluginSelection", () => {
       translationCount: 0,
       waitingPluginIds: ["a", "b", "c"],
       failedPluginIds: ["a"],
-    }, 3)).toContain("1 个需要重试");
+    }, 3)).toContain("1 个可恢复项");
   });
 
   it("轻量刷新读取失败时明确显示陈旧结果而不伪装成功", () => {

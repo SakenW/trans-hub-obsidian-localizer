@@ -195,7 +195,28 @@
 }
 
 .trans-hub-settings__connection .setting-item-control {
-  flex-wrap: wrap;
+  align-self: start;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.trans-hub-settings__connection {
+  align-items: start;
+  column-gap: 1.25rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  row-gap: 0;
+}
+
+.trans-hub-settings__connection .setting-item-info {
+  min-width: 0;
+}
+
+.trans-hub-settings__connection .trans-hub-settings__feedback {
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .trans-hub-settings__section-heading {
@@ -644,6 +665,16 @@
 
   .trans-hub-settings__contribution-link {
     white-space: normal;
+  }
+
+  .trans-hub-settings__connection {
+    display: block;
+  }
+
+  .trans-hub-settings__connection .setting-item-control {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    margin-top: 0.75rem;
   }
 
   .trans-hub-plugin-picker__summary {

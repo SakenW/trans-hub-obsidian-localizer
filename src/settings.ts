@@ -625,7 +625,7 @@ export class TransHubSettingTab extends PluginSettingTab {
       })
       .addButton((button) => {
         batchRetryButton = button
-          .setButtonText(translate("重试失败项（0）"))
+          .setButtonText(translate("重试可恢复项（0）"))
           .setTooltip(translate("重试已选择且可恢复的插件；服务端阻断项不会提交。"))
           .onClick(async () => {
             await this.retryRecoverablePlugins(list, this.selectedRecoverablePluginIds(plugins));
@@ -660,7 +660,7 @@ export class TransHubSettingTab extends PluginSettingTab {
       resyncButton.setDisabled(selected === 0 || !this.plugin.hasUserSession() || !this.plugin.settings.pluginTranslationEnabled);
       const recoverableCount = this.selectedRecoverablePluginIds(plugins).length;
       batchRetryButton.buttonEl.toggleClass("trans-hub-hidden", recoverableCount === 0);
-      batchRetryButton.setButtonText(translate("重试失败项（{count}）", { count: recoverableCount }));
+      batchRetryButton.setButtonText(translate("重试可恢复项（{count}）", { count: recoverableCount }));
       batchRetryButton.setDisabled(recoverableCount === 0 || !this.plugin.settings.pluginTranslationEnabled);
     };
 

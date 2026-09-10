@@ -109,7 +109,7 @@ describe("settings user interactions", () => {
     internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
     expect(container.allText()).toContain("本地化已暂停");
     expect(control("同步译文").disabled).toBe(true);
-    expect(control("重试失败项（0）").disabled).toBe(true);
+    expect(control("重试可恢复项（0）").disabled).toBe(true);
   });
 
   it("批量重试只提交已选择且可恢复的插件", async () => {
@@ -123,8 +123,8 @@ describe("settings user interactions", () => {
       installationId: "installation", submittedAt: "2026-09-09T00:00:00Z",
     } as never });
     internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
-    expect(control("重试失败项（1）")).toBeDefined();
-    await control("重试失败项（1）").click();
+    expect(control("重试可恢复项（1）")).toBeDefined();
+    await control("重试可恢复项（1）").click();
     expect(plugin.retryPluginIds).toHaveBeenCalledExactlyOnceWith(["dataview"]);
   });
   it("不在进度详情中重复卡片已展示的服务端状态", () => {
@@ -168,7 +168,7 @@ describe("settings user interactions", () => {
     internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
     const first = control("同步译文").click();
     await control("同步译文").click();
-    await control("重试失败项（0）").click();
+    await control("重试可恢复项（0）").click();
     expect(plugin.processSelectedPlugins).toHaveBeenCalledTimes(1);
     expect(plugin.retryPluginIds).not.toHaveBeenCalled();
     finish();
