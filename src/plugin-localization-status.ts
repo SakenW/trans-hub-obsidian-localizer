@@ -165,8 +165,25 @@ export function visiblePluginManualRetryKind(input: {
       .includes(discovery.localizationProjection.stage)
     && retryKind === "resubmit"
   ) return null;
+  if (
+    discovery?.localizationProjection?.targetLocale === input.targetLocale
+    && retryKind === "resynchronize"
+    && discoverySupersedesLocalSynchronizationError(discovery, submission?.lastError)
+  ) return null;
   if (discovery?.taskState === "blocked") return null;
   return retryKind;
+}
+
+function discoverySupersedesLocalSynchronizationError(
+  discovery: PublicPluginDiscoveryState,
+  error: PluginSubmissionState["lastError"],
+): boolean {
+  if (error?.updatedAt === undefined) return false;
+  const errorAt = Date.parse(error.updatedAt);
+  const discoveryAt = Date.parse(
+    discovery.updatedAt ?? discovery.localizationProjection?.updatedAt ?? discovery.submittedAt,
+  );
+  return Number.isFinite(errorAt) && Number.isFinite(discoveryAt) && errorAt < discoveryAt;
 }
 
 export function pluginManualRetryKind(input: {

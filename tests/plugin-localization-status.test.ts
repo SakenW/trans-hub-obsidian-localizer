@@ -879,7 +879,7 @@ describe("describePluginLocalizationStatus", () => {
     expect(visiblePluginManualRetryKind({ ...visible, hasSession: false })).toBeNull();
   });
 
-  it("当前公共投影在发布时保留真实同步失败的恢复操作", () => {
+  it("当前公共投影会忽略它之前的本地同步错误", () => {
     const state = {
       ...EMPTY_PLUGIN_STATE,
       pluginCatalogs: {
@@ -905,6 +905,48 @@ describe("describePluginLocalizationStatus", () => {
           targetLocales: ["zh-CN"], classification: "eligible_for_processing",
           taskState: "result_verified", installationId: "019f0000-0000-7000-8000-000000000002",
           submittedAt: "2026-08-02T00:00:00Z",
+          localizationProjection: {
+            kind: "public_localization_status_projection",
+            protocol: { protocol: "trans-hub.client-protocol", revision: 1, schemaRevision: 1 },
+            projectionRevision: 1, discoveryId: "019f0000-0000-7000-8000-000000000001",
+            registryKey: "official-directory", externalObjectId: "dataview", targetLocale: "zh-CN" as never,
+            catalogIdentityDigest: null, sourceVersionId: "source", stage: "published",
+            updatedAt: "2026-08-02T00:01:00Z",
+          },
+        },
+      },
+    } as const;
+
+    expect(visiblePluginManualRetryKind({
+      state, pluginId: "dataview", targetLocale: "zh-CN", sourceSelectable: true, hasSession: true,
+    })).toBeNull();
+  });
+
+  it("当前公共投影保留其之后发生的本地同步失败", () => {
+    const state = {
+      ...EMPTY_PLUGIN_STATE,
+      pluginCatalogs: {
+        dataview: {
+          pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+          sourceLocale: "en", digest: "catalog", artifactDigest: "artifact",
+          scannedAt: "2026-08-02T00:00:00Z", strings: [],
+        },
+      },
+      pluginSubmissions: {
+        dataview: {
+          ...baseSubmission, catalogDigest: "catalog", localizationTargetLocale: "zh-CN",
+          lastError: {
+            code: "plugin_sync_failed", message: "download failed", targetLocale: "zh-CN",
+            updatedAt: "2026-08-02T00:02:00Z",
+          },
+        },
+      },
+      publicPluginDiscoveries: {
+        dataview: {
+          discoveryId: "019f0000-0000-7000-8000-000000000001",
+          targetLocales: ["zh-CN"], classification: "eligible_for_processing",
+          taskState: "result_verified", installationId: "019f0000-0000-7000-8000-000000000002",
+          submittedAt: "2026-08-02T00:00:00Z", updatedAt: "2026-08-02T00:01:00Z",
           localizationProjection: {
             kind: "public_localization_status_projection",
             protocol: { protocol: "trans-hub.client-protocol", revision: 1, schemaRevision: 1 },
