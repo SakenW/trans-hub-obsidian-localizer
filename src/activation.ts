@@ -187,6 +187,8 @@ export class ActivationStore {
   isConfigured(): boolean {
     const stored = readStoredInstallation(this.app);
     return stored !== null &&
+      stored.bootstrap.intakeCredential.capabilities.includes("contribution:submit") &&
+      stored.bootstrap.intakeCredential.capabilities.includes("contribution:read_receipt") &&
       stored.bootstrap.intakeCredential.capabilities.includes("translation:read") &&
       Date.parse(stored.bootstrap.challengeExpiresAt) > Date.now();
   }

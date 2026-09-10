@@ -133,7 +133,7 @@ export interface PluginState {
 export const PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION = 3;
 
 export function isPluginLocalizationDerivedCacheCurrent(value: unknown): boolean {
-  return value === PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION;
+  return value === 2 || value === PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION;
 }
 
 export const EMPTY_PLUGIN_STATE: PluginState = {
