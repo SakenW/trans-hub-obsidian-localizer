@@ -510,6 +510,11 @@ export function describePluginLocalizationStatus(input: {
   return { kind: "waiting", label: translate("等待来源收录") };
 }
 
+function equivalentPluginVersion(left: string, right: string): boolean {
+  const normalize = (value: string) => value.trim().replace(/^v(?=\d)/iu, "");
+  return normalize(left) === normalize(right);
+}
+
 function hasExactLocalPublishedTranslation(input: {
   readonly translation?: PluginTranslationState;
   readonly catalog?: PluginUiCatalog;
@@ -759,7 +764,7 @@ function safeIntersectionStatus(
       total: totalCount,
     });
   const authorityPluginVersion = translation.authorityPluginVersion ?? translation.pluginVersion;
-  const versionNotice = authorityPluginVersion === catalog.pluginVersion
+  const versionNotice = equivalentPluginVersion(authorityPluginVersion, catalog.pluginVersion)
     ? undefined
     : translate("当前使用 {version} 的本地化译文；插件可继续使用，建议升级至 {version} 以获得最佳匹配", {
         version: authorityPluginVersion,

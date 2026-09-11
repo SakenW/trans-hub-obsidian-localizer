@@ -734,6 +734,15 @@ describe("describePluginLocalizationStatus", () => {
     });
   });
 
+  it("权威版本仅有 v 前缀差异时不重复提示升级", () => {
+    const status = describePluginLocalizationStatus({
+      catalog: { pluginId: "git", pluginName: "Git", pluginVersion: "2.39.0", sourceLocale: "en", digest: "exact", artifactDigest: "artifact", scannedAt: "2026-09-11T00:00:00Z", strings: [{ key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" }] },
+      translation: { pluginId: "git", pluginVersion: "v2.39.0", authorityPluginVersion: "v2.39.0", sourceVersionId: "source", targetLocale: "zh-CN", entries: [{ pluginId: "git", source: "Settings", target: "设置" }], pulledAt: "2026-09-11T00:00:00Z" },
+      targetLocale: "zh-CN",
+    });
+    expect(status.label).not.toContain("建议升级");
+  });
+
   it("精确安装版本应用当前译文时不显示版本一致性建议", () => {
     const status = describePluginLocalizationStatus({
       catalog: {
