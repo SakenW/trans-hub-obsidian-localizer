@@ -1,6 +1,6 @@
 {
   "name": "@trans-hub/obsidian-client",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "license": "Apache-2.0",
   "description": "Desktop runtime i18n for Obsidian community plugins, with optional explicitly enabled compatibility patches for exact published translations.",
