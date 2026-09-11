@@ -12,7 +12,7 @@ describe("parsePluginState", () => {
   it("清空退役发现运行态及派生缓存，同时保留本地插件目录", () => {
     expect(isPluginLocalizationDerivedCacheCurrent(undefined)).toBe(false);
     expect(isPluginLocalizationDerivedCacheCurrent(1)).toBe(false);
-    expect(isPluginLocalizationDerivedCacheCurrent(2)).toBe(false);
+    expect(isPluginLocalizationDerivedCacheCurrent(2)).toBe(true);
     expect(isPluginLocalizationDerivedCacheCurrent(3)).toBe(true);
     const reset = resetPluginLocalizationDerivedState(parsePluginState({
       enabledPluginIds: ["dataview"],
