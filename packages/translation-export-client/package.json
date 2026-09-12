@@ -19,6 +19,11 @@
       "import": "./dist/node.js",
       "require": "./dist/node.cjs"
     },
+    "./web": {
+      "types": "./dist/web.d.ts",
+      "import": "./dist/web.js",
+      "require": "./dist/web.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": ["dist", "LICENSE", "README.md"],

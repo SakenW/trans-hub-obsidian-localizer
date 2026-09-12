@@ -1,3 +1,5 @@
+import { Platform } from "obsidian";
+
 export type ExternalUrlOpener = (url: string) => Promise<void>;
 
 declare const __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__: "development" | "production";
@@ -6,7 +8,7 @@ const ALLOW_LOOPBACK_HTTP = __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__ === "developmen
 
 export async function openSystemBrowser(
   rawUrl: string,
-  opener: ExternalUrlOpener = electronExternalUrlOpener,
+  opener: ExternalUrlOpener = defaultExternalUrlOpener,
 ): Promise<void> {
   const url = new URL(rawUrl);
   if (
@@ -17,6 +19,18 @@ export async function openSystemBrowser(
     throw new Error("只能在系统浏览器中打开可信的 HTTP(S) 地址。");
   }
   await opener(url.toString());
+}
+
+async function defaultExternalUrlOpener(url: string): Promise<void> {
+  if (Platform.isDesktopApp) {
+    await electronExternalUrlOpener(url);
+    return;
+  }
+  // Mobile runs the plugin in a WebView. Opening a separate browsing context
+  // preserves the vault view so the `obsidian://` callback can return here.
+  if (window.open(url, "_blank", "noopener") === null) {
+    throw new Error("当前 Obsidian 无法打开系统浏览器。");
+  }
 }
 
 function isAllowedExternalProtocol(url: URL): boolean {

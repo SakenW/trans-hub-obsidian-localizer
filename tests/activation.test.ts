@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Platform } from "obsidian";
 import { CURRENT_PROTOCOL_VERSION } from "@trans-hub/client-protocol";
 
 import { ActivationStore } from "../src/activation";
@@ -20,10 +21,6 @@ afterEach(() => {
 
 describe("ActivationStore browser enrollment", () => {
   it("rotates the device signing key for every explicit browser connection", async () => {
-    const unsupported = new DOMException("Unrecognized name", "NotSupportedError");
-    vi.spyOn(crypto.subtle, "generateKey").mockRejectedValue(unsupported);
-    vi.spyOn(crypto.subtle, "importKey").mockRejectedValue(unsupported);
-    vi.spyOn(crypto.subtle, "sign").mockRejectedValue(unsupported);
     const secrets = new Map<string, string>();
     secrets.set(INSTALLATION_SECRET_ID, JSON.stringify({ stale: true }));
     const app = {
@@ -101,7 +98,30 @@ describe("ActivationStore browser enrollment", () => {
     expect(secrets.get(SIGNING_KEY_SECRET_ID)).toBe("");
   });
 
-  it("preserves every old secret when Node key generation fails", async () => {
+  it("registers mobile authorization as a distinct device platform", async () => {
+    const secrets = new Map<string, string>();
+    const app = {
+      secretStorage: {
+        getSecret: (id: string) => secrets.get(id) ?? null,
+        setSecret: (id: string, value: string) => { secrets.set(id, value); },
+      },
+    };
+    Platform.isDesktopApp = false;
+    Platform.isMobileApp = true;
+    try {
+      const url = await new ActivationStore(app as never).beginBrowserAuthorization({
+        webBaseUrl: "http://127.0.0.1:3000",
+        ecosystemSlug: "obsidian",
+        callbackAction: OBSIDIAN_AUTH_CALLBACK_ACTION,
+      });
+      expect(bindingClientPlatform(url)).toBe("obsidian-mobile");
+    } finally {
+      Platform.isDesktopApp = true;
+      Platform.isMobileApp = false;
+    }
+  });
+
+  it("preserves every old secret when WebCrypto key generation fails", async () => {
     const secrets = new Map<string, string>([
       [INSTALLATION_SECRET_ID, "old-installation"],
       [SIGNING_KEY_SECRET_ID, "old-signing-key"],
@@ -115,10 +135,10 @@ describe("ActivationStore browser enrollment", () => {
       },
     };
     const unavailableSigning: InstallationSigningProvider = {
-      createSigningKey() {
+      async createSigningKey() {
         throw new Error(INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE);
       },
-      createSigner() {
+      async createSigner() {
         throw new Error("unexpected signer creation");
       },
     };
@@ -145,11 +165,11 @@ describe("ActivationStore browser enrollment", () => {
     ]);
     let generated = false;
     const signing: InstallationSigningProvider = {
-      createSigningKey() {
+      async createSigningKey() {
         generated = true;
         throw new Error("must not rotate");
       },
-      createSigner() {
+      async createSigner() {
         throw new Error("must not create signer");
       },
     };
@@ -195,12 +215,20 @@ describe("ActivationStore browser enrollment", () => {
 });
 
 function bindingKeyId(value: string): string {
+  return binding(value).installationPublicKey.keyId;
+}
+
+function bindingClientPlatform(value: string): string {
+  return binding(value).client.platform;
+}
+
+function binding(value: string): {
+  readonly installationPublicKey: { readonly keyId: string };
+  readonly client: { readonly platform: string };
+} {
   const encoded = new URL(value).searchParams.get("binding");
   if (encoded === null) throw new Error("missing browser binding");
   const padded = encoded.replace(/-/gu, "+").replace(/_/gu, "/")
     .padEnd(Math.ceil(encoded.length / 4) * 4, "=");
-  const binding = JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as {
-    readonly installationPublicKey: { readonly keyId: string };
-  };
-  return binding.installationPublicKey.keyId;
+  return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
 }

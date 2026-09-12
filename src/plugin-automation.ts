@@ -1,4 +1,4 @@
-import type { App, EventRef } from "obsidian";
+import { Platform, type App, type EventRef } from "obsidian";
 
 import {
   localizedPluginDisplayName,
@@ -131,7 +131,7 @@ export class PluginAutomationController {
     // after the user disables translation.
     this.stop();
     if (!this.input.settings().pluginTranslationEnabled) {
-      return this.restoreThirdPartyFilePatches();
+      return Platform.isDesktopApp ? this.restoreThirdPartyFilePatches() : undefined;
     }
     this.start();
   }
@@ -405,7 +405,7 @@ export class PluginAutomationController {
   }
 
   async applyThirdPartyFilePatches(pluginIds: readonly string[]): Promise<{ readonly applied: number; readonly skipped: number; readonly conflicts: number }> {
-    if (!this.input.settings().thirdPartyFilePatchingEnabled) {
+    if (!Platform.isDesktopApp || !this.input.settings().thirdPartyFilePatchingEnabled) {
       return { applied: 0, skipped: pluginIds.length, conflicts: 0 };
     }
     const plugins = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
@@ -427,6 +427,9 @@ export class PluginAutomationController {
     pluginIds?: readonly string[],
     force = false,
   ): Promise<PluginFileRestoreSummary> {
+    if (!Platform.isDesktopApp) {
+      return { restored: 0, conflicts: 0, restoredPluginIds: [], conflictPluginIds: [] };
+    }
     const plugins = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
     const selectedIds = pluginIds === undefined ? null : new Set(pluginIds);
     const restoredPluginIds: string[] = [];

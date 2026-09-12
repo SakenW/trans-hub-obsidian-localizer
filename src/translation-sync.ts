@@ -9,9 +9,9 @@ import {
   type TranslationSyncState,
 } from "@trans-hub/translation-export-client";
 import {
-  NodeCanonicalJsonPackVerifier,
-  NodeEd25519ManifestVerifier,
-} from "@trans-hub/translation-export-client/node";
+  WebCanonicalJsonPackVerifier,
+  WebCryptoEd25519ManifestVerifier,
+} from "@trans-hub/translation-export-client/web";
 
 import type { TransportClient } from "./http-transport";
 import { ObsidianPackDownloader } from "./obsidian-pack-downloader";
@@ -158,8 +158,8 @@ async function downloadTranslationOccurrences(
     }),
     store: input.packStore,
     downloader,
-    verifier: new NodeCanonicalJsonPackVerifier(),
-    manifestVerifier: input.manifestVerifier ?? new NodeEd25519ManifestVerifier({
+    verifier: new WebCanonicalJsonPackVerifier(),
+    manifestVerifier: input.manifestVerifier ?? new WebCryptoEd25519ManifestVerifier({
       roots: TRANS_HUB_TRANSLATION_EXPORT_TRUST_ROOTS,
     }),
     ...(input.developmentDownloadOrigin === undefined

@@ -2,6 +2,7 @@ import {
   App,
   type ButtonComponent,
   Notice,
+  Platform,
   PluginSettingTab,
   Setting,
   type SettingDefinitionItem,
@@ -286,38 +287,45 @@ export class TransHubSettingTab extends PluginSettingTab {
       },
     );
 
-    addToggleSetting(
-      advanced,
-      translate("高级兼容模式（会修改插件文件）"),
-      translate("仅在普通本地化无法覆盖时使用。允许为单个插件写入匹配的静态译文，并先备份；应用或恢复后需重新加载该插件。"),
-      this.plugin.settings.thirdPartyFilePatchingEnabled,
-      async (value) => {
-        this.plugin.settings.thirdPartyFilePatchingEnabled = value;
-        await this.plugin.savePluginData();
-        if (!value) {
-          const result = await this.plugin.restoreThirdPartyPluginFiles();
-          this.selectionStatus = describeFileRestore(result);
-          this.selectionStatusFailed = result.conflicts > 0;
-        } else {
-          this.selectionStatus = translate("已允许兼容补丁，请在插件管理器中为单个插件应用。");
-          this.selectionStatusFailed = false;
-        }
-        this.selectionStatusAt = new Date();
-        this.refreshSettings();
-      },
-    );
+    if (Platform.isDesktopApp) {
+      addToggleSetting(
+        advanced,
+        translate("高级兼容模式（会修改插件文件）"),
+        translate("仅在普通本地化无法覆盖时使用。允许为单个插件写入匹配的静态译文，并先备份；应用或恢复后需重新加载该插件。"),
+        this.plugin.settings.thirdPartyFilePatchingEnabled,
+        async (value) => {
+          this.plugin.settings.thirdPartyFilePatchingEnabled = value;
+          await this.plugin.savePluginData();
+          if (!value) {
+            const result = await this.plugin.restoreThirdPartyPluginFiles();
+            this.selectionStatus = describeFileRestore(result);
+            this.selectionStatusFailed = result.conflicts > 0;
+          } else {
+            this.selectionStatus = translate("已允许兼容补丁，请在插件管理器中为单个插件应用。");
+            this.selectionStatusFailed = false;
+          }
+          this.selectionStatusAt = new Date();
+          this.refreshSettings();
+        },
+      );
 
-    new Setting(advanced)
-      .setName(translate("恢复所有兼容补丁"))
-      .setDesc(translate("也会检查未启用的插件；遇到外部改动时保留文件并列出需处理项。"))
-      .addButton((button) => button.setButtonText(translate("恢复原始文件")).onClick(async () => {
-        button.setDisabled(true);
-        try {
-          const result = await this.plugin.restoreThirdPartyPluginFiles();
-          this.reportCommandStatus(describeFileRestore(result), result.conflicts > 0);
-        } catch (error) { this.reportCommandStatus(errorMessage(error), true); }
-        finally { button.setDisabled(false); }
-      }));
+      new Setting(advanced)
+        .setName(translate("恢复所有兼容补丁"))
+        .setDesc(translate("也会检查未启用的插件；遇到外部改动时保留文件并列出需处理项。"))
+        .addButton((button) => button.setButtonText(translate("恢复原始文件")).onClick(async () => {
+          button.setDisabled(true);
+          try {
+            const result = await this.plugin.restoreThirdPartyPluginFiles();
+            this.reportCommandStatus(describeFileRestore(result), result.conflicts > 0);
+          } catch (error) { this.reportCommandStatus(errorMessage(error), true); }
+          finally { button.setDisabled(false); }
+        }));
+    } else {
+      advanced.createEl("p", {
+        text: translate("移动端只运行时显示译文，不会修改其他插件文件。"),
+        cls: "setting-item-description",
+      });
+    }
     advanced.createEl("p", {
       text: translate("仅支持官方社区目录中来源可验证的插件。离线时可继续使用已缓存的译文。"),
       cls: "setting-item-description",
@@ -860,15 +868,17 @@ export class TransHubSettingTab extends PluginSettingTab {
           item.evidence?.some((evidence) => evidence.symbol === "createElement"
             && evidence.literalStart !== undefined && evidence.literalEnd !== undefined
             && (evidence.strategy === "structured" || evidence.strategy === "regex-fallback"))) === true;
-        renderPluginPatchControls(row, {
-          app: this.app, pluginName: displayName,
-          state: this.patchStateByPluginId.get(plugin.id) ?? "none",
-          canApply: this.plugin.settings.pluginTranslationEnabled && this.plugin.settings.thirdPartyFilePatchingEnabled
-            && selected && sourceStatus === null && hasReactStaticSettingsText,
-          apply: () => this.plugin.applyThirdPartyPluginFileTranslations([plugin.id]),
-          restore: (force) => this.plugin.restoreThirdPartyPluginFiles([plugin.id], force),
-          onComplete: (message, failed) => this.reportCommandStatus(message, failed),
-        });
+        if (Platform.isDesktopApp) {
+          renderPluginPatchControls(row, {
+            app: this.app, pluginName: displayName,
+            state: this.patchStateByPluginId.get(plugin.id) ?? "none",
+            canApply: this.plugin.settings.pluginTranslationEnabled && this.plugin.settings.thirdPartyFilePatchingEnabled
+              && selected && sourceStatus === null && hasReactStaticSettingsText,
+            apply: () => this.plugin.applyThirdPartyPluginFileTranslations([plugin.id]),
+            restore: (force) => this.plugin.restoreThirdPartyPluginFiles([plugin.id], force),
+            onComplete: (message, failed) => this.reportCommandStatus(message, failed),
+          });
+        }
         // The enable toggle is appended last so it is the rightmost control
         // in every layout (desktop and mobile), keeping row switches aligned
         // with the settings-page toggles on the right edge.
@@ -983,7 +993,7 @@ export class TransHubSettingTab extends PluginSettingTab {
   }
 
   private async refreshPluginPatchStates(pluginIds: readonly string[]): Promise<void> {
-    if (!this.plugin.settings.thirdPartyFilePatchingEnabled || pluginIds.length === 0) return;
+    if (!Platform.isDesktopApp || !this.plugin.settings.thirdPartyFilePatchingEnabled || pluginIds.length === 0) return;
     try {
       const states = await this.plugin.pluginFilePatchStates(pluginIds);
       const unchanged = states.size === this.patchStateByPluginId.size

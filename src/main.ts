@@ -1,4 +1,4 @@
-import { getLanguage, Notice, Plugin } from "obsidian";
+import { getLanguage, Notice, Platform, Plugin } from "obsidian";
 
 import { ActivationStore } from "./activation";
 import { localizedClientName, setClientLocale, translate } from "./client-localization";
@@ -32,7 +32,6 @@ import {
   parsePluginState,
   PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION,
   resetPluginLocalizationDerivedState,
-  getPluginTranslation,
   type PluginState,
 } from "./plugin-state";
 import { requiresOneTimeRegistryBindingRecovery } from "./plugin-localization-status";
@@ -260,7 +259,13 @@ export default class TransHubObsidianPlugin extends Plugin {
     const existingLeaf = this.app.workspace.getLeavesOfType(PLUGIN_MANAGER_VIEW_TYPE)[0];
     if (existingLeaf !== undefined) {
       await this.app.workspace.revealLeaf(existingLeaf);
-      existingLeaf.getContainer().win.focus();
+      if (Platform.isDesktopApp) existingLeaf.getContainer().win.focus();
+      return;
+    }
+    if (!Platform.isDesktopApp) {
+      const leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: PLUGIN_MANAGER_VIEW_TYPE, active: true });
+      await this.app.workspace.revealLeaf(leaf);
       return;
     }
     try {
@@ -548,16 +553,7 @@ export default class TransHubObsidianPlugin extends Plugin {
     const lifecycleRevision = this.lifecycleRevision;
     if (!this.settings.pluginTranslationEnabled) return;
     try {
-      // A complete or partial cached dictionary is refreshed once at startup
-      // (announce=true) or by an explicit user sync. Periodic work is only for
-      // selected plugins that have no usable dictionary yet.
-      const periodicPluginIds = announce ? undefined : this.state.enabledPluginIds.filter((pluginId) =>
-        getPluginTranslation(this.state, pluginId, this.settings.targetLocale) === undefined,
-      );
-      if (periodicPluginIds !== undefined && periodicPluginIds.length === 0) return;
-      const result = periodicPluginIds === undefined
-        ? await this.processSelectedPlugins()
-        : await this.processPlugins(periodicPluginIds);
+      const result = await this.processSelectedPlugins();
       // Older receipts can keep an invalid registry binding together with a
       // stale in-flight projection. Recover only that exact legacy state once
       // with a fresh Stage A observation; regular automatic refreshes never

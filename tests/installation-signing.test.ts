@@ -7,6 +7,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE,
   STORED_SIGNING_KEY_CORRUPTED_MESSAGE,
   createSigner,
   createSigningKey,
@@ -18,9 +19,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("Node Ed25519 installation signing", () => {
-  it("exports a raw public key and importable PKCS#8 private key", () => {
-    const key = createSigningKey();
+describe("WebCrypto Ed25519 installation signing", () => {
+  it("exports a raw public key and importable PKCS#8 private key", async () => {
+    const key = await createSigningKey();
     const publicKey = Buffer.from(key.publicKeyBase64Url, "base64url");
     const privateKey = createPrivateKey({
       key: Buffer.from(key.privateKeyPkcs8Base64, "base64"),
@@ -34,8 +35,8 @@ describe("Node Ed25519 installation signing", () => {
   });
 
   it("signs the exact protocol frame with a 64-byte Ed25519 signature", async () => {
-    const key = createSigningKey();
-    const signer = createSigner(key);
+    const key = await createSigningKey();
+    const signer = await createSigner(key);
     const input = {
       requestDigest: createDigest("request", "a".repeat(64)),
       challenge: "challenge-value",
@@ -65,39 +66,30 @@ describe("Node Ed25519 installation signing", () => {
     expect(verify(null, frame, publicKey, signature)).toBe(true);
   });
 
-  it("does not depend on WebCrypto Ed25519 generate, import, or sign", async () => {
+  it("fails closed when WebCrypto Ed25519 is unavailable", async () => {
     const unsupported = new DOMException("Unrecognized name", "NotSupportedError");
     vi.spyOn(crypto.subtle, "generateKey").mockRejectedValue(unsupported);
     vi.spyOn(crypto.subtle, "importKey").mockRejectedValue(unsupported);
     vi.spyOn(crypto.subtle, "sign").mockRejectedValue(unsupported);
 
-    const key = createSigningKey();
-    const signed = await createSigner(key).signProof({
-      requestDigest: createDigest("request", "b".repeat(64)),
-      challenge: "challenge-value",
-      nonce: "nonce-value",
-      credentialEpoch: 1,
-    });
-
-    expect(key.publicKeyBase64Url).toHaveLength(43);
-    expect(signed.signature).toHaveLength(86);
+    await expect(createSigningKey()).rejects.toThrow(INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE);
   });
 
-  it("fails closed for damaged PKCS#8 material", () => {
-    const key = createSigningKey();
-    expect(() => createSigner({
+  it("fails closed for damaged PKCS#8 material", async () => {
+    const key = await createSigningKey();
+    await expect(createSigner({
       ...key,
       privateKeyPkcs8Base64: Buffer.from("damaged").toString("base64"),
-    })).toThrow(STORED_SIGNING_KEY_CORRUPTED_MESSAGE);
+    })).rejects.toThrow(STORED_SIGNING_KEY_CORRUPTED_MESSAGE);
   });
 
-  it("fails closed when the stored public key does not match the private key", () => {
-    const key = createSigningKey();
-    const otherKey = createSigningKey();
+  it("fails closed when the stored public key does not match the private key", async () => {
+    const key = await createSigningKey();
+    const otherKey = await createSigningKey();
 
-    expect(() => createSigner({
+    await expect(createSigner({
       ...key,
       publicKeyBase64Url: otherKey.publicKeyBase64Url,
-    })).toThrow(STORED_SIGNING_KEY_CORRUPTED_MESSAGE);
+    })).rejects.toThrow(STORED_SIGNING_KEY_CORRUPTED_MESSAGE);
   });
 });

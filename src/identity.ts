@@ -7,10 +7,6 @@ export async function sha256Hex(input: string | Uint8Array): Promise<string> {
   return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", buffer)));
 }
 
-export function sha256HexSync(input: string | Uint8Array): string {
-  return createHash("sha256").update(input).digest("hex");
-}
-
 export async function deterministicUuid(seed: string): Promise<string> {
   const digest = await sha256Hex(seed);
   return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-7${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
@@ -36,14 +32,16 @@ export function utf8Hex(input: string): string {
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64");
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 export function base64ToBytes(value: string): Uint8Array {
-  return new Uint8Array(Buffer.from(value, "base64"));
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
-import { createHash } from "node:crypto";

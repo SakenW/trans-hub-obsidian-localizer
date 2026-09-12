@@ -2,6 +2,15 @@ type RequestUrlHandler = (input: unknown) => Promise<unknown>;
 
 export class App {}
 
+export const Platform = {
+  isDesktop: true,
+  isMobile: false,
+  isDesktopApp: true,
+  isMobileApp: false,
+  isIosApp: false,
+  isAndroidApp: false,
+};
+
 export class PluginSettingTab {
   containerEl = { querySelector: () => null } as unknown as HTMLElement;
 

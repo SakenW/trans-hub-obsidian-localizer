@@ -1,21 +1,11 @@
-import {
-  createHash,
-  createPrivateKey,
-  createPublicKey,
-  generateKeyPairSync,
-  sign,
-  timingSafeEqual,
-  type KeyObject,
-} from "node:crypto";
-
 import { buildProtocolSignatureFrame } from "@trans-hub/client-protocol";
 import type { Ed25519InstallationSignerPort } from "@trans-hub/public-client";
 
-const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
-const ED25519_SPKI_LENGTH = ED25519_SPKI_PREFIX.length + 32;
+const ED25519_PUBLIC_KEY_BYTES = 32;
+const PAIR_CHECK_FRAME = new TextEncoder().encode("trans-hub/obsidian/installation-key-pair/v1");
 
 export const INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE =
-  "设备签名不可用，请更新 Obsidian 桌面安装器，并完全退出 Obsidian 后重新启动。";
+  "此设备不支持安全签名，请将 Obsidian 更新到支持 WebCrypto Ed25519 的版本后重试。";
 export const STORED_SIGNING_KEY_CORRUPTED_MESSAGE =
   "设备签名密钥已损坏，请重新连接语枢。";
 
@@ -27,55 +17,57 @@ export interface StoredSigningKey {
 }
 
 export interface InstallationSigningProvider {
-  createSigningKey(): StoredSigningKey;
-  createSigner(key: StoredSigningKey): Ed25519InstallationSignerPort;
+  createSigningKey(): Promise<StoredSigningKey>;
+  createSigner(key: StoredSigningKey): Promise<Ed25519InstallationSignerPort>;
 }
 
-export const nodeInstallationSigningProvider: InstallationSigningProvider = {
+/** WebCrypto is available in supported Obsidian desktop and mobile WebViews. */
+export const webCryptoInstallationSigningProvider: InstallationSigningProvider = {
   createSigningKey,
   createSigner,
 };
 
-export function createSigningKey(): StoredSigningKey {
+export async function createSigningKey(): Promise<StoredSigningKey> {
   try {
-    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-    const publicKeySpki = publicKey.export({ format: "der", type: "spki" });
-    const publicKeyRaw = extractEd25519RawPublicKey(publicKeySpki);
-    const privateKeyPkcs8 = privateKey.export({ format: "der", type: "pkcs8" });
+    const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]) as CryptoKeyPair;
+    const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+    const privateKey = new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
+    if (publicKey.byteLength !== ED25519_PUBLIC_KEY_BYTES) {
+      throw new Error("Unexpected Ed25519 public key length");
+    }
+    const digest = await sha256Hex(publicKey);
     return {
       version: 1,
-      keyId: `obsidian-${createHash("sha256").update(publicKeyRaw).digest("hex").slice(0, 32)}`,
-      publicKeyBase64Url: publicKeyRaw.toString("base64url"),
-      privateKeyPkcs8Base64: privateKeyPkcs8.toString("base64"),
+      keyId: `obsidian-${digest.slice(0, 32)}`,
+      publicKeyBase64Url: bytesToBase64Url(publicKey),
+      privateKeyPkcs8Base64: bytesToBase64(privateKey),
     };
   } catch (error) {
     throw installationSigningUnavailable(error);
   }
 }
 
-export function createSigner(key: StoredSigningKey): Ed25519InstallationSignerPort {
-  let privateKey: KeyObject;
+export async function createSigner(key: StoredSigningKey): Promise<Ed25519InstallationSignerPort> {
+  let privateKey: CryptoKey;
   try {
-    privateKey = importPrivateKey(key.privateKeyPkcs8Base64);
-    const derivedPublicKeySpki = createPublicKey(privateKey).export({
-      format: "der",
-      type: "spki",
-    });
-    const derivedPublicKeyRaw = extractEd25519RawPublicKey(derivedPublicKeySpki);
-    const storedPublicKeyRaw = Buffer.from(key.publicKeyBase64Url, "base64url");
-    if (
-      storedPublicKeyRaw.length !== 32 ||
-      !timingSafeEqual(derivedPublicKeyRaw, storedPublicKeyRaw)
-    ) {
+    const publicKeyRaw = base64UrlToBytes(key.publicKeyBase64Url);
+    if (publicKeyRaw === undefined || publicKeyRaw.byteLength !== ED25519_PUBLIC_KEY_BYTES) {
+      throw new Error("Stored installation public key is invalid");
+    }
+    privateKey = await crypto.subtle.importKey("pkcs8", arrayBuffer(base64ToBytes(key.privateKeyPkcs8Base64)), "Ed25519", false, ["sign"]);
+    const publicKey = await crypto.subtle.importKey("raw", arrayBuffer(publicKeyRaw), "Ed25519", false, ["verify"]);
+    const signature = await crypto.subtle.sign("Ed25519", privateKey, arrayBuffer(PAIR_CHECK_FRAME));
+    if (!await crypto.subtle.verify("Ed25519", publicKey, signature, arrayBuffer(PAIR_CHECK_FRAME))) {
       throw new Error("Stored installation public key does not match its private key");
     }
   } catch (error) {
+    if (webCryptoUnavailable(error)) throw installationSigningUnavailable(error);
     throw storedSigningKeyCorrupted(error);
   }
   return {
     keyId: key.keyId,
     publicKey: key.publicKeyBase64Url,
-    signProof(input) {
+    async signProof(input) {
       try {
         const signedAt = new Date().toISOString();
         const frame = buildProtocolSignatureFrame("public_contribution_intake", {
@@ -88,37 +80,55 @@ export function createSigner(key: StoredSigningKey): Ed25519InstallationSignerPo
           credentialEpoch: input.credentialEpoch,
           signedAt,
         });
-        return Promise.resolve({
+        return {
           signedAt,
-          signature: sign(null, frame, privateKey).toString("base64url"),
-        });
+          signature: bytesToBase64Url(new Uint8Array(
+            await crypto.subtle.sign("Ed25519", privateKey, arrayBuffer(frame)),
+          )),
+        };
       } catch (error) {
-        return Promise.reject(storedSigningKeyCorrupted(error));
+        throw webCryptoUnavailable(error)
+          ? installationSigningUnavailable(error)
+          : storedSigningKeyCorrupted(error);
       }
     },
   };
 }
 
-function importPrivateKey(privateKeyPkcs8Base64: string): KeyObject {
-  const privateKey = createPrivateKey({
-    key: Buffer.from(privateKeyPkcs8Base64, "base64"),
-    format: "der",
-    type: "pkcs8",
-  });
-  if (privateKey.asymmetricKeyType !== "ed25519") {
-    throw new Error("Stored installation key is not Ed25519");
-  }
-  return privateKey;
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  return Array.from(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", arrayBuffer(bytes))),
+    (value) => value.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
-function extractEd25519RawPublicKey(publicKeySpki: Buffer): Buffer {
-  if (
-    publicKeySpki.length !== ED25519_SPKI_LENGTH ||
-    !publicKeySpki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
-  ) {
-    throw new Error("Invalid RFC 8410 Ed25519 SPKI key");
-  }
-  return publicKeySpki.subarray(ED25519_SPKI_PREFIX.length);
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  return bytesToBase64(bytes).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/gu, "");
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+}
+
+function base64UrlToBytes(value: string): Uint8Array | undefined {
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(value)) return undefined;
+  return base64ToBytes(value.replace(/-/gu, "+").replace(/_/gu, "/").padEnd(44, "="));
+}
+
+function arrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+function webCryptoUnavailable(error: unknown): boolean {
+  return error instanceof ReferenceError
+    || (typeof error === "object" && error !== null && "name" in error
+      && (error as { readonly name?: unknown }).name === "NotSupportedError");
 }
 
 function installationSigningUnavailable(cause: unknown): Error {

@@ -24,6 +24,14 @@ export class TestElement {
   allText(): string { return [this.text, ...this.children.map((child) => child.allText())].join("\n"); }
 }
 export class App {}
+export const Platform = {
+  isDesktop: true,
+  isMobile: false,
+  isDesktopApp: true,
+  isMobileApp: false,
+  isIosApp: false,
+  isAndroidApp: false,
+};
 export class Plugin { settings = {}; manifest = { id: "trans-hub-plugin-localizer", name: "Trans-Hub Localizer" }; }
 export class ItemView {}
 export class PluginSettingTab {

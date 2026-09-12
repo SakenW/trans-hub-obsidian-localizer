@@ -1,4 +1,4 @@
-import type { App } from "obsidian";
+import { Platform, type App } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -129,6 +129,30 @@ describe("selectApplicablePluginTranslations", () => {
       skipped: 1,
       conflicts: 0,
     });
+  });
+
+  it("never writes or restores third-party plugin files on mobile", async () => {
+    Platform.isDesktopApp = false;
+    try {
+      const controller = automationController({} as App, EMPTY_PLUGIN_STATE, {
+        ...CONTROLLER_SETTINGS,
+        thirdPartyFilePatchingEnabled: true,
+      });
+
+      await expect(controller.applyThirdPartyFilePatches(["other-plugin"])).resolves.toEqual({
+        applied: 0,
+        skipped: 1,
+        conflicts: 0,
+      });
+      await expect(controller.restoreThirdPartyFilePatches()).resolves.toEqual({
+        restored: 0,
+        conflicts: 0,
+        restoredPluginIds: [],
+        conflictPluginIds: [],
+      });
+    } finally {
+      Platform.isDesktopApp = true;
+    }
   });
 
   it("restores an actually patched third-party file when the main localization switch is disabled", async () => {

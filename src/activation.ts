@@ -16,15 +16,15 @@ import {
   type InstallationStoragePort,
   type RandomNoncePort,
 } from "@trans-hub/public-client";
-import type { App } from "obsidian";
+import { Platform, type App } from "obsidian";
 
 import { ObsidianHttpTransport } from "./http-transport";
 import { bytesToBase64 } from "./identity";
 import {
-  nodeInstallationSigningProvider,
   STORED_SIGNING_KEY_CORRUPTED_MESSAGE,
   type InstallationSigningProvider,
   type StoredSigningKey,
+  webCryptoInstallationSigningProvider,
 } from "./installation-signing";
 import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 
@@ -63,7 +63,7 @@ export class ActivationStore {
 
   constructor(
     private readonly app: App,
-    private readonly installationSigning: InstallationSigningProvider = nodeInstallationSigningProvider,
+    private readonly installationSigning: InstallationSigningProvider = webCryptoInstallationSigningProvider,
   ) {}
 
   async client(input: {
@@ -111,7 +111,7 @@ export class ActivationStore {
     this.reconnectRequired = false;
     // Browser authorization is an explicit device re-enrollment. Reusing one
     // signing key for another installation is correctly contained as cloning.
-    const freshKey = this.installationSigning.createSigningKey();
+    const freshKey = await this.installationSigning.createSigningKey();
     this.app.secretStorage.setSecret(SIGNING_KEY_SECRET_ID, JSON.stringify(freshKey));
     this.app.secretStorage.setSecret(INSTALLATION_SECRET_ID, "");
     this.app.secretStorage.setSecret(PENDING_RENEWAL_SECRET_ID, "");
@@ -126,7 +126,11 @@ export class ActivationStore {
       installationStorage: this.storage("pending", lifecycleRevision),
     });
     const prepared = client.prepareBootstrap({
-      client: { type: "public_plugin", version: OBSIDIAN_CLIENT_VERSION, platform: "obsidian-desktop" },
+      client: {
+        type: "public_plugin",
+        version: OBSIDIAN_CLIENT_VERSION,
+        platform: Platform.isMobileApp ? "obsidian-mobile" : "obsidian-desktop",
+      },
       requestedCapabilities: ["contribution:submit", "contribution:read_receipt", "translation:read"],
     });
     const pending: PendingAuthorization = {
@@ -187,8 +191,6 @@ export class ActivationStore {
   isConfigured(): boolean {
     const stored = readStoredInstallation(this.app);
     return stored !== null &&
-      stored.bootstrap.intakeCredential.capabilities.includes("contribution:submit") &&
-      stored.bootstrap.intakeCredential.capabilities.includes("contribution:read_receipt") &&
       stored.bootstrap.intakeCredential.capabilities.includes("translation:read") &&
       Date.parse(stored.bootstrap.challengeExpiresAt) > Date.now();
   }
@@ -237,17 +239,17 @@ export class ActivationStore {
     }
   }
 
-  private signer(): Promise<Ed25519InstallationSignerPort> {
+  private async signer(): Promise<Ed25519InstallationSignerPort> {
     const raw = this.app.secretStorage.getSecret(SIGNING_KEY_SECRET_ID);
     const stored = parseSigningKey(raw);
     if (raw && stored === null) {
       throw new Error(STORED_SIGNING_KEY_CORRUPTED_MESSAGE);
     }
-    const key = stored ?? this.installationSigning.createSigningKey();
+    const key = stored ?? await this.installationSigning.createSigningKey();
     if (!raw) {
       this.app.secretStorage.setSecret(SIGNING_KEY_SECRET_ID, JSON.stringify(key));
     }
-    return Promise.resolve(this.installationSigning.createSigner(key));
+    return this.installationSigning.createSigner(key);
   }
 
   private async renewCredential(input: {

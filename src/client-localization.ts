@@ -30,6 +30,7 @@ const ENGLISH_MESSAGES: Readonly<Record<string, string>> = {
   "选择需要本地化的插件，查看译文进度或处理问题。": "Choose plugins to localize, check translation progress, and resolve issues.",
   "高级选项": "Advanced options",
   "仅在普通本地化无法覆盖时使用。允许为单个插件写入匹配的静态译文，并先备份；应用或恢复后需重新加载该插件。": "Use only when runtime localization cannot reach the text. Allow matching static translations to be written per plugin, with a backup. Reload the plugin after applying or restoring.",
+  "移动端只运行时显示译文，不会修改其他插件文件。": "Mobile uses runtime translations only and never modifies other plugin files.",
   "已允许兼容补丁，请在插件管理器中为单个插件应用。": "Compatibility patches are allowed. Apply them per plugin in the manager.",
   "恢复所有兼容补丁": "Restore all compatibility patches",
   "也会检查未启用的插件；遇到外部改动时保留文件并列出需处理项。": "Also check disabled plugins. Preserve externally changed files and list items needing attention.",

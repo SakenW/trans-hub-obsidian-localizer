@@ -5,7 +5,7 @@
   <b>简体中文</b> · <a href="#trans-hub-localizer">English</a>
 </p>
 
-面向 Obsidian 社区插件的桌面端运行时 **I18n** 与本地化：让符合条件的插件以你选择的语言自然显示。默认只改 Obsidian 呈现层；少数无法运行时覆盖的静态界面可由用户单独启用兼容补丁。
+面向 Obsidian 社区插件的跨平台运行时 **I18n** 与本地化：让符合条件的插件以你选择的语言自然显示。默认只改 Obsidian 呈现层；桌面端可为少数无法运行时覆盖的静态界面单独启用兼容补丁。
 
 语枢 · 插件本地化会为已支持的社区插件应用经校验的译文，覆盖名称、说明、设置、命令和界面文本。它默认只作用于 Obsidian 的呈现层，始终不会修改你的库（Vault）笔记；第三方文件仅在显式应用兼容补丁时写入。
 
@@ -26,6 +26,8 @@
 译文默认只在 Obsidian 呈现层按精确匹配运行时应用。Markdown 编辑器、阅读视图、代码、脚本和可编辑内容也会被排除。关闭本地化即可立即恢复原始呈现。
 
 高级兼容补丁只在桌面端提供，默认关闭，且必须由用户针对单个插件显式点击启用。它只写入与当前精确版本、已发布译文和静态位置证据都一致的文案，并在写入前保存可验证备份；遇到版本变化或外部修改会保留原文件并报告冲突。它从不修改 Vault 笔记。
+
+移动端只应用已校验的运行时译文，不提供第三方插件文件补丁。设备签名与译文验签要求宿主支持 Ed25519 和 SHA-256 WebCrypto；缺少这些能力时插件会失败关闭。
 
 ## 能做什么
 
@@ -98,7 +100,7 @@ Apache-2.0，详见 [LICENSE](LICENSE)。
 
 # Trans-Hub Localizer
 
-Desktop runtime **i18n** and localization for Obsidian community plugins—make eligible plugins feel native in your language. By default it only changes the Obsidian presentation layer; an optional per-plugin compatibility patch exists for a small set of static UI that cannot be covered at runtime.
+Cross-platform runtime **i18n** and localization for Obsidian community plugins—make eligible plugins feel native in your language. By default it only changes the Obsidian presentation layer; an optional desktop-only per-plugin compatibility patch exists for a small set of static UI that cannot be covered at runtime.
 
 <p align="center">
   <b>English</b> · <b>简体中文见上方</b>

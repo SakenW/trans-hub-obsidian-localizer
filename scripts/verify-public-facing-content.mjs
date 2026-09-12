@@ -27,13 +27,13 @@ if (
   throw new Error("Primary public README must contain inline Simplified Chinese content.");
 }
 for (const required of [
-  "Desktop runtime **i18n** and localization",
+  "Cross-platform runtime **i18n** and localization",
   "Server-authoritative, version-aware translations",
   "Safe runtime i18n, not default file rewriting",
   "运行时 **I18n** 与本地化",
   "服务端权威、版本精确",
   "安全的运行时 I18n，而不是默认改写文件",
-  "desktop-only",
+  "跨平台运行时 **I18n** 与本地化",
   "桌面端",
 ]) {
   if (!primaryReadmeContent.includes(required)) {
