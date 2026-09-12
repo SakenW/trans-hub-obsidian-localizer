@@ -31,7 +31,7 @@ describe("Obsidian product configuration", () => {
     expect(typeof description).toBe("string");
     expect((description as string).length).toBeLessThanOrEqual(250);
     expect(description).toMatch(/\.$/u);
-    expect(description).toContain("translate");
+    expect(description).toMatch(/\btranslate\b/iu);
     expect(description).toContain("localize");
     expect(description).toContain("community plugin");
     expect(description).not.toContain("Obsidian");

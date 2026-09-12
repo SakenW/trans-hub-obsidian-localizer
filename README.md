@@ -23,6 +23,13 @@ Existing published translations are reused directly; missing content automatical
 
 For manual installation, download `main.js`, `manifest.json`, and `styles.css` from the same [GitHub Release](https://github.com/SakenW/trans-hub-obsidian-localizer/releases), and place them in `<vault-config-dir>/plugins/trans-hub-plugin-localizer/`. Do not mix files from different versions.
 
+<!-- section: use-cases -->
+## When to use it
+
+- Translate community-plugin settings, commands, and interfaces into your language.
+- Reuse shared translations without configuring an AI model or API key yourself.
+- Use the same solution on desktop and mobile, with automatic compatibility checks after plugin updates.
+
 <!-- section: capabilities -->
 ## Core capabilities
 
@@ -38,9 +45,9 @@ For manual installation, download `main.js`, `manifest.json`, and `styles.css` f
 Runtime checks cover source identity, scope, semantic role, formatting, and dynamic placeholders as applicable. Complete translation of every interface in every plugin is not promised.
 
 <!-- section: languages -->
-## Full language support
+## All-language support, beyond the presets
 
-Target languages are not limited to a fixed list. Select common languages or enter a language identifier through the other-language input, retaining regional and script variants.
+Choose a common language or enter another language tag, retaining regional and script variants. Translation availability depends on the processing and publication status of the requested content.
 
 Quick choices include **Simplified Chinese, Traditional Chinese, English, Japanese, Korean, German, French, Spanish, Brazilian Portuguese, and Russian**. Other languages include Italian (`it`), Arabic (`ar`), Ukrainian (`uk`), and the Serbian Latin variant (`sr-Latn`). Availability and quality depend on published results and services available for that language.
 
@@ -48,6 +55,8 @@ This refers to the translation language of **other plugins**. Trans-Hub's own se
 
 <!-- section: quality -->
 ## Translation quality and support scope
+
+This plugin targets community-plugin interfaces. It does not translate notes or web pages, or run real-time LLM translation on your device.
 
 Most current Trans-Hub translations are machine-generated and have not been human proofread. The plugin distinguishes translation source and review status. Passing source and compatibility validation does not mean translation accuracy has been human-reviewed.
 

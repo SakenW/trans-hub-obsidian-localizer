@@ -14,7 +14,11 @@
     "i18n",
     "community-plugins",
     "plugin-localization",
-    "trans-hub"
+    "trans-hub",
+    "obsidian-mobile",
+    "multilingual",
+    "plugin-translator",
+    "no-api-key"
   ],
   "repository": {
     "type": "git",

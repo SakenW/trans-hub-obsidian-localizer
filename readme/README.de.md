@@ -23,6 +23,13 @@ Bereits veröffentlichte Übersetzungen werden wiederverwendet. Fehlende Inhalte
 
 Für eine manuelle Installation lade `main.js`, `manifest.json` und `styles.css` aus demselben [GitHub Release](https://github.com/SakenW/trans-hub-obsidian-localizer/releases) herunter und lege sie in `<vault-config-dir>/plugins/trans-hub-plugin-localizer/` ab. Mische keine Dateien verschiedener Versionen.
 
+<!-- section: use-cases -->
+## Wann es hilfreich ist
+
+- Einstellungen, Befehle und Oberflächen von Community-Plugins in deine Sprache übersetzen.
+- Gemeinsame Übersetzungen nutzen, ohne selbst ein KI-Modell oder einen API-Key einzurichten.
+- Dieselbe Lösung auf Desktop und Smartphone nutzen und nach Plugin-Updates die Kompatibilität der Übersetzungen automatisch prüfen lassen.
+
 <!-- section: capabilities -->
 ## Funktionen
 
@@ -38,9 +45,9 @@ Für eine manuelle Installation lade `main.js`, `manifest.json` und `styles.css`
 Je nach Anwendungsfall werden Quellidentität, Geltungsbereich, semantische Rolle, Format und dynamische Platzhalter geprüft. Eine vollständige Übersetzung jeder Oberfläche jedes Plugins wird nicht zugesichert.
 
 <!-- section: languages -->
-## Unterstützung aller Sprachen
+## Alle Sprachen, auch außerhalb der Vorauswahl
 
-Zielsprachen sind nicht auf eine feste Liste beschränkt. Wähle eine häufig verwendete Sprache oder gib über das Feld für weitere Sprachen eine Sprachkennung mit regionalen oder Schriftvarianten ein.
+Wähle eine häufig verwendete Sprache oder gib eine andere Sprachkennung ein; regionale und Schriftvarianten bleiben erhalten. Ob eine Übersetzung verfügbar ist, hängt vom Verarbeitungs- und Veröffentlichungsstatus des angeforderten Inhalts ab.
 
 Die Schnellauswahl umfasst **vereinfachtes Chinesisch, traditionelles Chinesisch, Englisch, Japanisch, Koreanisch, Deutsch, Französisch, Spanisch, brasilianisches Portugiesisch und Russisch**. Weitere Beispiele sind Italienisch (`it`), Arabisch (`ar`), Ukrainisch (`uk`) und Serbisch in lateinischer Schrift (`sr-Latn`). Verfügbarkeit und Qualität konkreter Übersetzungen hängen von den veröffentlichten Ergebnissen und den für die Sprache verfügbaren Verarbeitungsdiensten ab.
 
@@ -48,6 +55,8 @@ Gemeint sind die **Zielsprachen für andere Plugins**. Die Einstellungen des Loc
 
 <!-- section: quality -->
 ## Übersetzungsqualität und unterstützter Umfang
+
+Dieses Plugin richtet sich an die Oberflächen von Community-Plugins. Es übersetzt weder Notizen noch Webseiten und führt keine LLM-Übersetzung in Echtzeit auf deinem Gerät aus.
 
 Die meisten Trans-Hub-Übersetzungen sind derzeit maschinell erstellt und nicht von Menschen korrekturgelesen. Das Plugin unterscheidet Übersetzungsquelle und Prüfstatus. Eine bestandene Quellen- und Kompatibilitätsprüfung bedeutet nicht, dass die sprachliche Richtigkeit von einem Menschen geprüft wurde.
 

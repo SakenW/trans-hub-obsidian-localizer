@@ -23,6 +23,13 @@ Las traducciones ya publicadas se reutilizan. Para el contenido que falta se env
 
 Para instalarlo manualmente, descarga `main.js`, `manifest.json` y `styles.css` de la misma [versión de GitHub](https://github.com/SakenW/trans-hub-obsidian-localizer/releases) y colócalos en `<vault-config-dir>/plugins/trans-hub-plugin-localizer/`. No mezcles archivos de distintas versiones.
 
+<!-- section: use-cases -->
+## Cuándo usarlo
+
+- Traducir los ajustes, comandos e interfaces de los complementos comunitarios a tu idioma.
+- Reutilizar traducciones compartidas sin configurar por tu cuenta un modelo de IA o una clave API.
+- Usar la misma solución en el ordenador y el teléfono, con comprobaciones automáticas de compatibilidad tras actualizar los complementos.
+
 <!-- section: capabilities -->
 ## Funciones
 
@@ -38,9 +45,9 @@ Para instalarlo manualmente, descarga `main.js`, `manifest.json` y `styles.css` 
 Según corresponda, se comprueban la identidad del origen, el ámbito, la función semántica, el formato y los marcadores dinámicos. No se garantiza una traducción completa de todas las interfaces de todos los complementos.
 
 <!-- section: languages -->
-## Compatibilidad con todos los idiomas
+## Todos los idiomas, más allá de las opciones predefinidas
 
-Los idiomas de destino no están limitados a una lista fija. Elige un idioma habitual o introduce una etiqueta de idioma en el campo de otros idiomas, conservando las variantes regionales y de escritura.
+Elige un idioma habitual o introduce otra etiqueta de idioma, conservando las variantes regionales y de escritura. La disponibilidad de las traducciones depende del estado de procesamiento y publicación del contenido solicitado.
 
 Las opciones rápidas incluyen **chino simplificado, chino tradicional, inglés, japonés, coreano, alemán, francés, español, portugués de Brasil y ruso**. Otros ejemplos son italiano (`it`), árabe (`ar`), ucraniano (`uk`) y serbio en alfabeto latino (`sr-Latn`). La disponibilidad y la calidad concretas dependen de las traducciones publicadas y de los servicios de procesamiento disponibles para ese idioma.
 
@@ -48,6 +55,8 @@ Estos son los **idiomas de traducción de otros complementos**. Los ajustes del 
 
 <!-- section: quality -->
 ## Calidad y alcance
+
+Este complemento se centra en las interfaces de los complementos comunitarios. No traduce notas ni páginas web, ni realiza traducciones con LLM en tiempo real en tu dispositivo.
 
 Actualmente, la mayoría de las traducciones de Trans-Hub se generan automáticamente y no han sido corregidas por una persona. El complemento distingue el origen de la traducción y su estado de revisión. Superar las comprobaciones de origen y compatibilidad no implica que una persona haya revisado la precisión lingüística.
 

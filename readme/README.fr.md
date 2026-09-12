@@ -23,6 +23,13 @@ Les traductions déjà publiées sont réutilisées. Les contenus manquants font
 
 Pour une installation manuelle, téléchargez `main.js`, `manifest.json` et `styles.css` depuis la même [version GitHub](https://github.com/SakenW/trans-hub-obsidian-localizer/releases), puis placez-les dans `<vault-config-dir>/plugins/trans-hub-plugin-localizer/`. Ne mélangez pas les fichiers de versions différentes.
 
+<!-- section: use-cases -->
+## Dans quels cas l’utiliser
+
+- Traduire les paramètres, commandes et interfaces des extensions communautaires dans votre langue.
+- Réutiliser des traductions partagées sans configurer vous-même un modèle d’IA ou une clé API.
+- Utiliser la même solution sur ordinateur et téléphone, avec vérification automatique de la compatibilité des traductions après les mises à jour des extensions.
+
 <!-- section: capabilities -->
 ## Fonctionnalités
 
@@ -38,9 +45,9 @@ Pour une installation manuelle, téléchargez `main.js`, `manifest.json` et `sty
 Selon le contexte, les vérifications portent sur l’identité de la source, la portée, le rôle sémantique, le format et les paramètres dynamiques. La traduction intégrale de toutes les interfaces de toutes les extensions n’est pas garantie.
 
 <!-- section: languages -->
-## Prise en charge de toutes les langues
+## Toutes les langues, au-delà des choix prédéfinis
 
-Les langues cibles ne sont pas limitées à une liste fixe. Choisissez une langue courante ou saisissez un identifiant dans le champ des autres langues, en conservant les variantes régionales et d’écriture.
+Choisissez une langue courante ou saisissez un autre identifiant de langue en conservant les variantes régionales et d’écriture. La disponibilité des traductions dépend de l’état de traitement et de publication du contenu demandé.
 
 Les choix rapides comprennent le **chinois simplifié, le chinois traditionnel, l’anglais, le japonais, le coréen, l’allemand, le français, l’espagnol, le portugais brésilien et le russe**. Vous pouvez aussi demander, par exemple, l’italien (`it`), l’arabe (`ar`), l’ukrainien (`uk`) ou le serbe en alphabet latin (`sr-Latn`). La disponibilité et la qualité des traductions dépendent des résultats publiés et des services de traitement disponibles pour la langue demandée.
 
@@ -48,6 +55,8 @@ Il s’agit des **langues de traduction des autres extensions**. Les paramètres
 
 <!-- section: quality -->
 ## Qualité et périmètre
+
+Cette extension cible les interfaces des extensions communautaires. Elle ne traduit ni les notes ni les pages web et n’effectue pas de traduction LLM en temps réel sur votre appareil.
 
 La plupart des traductions Trans-Hub sont actuellement générées automatiquement et n’ont pas été relues par une personne. L’extension distingue la provenance des traductions et leur statut de révision. La validation de la source et de la compatibilité ne signifie pas que l’exactitude linguistique a été vérifiée par une personne.
 

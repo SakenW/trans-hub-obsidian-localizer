@@ -23,6 +23,13 @@ As traduções já publicadas são reutilizadas. O conteúdo ausente gera automa
 
 Para instalar manualmente, baixe `main.js`, `manifest.json` e `styles.css` da mesma [versão no GitHub](https://github.com/SakenW/trans-hub-obsidian-localizer/releases) e coloque-os em `<vault-config-dir>/plugins/trans-hub-plugin-localizer/`. Não misture arquivos de versões diferentes.
 
+<!-- section: use-cases -->
+## Quando usar
+
+- Traduzir as configurações, os comandos e as interfaces dos plugins da comunidade para o seu idioma.
+- Reutilizar traduções compartilhadas sem configurar por conta própria um modelo de IA ou uma chave de API.
+- Usar a mesma solução no computador e no celular, com verificações automáticas de compatibilidade após atualizar os plugins.
+
 <!-- section: capabilities -->
 ## Recursos
 
@@ -38,9 +45,9 @@ Para instalar manualmente, baixe `main.js`, `manifest.json` e `styles.css` da me
 Conforme o caso, são verificadas a identidade da origem, o escopo, o papel semântico, o formato e os marcadores dinâmicos. Não há promessa de tradução completa de todas as interfaces de todos os plugins.
 
 <!-- section: languages -->
-## Suporte a todos os idiomas
+## Todos os idiomas, além das opções predefinidas
 
-Os idiomas de destino não estão restritos a uma lista fixa. Escolha um idioma comum ou informe uma tag no campo de outros idiomas, preservando variantes regionais e de escrita.
+Escolha um idioma comum ou informe outra tag de idioma, preservando variantes regionais e de escrita. A disponibilidade das traduções depende do status de processamento e publicação do conteúdo solicitado.
 
 As opções rápidas incluem **chinês simplificado, chinês tradicional, inglês, japonês, coreano, alemão, francês, espanhol, português do Brasil e russo**. Outros exemplos são italiano (`it`), árabe (`ar`), ucraniano (`uk`) e sérvio em alfabeto latino (`sr-Latn`). A disponibilidade e a qualidade das traduções dependem dos resultados publicados e dos serviços de processamento disponíveis para o idioma solicitado.
 
@@ -48,6 +55,8 @@ Esses são os **idiomas de tradução de outros plugins**. As configurações do
 
 <!-- section: quality -->
 ## Qualidade e escopo
+
+Este plugin é voltado às interfaces dos plugins da comunidade. Ele não traduz notas nem páginas da web e não realiza traduções com LLM em tempo real no seu dispositivo.
 
 Atualmente, a maioria das traduções do Trans-Hub é gerada automaticamente e não passou por revisão humana. O plugin diferencia a origem da tradução e o status de revisão. A validação da origem e da compatibilidade não significa que uma pessoa tenha revisado a precisão linguística.
 

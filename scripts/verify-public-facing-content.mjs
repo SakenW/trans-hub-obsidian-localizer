@@ -26,7 +26,7 @@ const source = read(withinPublicRoot(translations.source));
 const sourceHash = createHash("sha256").update(source).digest("hex");
 const sections = (text) => [...text.matchAll(/<!-- section: ([a-z-]+) -->/gu)].map((match) => match[1]);
 const fences = (text) => [...text.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gmu)].map((match) => match[1]);
-const requiredSections = ["getting-started", "capabilities", "languages", "quality", "privacy", "faq", "contribute", "build"];
+const requiredSections = ["getting-started", "use-cases", "capabilities", "languages", "quality", "privacy", "faq", "contribute", "build"];
 if (JSON.stringify(sections(source)) !== JSON.stringify(requiredSections)) fail("Chinese README sections are incomplete.");
 const editions = translations.editions;
 if (!Array.isArray(editions) || editions[0]?.locale !== "en" || editions[0]?.path !== "README.md"
