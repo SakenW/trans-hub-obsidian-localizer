@@ -31,9 +31,10 @@ describe("loadSettings", () => {
     expect(settings).not.toHaveProperty("autoApplyPluginTranslations");
   });
 
-  it("rejects arbitrary target-language values", () => {
-    expect(loadSettings({ targetLocale: "en" }).targetLocale).toBe("en");
-    expect(loadSettings({ targetLocale: "invalid" }).targetLocale).toBe("zh-CN");
+  it("keeps normalized open target-language values and only falls back for invalid storage", () => {
+    expect(loadSettings({ targetLocale: "zh_hant_tw" }).targetLocale).toBe("zh-Hant-TW");
+    expect(loadSettings({ targetLocale: "sr_latn_rs" }).targetLocale).toBe("sr-Latn-RS");
+    expect(loadSettings({ targetLocale: "invalid!" }).targetLocale).toBe("zh-CN");
   });
 
   it("uses the Obsidian language only before a target language has been saved", () => {

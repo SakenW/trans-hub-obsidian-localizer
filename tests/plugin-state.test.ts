@@ -50,7 +50,7 @@ describe("parsePluginState", () => {
           receiptId: "019f0000-0000-7000-8000-000000000003",
           discoveryId: "019f0000-0000-7000-8000-000000000001",
           taskId: "019f0000-0000-7000-8000-000000000004",
-          targetLocales: ["ja", "zh-CN", "ja"],
+          targetLocales: ["ja", "zh-CN", "zh_hant_tw", "ja"],
           classification: "pending_registry_verification",
           taskState: "verifying_registry",
           taskGeneration: 1,
@@ -77,7 +77,7 @@ describe("parsePluginState", () => {
       },
     });
 
-    expect(state.publicPluginDiscoveries.dataview?.targetLocales).toEqual(["ja", "zh-CN"]);
+    expect(state.publicPluginDiscoveries.dataview?.targetLocales).toEqual(["ja", "zh-CN", "zh-Hant-TW"]);
     expect(state.publicPluginDiscoveries.dataview?.sourceDiscoveryEpoch).toBe(19);
     expect(state.pluginSubmissions.dataview).not.toHaveProperty("localizationContributionId");
     expect(resetPluginLocalizationDerivedState(state).publicPluginDiscoveries).toEqual({});
@@ -339,7 +339,7 @@ describe("parsePluginState", () => {
           ko: translation("ko", "설정"),
           "zh-CN": translation("zh-CN", "设置"),
           ja: { ...translation("ko", "壊れた"), targetLocale: "ko" },
-          invalid: translation("invalid", "bad locale"),
+          invalid: translation("invalid!", "bad locale"),
         },
       },
     });
@@ -347,6 +347,24 @@ describe("parsePluginState", () => {
     expect(getPluginTranslation(nested, "dataview", "zh-CN")?.entries[0]?.target).toBe("设置");
     expect(nested.pluginTranslations.dataview?.ja).toBeUndefined();
     expect(Object.keys(nested.pluginTranslations.dataview ?? {})).toEqual(["ko", "zh-CN"]);
+  });
+
+  it("恢复规范化语言缓存时保留脚本和地区，并按目标语言隔离", () => {
+    const translation = (targetLocale: string, target: string) => ({
+      pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: `source-${targetLocale}`,
+      targetLocale, pulledAt: "2026-09-12T00:00:00.000Z",
+      entries: [{ pluginId: "dataview", source: "Settings", target }],
+    });
+    const state = parsePluginState({
+      pluginTranslations: { dataview: {
+        "zh_hant_tw": translation("zh-Hant-TW", "設定"),
+        "sr_latn_rs": translation("sr-Latn-RS", "Podešavanja"),
+      } },
+    });
+
+    expect(getPluginTranslation(state, "dataview", "zh-Hant-TW")?.entries[0]?.target).toBe("設定");
+    expect(getPluginTranslation(state, "dataview", "sr-Latn-RS")?.entries[0]?.target).toBe("Podešavanja");
+    expect(Object.keys(state.pluginTranslations.dataview ?? {})).toEqual(["zh-Hant-TW", "sr-Latn-RS"]);
   });
 
   it("不让旧持久化需求字段影响当前语言的真实同步错误", () => {

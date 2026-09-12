@@ -3,6 +3,11 @@ import type { TargetLocale } from "./product-config";
 type MessageParameters = Readonly<Record<string, string | number>>;
 
 const ENGLISH_MESSAGES: Readonly<Record<string, string>> = {
+  "其他语言": "Other languages",
+  "输入语言标识并应用，例如 it、ar 或 sr-Latn。": "Enter and apply a language tag, such as it, ar, or sr-Latn.",
+  "例如 it、ar、uk、zh-Hant-TW 或 sr-Latn-RS": "For example: it, ar, uk, zh-Hant-TW, or sr-Latn-RS",
+  "应用其他语言": "Apply other language",
+  "请输入有效的语言标识，例如 zh-Hant-TW。当前语言未更改。": "Enter a valid language tag, such as zh-Hant-TW. The current language has not changed.",
   "勾选后自动获取译文，首次收录需要一些时间。": "Selecting a plugin fetches translations automatically. Initial setup may take some time.",
   "运行期间每 15 分钟自动检查新插件，也可点击“重新检查插件”立即检查。": "New plugins are checked every 15 minutes while Obsidian is running. Select “Recheck plugins” to check now.",
   "首次收录需要一些时间，期间可正常使用插件。": "Initial setup may take some time. You can keep using the plugin meanwhile.",

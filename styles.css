@@ -850,3 +850,13 @@
 }
 
 .trans-hub-plugin-picker__actions button.trans-hub-hidden { display: none; }
+
+.trans-hub-settings__other-language .setting-item-control {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.trans-hub-settings__other-language input {
+  max-width: 100%;
+  min-width: 0;
+}

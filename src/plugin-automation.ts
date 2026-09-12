@@ -39,7 +39,7 @@ import {
   restorePublishedPluginFilePatch,
 } from "./third-party-plugin-patcher";
 import type { PluginSyncSummary } from "./plugin-sync";
-import { isTargetLocale, OBSIDIAN_SOURCE_LOCALE, type TargetLocale } from "./product-config";
+import { OBSIDIAN_SOURCE_LOCALE, parseTargetLocale, type TargetLocale } from "./product-config";
 
 export interface PluginAutomationSettings {
   readonly targetLocale: TargetLocale;
@@ -463,9 +463,6 @@ export class PluginAutomationController {
 
   async importTranslationDictionary(raw: string): Promise<PluginTranslationState> {
     const imported = parseTranslationDictionary(raw);
-    if (!isTargetLocale(imported.targetLocale)) {
-      throw new Error("插件译文字典目标语言不受支持。");
-    }
     const state = this.input.state();
     this.input.replaceState(setPluginTranslation(
       state,
@@ -571,8 +568,9 @@ function parseTranslationDictionary(raw: string): PluginTranslationState {
 }
 
 function requiredTargetLocale(value: unknown): TargetLocale {
-  if (!isTargetLocale(value)) throw new Error("插件译文字典目标语言不受支持。");
-  return value;
+  const locale = parseTargetLocale(value);
+  if (locale === null) throw new Error("插件译文字典目标语言无效。");
+  return locale;
 }
 
 function optionalProvenanceKind(value: unknown): PluginUiTranslation["provenanceKind"] {

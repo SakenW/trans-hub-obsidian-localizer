@@ -58,20 +58,24 @@ describe("Obsidian product configuration", () => {
     expect(OBSIDIAN_SOURCE_LOCALE).toBe("en");
   });
 
-  it("exposes a closed target-language list instead of arbitrary input", () => {
+  it("keeps quick target-language options while accepting normalized platform locales", () => {
     expect(TARGET_LOCALE_OPTIONS.map((option) => option.value)).toContain("zh-CN");
     expect(parseTargetLocale("ja")).toBe("ja");
-    expect(parseTargetLocale("en")).toBe("en");
-    expect(parseTargetLocale("not-a-locale")).toBe("zh-CN");
+    expect(parseTargetLocale("it")).toBe("it");
+    expect(parseTargetLocale("ar")).toBe("ar");
+    expect(parseTargetLocale("uk")).toBe("uk");
+    expect(parseTargetLocale("zh_hant_tw")).toBe("zh-Hant-TW");
+    expect(parseTargetLocale("sr_latn_rs")).toBe("sr-Latn-RS");
+    expect(parseTargetLocale("not_a_locale!")).toBeNull();
   });
 
   it("maps the Obsidian app language to the initial target language", () => {
-    expect(resolveObsidianTargetLocale("zh-Hant")).toBe("zh-TW");
-    expect(resolveObsidianTargetLocale("zh-HK")).toBe("zh-TW");
+    expect(resolveObsidianTargetLocale("zh-Hant")).toBe("zh-Hant");
+    expect(resolveObsidianTargetLocale("zh-HK")).toBe("zh-HK");
     expect(resolveObsidianTargetLocale("zh")).toBe("zh-CN");
     expect(resolveObsidianTargetLocale("pt_BR")).toBe("pt-BR");
-    expect(resolveObsidianTargetLocale("en-US")).toBe("en");
-    expect(resolveObsidianTargetLocale("it-IT")).toBe("en");
+    expect(resolveObsidianTargetLocale("en-US")).toBe("en-US");
+    expect(resolveObsidianTargetLocale("it-IT")).toBe("it-IT");
   });
 
   it("uses the deterministic local fallback when tests do not inject build constants", () => {

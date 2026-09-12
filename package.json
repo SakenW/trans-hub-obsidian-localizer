@@ -3,7 +3,7 @@
   "version": "0.3.4",
   "private": true,
   "license": "Apache-2.0",
-  "description": "Cross-platform runtime i18n for Obsidian community plugins, with optional desktop-only compatibility patches for exact published translations.",
+  "description": "Translate and localize Obsidian community plugin interfaces on desktop and mobile without AI model or API key setup. Reuse shared translations and preserve native text.",
   "keywords": [
     "obsidian",
     "obsidian-plugin",

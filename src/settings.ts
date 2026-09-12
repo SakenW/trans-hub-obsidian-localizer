@@ -50,6 +50,7 @@ import {
   TRANS_HUB_OBSIDIAN_ECOSYSTEM_URL,
   TRANS_HUB_WEB_BASE_URL,
   parseTargetLocale,
+  type TargetLocale,
 } from "./product-config";
 
 import { PLUGIN_PICKER_FILTERS, presentPluginLocalization, type PluginPickerDisplayKind } from "./plugin-picker-presentation";
@@ -172,6 +173,26 @@ export class TransHubSettingTab extends PluginSettingTab {
     this.renderSettings(this.containerEl);
   }
 
+  private async applyTargetLocale(targetLocale: TargetLocale): Promise<void> {
+    this.selectionStatus = translate("正在切换目标语言…");
+    this.selectionStatusFailed = false;
+    this.selectionStatusAt = new Date();
+    try {
+      const result = await this.plugin.changeTargetLocale(targetLocale);
+      if (result !== null && this.plugin.settings.targetLocale === targetLocale) {
+        this.selectionStatus = describePluginSelectionProcessing(result);
+        this.selectionStatusFailed = pluginSelectionNeedsAttention(result);
+        if (result.kind === "synchronized") this.updateStalePluginStatus(result.sync.statusRead, result.sync.statusReadPluginIds ?? []);
+      } else if (!this.plugin.hasUserSession()) {
+        this.selectionStatus = translate("已切换目标语言；登录语枢后会继续同步。");
+      }
+    } catch (error) {
+      this.selectionStatus = errorMessage(error);
+      this.selectionStatusFailed = true;
+      new Notice(this.selectionStatus, 10_000);
+    } finally { this.refreshSettings(); }
+  }
+
   private renderSettings(containerEl: HTMLElement): void {
     this.renderedContainerEl = containerEl;
     containerEl.empty();
@@ -222,29 +243,42 @@ export class TransHubSettingTab extends PluginSettingTab {
       .setName(translate("译文语言"))
       .setDesc(translate("优先保留插件自带的目标语言，补齐仍显示原文的界面。语枢自身界面目前支持简体中文和英语，其他语言使用英语界面。"))
       .addDropdown((dropdown) => {
-        dropdown.addOptions(Object.fromEntries(TARGET_LOCALE_OPTIONS.map((option) => [option.value, option.label])));
+        const options: Record<string, string> = Object.fromEntries(TARGET_LOCALE_OPTIONS.map((option) => [option.value, option.label]));
+        if (!(this.plugin.settings.targetLocale in options)) options[this.plugin.settings.targetLocale] = this.plugin.settings.targetLocale;
+        dropdown.addOptions(options);
         dropdown.setValue(this.plugin.settings.targetLocale).setDisabled(!this.plugin.settings.pluginTranslationEnabled)
           .onChange(async (value) => {
             const targetLocale = parseTargetLocale(value);
-            this.selectionStatus = translate("正在切换目标语言…");
-            this.selectionStatusFailed = false;
-            this.selectionStatusAt = new Date();
-            try {
-              const result = await this.plugin.changeTargetLocale(targetLocale);
-              if (result !== null && this.plugin.settings.targetLocale === targetLocale) {
-                this.selectionStatus = describePluginSelectionProcessing(result);
-                this.selectionStatusFailed = pluginSelectionNeedsAttention(result);
-                if (result.kind === "synchronized") this.updateStalePluginStatus(result.sync.statusRead, result.sync.statusReadPluginIds ?? []);
-              } else if (!this.plugin.hasUserSession()) {
-                this.selectionStatus = translate("已切换目标语言；登录语枢后会继续同步。");
-              }
-            } catch (error) {
-              this.selectionStatus = errorMessage(error);
-              this.selectionStatusFailed = true;
-              new Notice(this.selectionStatus, 10_000);
-            } finally { this.refreshSettings(); }
+            if (targetLocale === null) return;
+            await this.applyTargetLocale(targetLocale);
           });
       });
+    let otherLocaleInput = this.plugin.settings.targetLocale;
+    const otherLocaleSetting = new Setting(preferences)
+      .setName(translate("其他语言"))
+      .setDesc(translate("输入语言标识并应用，例如 it、ar 或 sr-Latn。"))
+      .addText((text) => {
+        text.setPlaceholder(translate("例如 it、ar、uk、zh-Hant-TW 或 sr-Latn-RS"));
+        text.setValue(otherLocaleInput).setDisabled(!this.plugin.settings.pluginTranslationEnabled)
+          .onChange((value) => { otherLocaleInput = String(value); });
+      })
+      .addButton((button) => {
+        button.setButtonText(translate("应用其他语言"));
+        button.setDisabled(!this.plugin.settings.pluginTranslationEnabled).onClick(async () => {
+          const targetLocale = parseTargetLocale(otherLocaleInput);
+          if (targetLocale === null) {
+            this.selectionStatus = translate("请输入有效的语言标识，例如 zh-Hant-TW。当前语言未更改。");
+            this.selectionStatusFailed = true;
+            this.selectionStatusAt = new Date();
+            new Notice(this.selectionStatus, 10_000);
+            this.refreshSettings();
+            return;
+          }
+          await this.applyTargetLocale(targetLocale);
+        });
+      });
+    otherLocaleSetting.settingEl.addClass("trans-hub-settings__other-language");
+    otherLocaleSetting.settingEl.toggleClass("is-disabled", !this.plugin.settings.pluginTranslationEnabled);
     localeSetting.settingEl.toggleClass("is-disabled", !this.plugin.settings.pluginTranslationEnabled);
 
     const pluginHeading = new Setting(containerEl).setName(translate("插件管理")).setHeading();

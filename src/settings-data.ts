@@ -22,7 +22,7 @@ export function loadSettings(
 ): TransHubPluginSettings {
   if (!isRecord(data)) return { ...DEFAULT_SETTINGS, targetLocale: defaultTargetLocale };
   return {
-    targetLocale: parseTargetLocale(data.targetLocale, defaultTargetLocale),
+    targetLocale: parseTargetLocale(data.targetLocale) ?? defaultTargetLocale,
     pluginTranslationEnabled: booleanOr(data.pluginTranslationEnabled, DEFAULT_SETTINGS.pluginTranslationEnabled),
     pluginMetadataTranslationEnabled: booleanOr(
       data.pluginMetadataTranslationEnabled,

@@ -1,4 +1,5 @@
 import { assertSafeApiBaseUrl } from "./api-base-url";
+import { normalizePlatformLocale } from "@trans-hub/client-protocol";
 
 declare const __TRANS_HUB_OBSIDIAN_API_BASE_URL__: string;
 declare const __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__: "development" | "production";
@@ -33,7 +34,8 @@ export const TARGET_LOCALE_OPTIONS = [
   { value: "ru", label: "Русский" },
 ] as const;
 
-export type TargetLocale = (typeof TARGET_LOCALE_OPTIONS)[number]["value"];
+/** A platform-normalized translation target; the options above are shortcuts, not a limit. */
+export type TargetLocale = string;
 export type BuildChannel = "development" | "production";
 
 export const TRANS_HUB_BUILD_CHANNEL: BuildChannel = __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__;
@@ -56,23 +58,20 @@ if (
   throw new Error("正式版只能连接语枢生产服务。");
 }
 
-export function parseTargetLocale(value: unknown, fallback: TargetLocale = "zh-CN"): TargetLocale {
-  return isTargetLocale(value) ? value : fallback;
+export function parseTargetLocale(value: unknown): TargetLocale | null {
+  try {
+    return normalizePlatformLocale(value, "$.targetLocale");
+  } catch {
+    return null;
+  }
 }
 
 export function isTargetLocale(value: unknown): value is TargetLocale {
-  return TARGET_LOCALE_OPTIONS.some((option) => option.value === value);
+  return parseTargetLocale(value) !== null;
 }
 
 export function resolveObsidianTargetLocale(value: unknown): TargetLocale {
-  if (typeof value !== "string") return "en";
-  const normalized = value.trim().replaceAll("_", "-").toLowerCase();
-  if (normalized === "") return "en";
-  if (normalized === "zh-tw" || normalized === "zh-hk" || normalized.startsWith("zh-hant")) {
-    return "zh-TW";
-  }
-  if (normalized === "zh" || normalized.startsWith("zh-")) return "zh-CN";
-  if (normalized === "pt" || normalized.startsWith("pt-br")) return "pt-BR";
-  const base = normalized.split("-", 1)[0];
-  return parseTargetLocale(base, "en");
+  const locale = parseTargetLocale(value);
+  // Obsidian uses "zh" for its Simplified Chinese interface.
+  return locale === "zh" ? "zh-CN" : locale ?? "en";
 }

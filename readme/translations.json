@@ -1,0 +1,66 @@
+{
+  "source": "readme/README.zh-CN.md",
+  "defaultLocale": "en",
+  "editions": [
+    {
+      "locale": "en",
+      "label": "English",
+      "path": "README.md",
+      "sourceSha256": "5f1df913ec60ddee4996101ce0a47c362933d275dabcbcd11c51710a7903421b"
+    },
+    {
+      "locale": "zh-CN",
+      "label": "简体中文",
+      "path": "readme/README.zh-CN.md",
+      "sourceSha256": "5f1df913ec60ddee4996101ce0a47c362933d275dabcbcd11c51710a7903421b"
+    },
+    {
+      "locale": "zh-TW",
+      "label": "繁體中文",
+      "path": "readme/README.zh-TW.md",
+      "sourceSha256": "5f1df913ec60ddee4996101ce0a47c362933d275dabcbcd11c51710a7903421b"
+    },
+    {
+      "locale": "ja",
+      "label": "日本語",
+      "path": "readme/README.ja.md",
+      "sourceSha256": "5f1df913ec60ddee4996101ce0a47c362933d275dabcbcd11c51710a7903421b"
+    },
+    {
+      "locale": "ko",
+      "label": "한국어",
+      "path": "readme/README.ko.md",
+      "sourceSha256": "5f1df913ec60ddee4996101ce0a47c362933d275dabcbcd11c51710a7903421b"
+    },
+    {
+      "locale": "de",
+      "label": "Deutsch",
+      "path": "readme/README.de.md",
+      "sourceSha256": "5f1df913ec60ddee4996101ce0a47c362933d275dabcbcd11c51710a7903421b"
+    },
+    {
+      "locale": "fr",
+      "label": "Français",
+      "path": "readme/README.fr.md",
+      "sourceSha256": "5f1df913ec60ddee4996101ce0a47c362933d275dabcbcd11c51710a7903421b"
+    },
+    {
+      "locale": "es",
+      "label": "Español",
+      "path": "readme/README.es.md",
+      "sourceSha256": "5f1df913ec60ddee4996101ce0a47c362933d275dabcbcd11c51710a7903421b"
+    },
+    {
+      "locale": "pt-BR",
+      "label": "Português (Brasil)",
+      "path": "readme/README.pt-BR.md",
+      "sourceSha256": "5f1df913ec60ddee4996101ce0a47c362933d275dabcbcd11c51710a7903421b"
+    },
+    {
+      "locale": "ru",
+      "label": "Русский",
+      "path": "readme/README.ru.md",
+      "sourceSha256": "5f1df913ec60ddee4996101ce0a47c362933d275dabcbcd11c51710a7903421b"
+    }
+  ]
+}

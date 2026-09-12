@@ -5,7 +5,7 @@ import {
   type SourceCatalogIdentity,
 } from "@trans-hub/client-protocol";
 
-import { isTargetLocale, type TargetLocale } from "./product-config";
+import { parseTargetLocale, type TargetLocale } from "./product-config";
 
 export interface NoteSubmissionState {
   readonly noteId: string;
@@ -269,14 +269,15 @@ function parsePluginTranslations(value: unknown): PluginTranslationsByLocale {
   for (const [pluginId, rawPluginTranslations] of Object.entries(value)) {
     if (!isRecord(rawPluginTranslations)) continue;
     for (const [locale, rawTranslation] of Object.entries(rawPluginTranslations)) {
-      if (!isTargetLocale(locale)) continue;
+      const targetLocale = parseTargetLocale(locale);
+      if (targetLocale === null) continue;
       const translation = parsePluginTranslation(rawTranslation);
       if (
         translation === null
         || translation.pluginId !== pluginId
-        || translation.targetLocale !== locale
+        || translation.targetLocale !== targetLocale
       ) continue;
-      (parsed[pluginId] ??= {})[locale] = translation;
+      (parsed[pluginId] ??= {})[targetLocale] = translation;
     }
     if (Object.keys(parsed[pluginId] ?? {}).length === 0) delete parsed[pluginId];
   }
@@ -506,7 +507,9 @@ function parsePublicPluginDiscovery(value: unknown): PublicPluginDiscoveryState 
     )
     || !Array.isArray(value.targetLocales)
   ) return null;
-  const targetLocales = [...new Set(value.targetLocales.filter(isTargetLocale))];
+  const targetLocales = [...new Set(value.targetLocales
+    .map(parseTargetLocale)
+    .filter((locale): locale is TargetLocale => locale !== null))];
   let localizationProjection: PublicLocalizationStatusProjection | undefined;
   try {
     localizationProjection = value.localizationProjection === undefined
@@ -522,7 +525,7 @@ function parsePublicPluginDiscovery(value: unknown): PublicPluginDiscoveryState 
     localizationProjection !== undefined
     && (
       localizationProjection.discoveryId !== discoveryId
-      || !targetLocales.includes(localizationProjection.targetLocale as TargetLocale)
+      || !targetLocales.includes(localizationProjection.targetLocale)
     )
   ) return null;
   return targetLocales.length === 0
@@ -550,12 +553,13 @@ function parsePluginSynchronizationError(
   const code = stringValue(value.code);
   const message = stringValue(value.message);
   const updatedAt = stringValue(value.updatedAt);
+  const targetLocale = parseTargetLocale(value.targetLocale);
   return code === null || message === null || updatedAt === null
     ? null
     : {
         code,
         message,
-        ...(isTargetLocale(value.targetLocale) ? { targetLocale: value.targetLocale } : {}),
+        ...(targetLocale === null ? {} : { targetLocale }),
         updatedAt,
       };
 }
@@ -576,7 +580,7 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
     ? undefined
     : stringValue(value.authorityPluginVersion);
   const sourceVersionId = stringValue(value.sourceVersionId);
-  const targetLocale = isTargetLocale(value.targetLocale) ? value.targetLocale : null;
+  const targetLocale = parseTargetLocale(value.targetLocale);
   const pulledAt = stringValue(value.pulledAt);
   const upstreamNativeCount = typeof value.upstreamNativeCount === "number"
     && Number.isInteger(value.upstreamNativeCount) && value.upstreamNativeCount >= 0

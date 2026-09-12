@@ -27,6 +27,10 @@ function fixture() {
     processPluginIds: vi.fn((_ids: readonly string[]) => Promise.resolve({ kind: "login-required", scan: { scannedCount: 2 } })),
     processSelectedPlugins: vi.fn(() => Promise.resolve({ kind: "login-required", scan: { scannedCount: 1 } })),
     retryPluginIds: vi.fn((_ids: readonly string[]) => Promise.resolve({ kind: "login-required", scan: { scannedCount: 1 } })),
+    changeTargetLocale: vi.fn((targetLocale: string) => {
+      plugin.settings.targetLocale = targetLocale;
+      return Promise.resolve({ kind: "login-required", scan: { scannedCount: 0 } });
+    }),
     connect: vi.fn(async () => {}),
     openPluginManager: vi.fn(async () => {}),
   };
@@ -53,6 +57,22 @@ function control(text: string): TestControl {
 
 beforeEach(() => { renderedSettings.length = 0; setClientLocale("zh-CN"); });
 describe("settings user interactions", () => {
+  it("其他语言需要明确应用，且无效输入不改变当前语言", async () => {
+    const { plugin, internal, container } = fixture();
+    internal.renderSettings(container as unknown as HTMLElement);
+    const languageSetting = renderedSettings.find((setting) => setting.name === "其他语言");
+    const input = languageSetting?.controls.find((item) => item.kind === "text");
+    const apply = languageSetting?.controls.find((item) => item.text === "应用其他语言");
+    await input?.change("sr_latn_rs" as never);
+    await apply?.click();
+    expect(plugin.changeTargetLocale).toHaveBeenCalledWith("sr-Latn-RS");
+    expect(plugin.settings.targetLocale).toBe("sr-Latn-RS");
+
+    await input?.change("not-a-locale!" as never);
+    await apply?.click();
+    expect(plugin.changeTargetLocale).toHaveBeenCalledTimes(1);
+    expect(plugin.settings.targetLocale).toBe("sr-Latn-RS");
+  });
   it("全部开启将新增插件一次性送入与逐个开启相同的处理队列", async () => {
     const { plugin, internal, container } = fixture();
     internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
