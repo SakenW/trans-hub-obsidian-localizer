@@ -135,12 +135,8 @@ describe("ActivationStore browser enrollment", () => {
       },
     };
     const unavailableSigning: InstallationSigningProvider = {
-      async createSigningKey() {
-        throw new Error(INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE);
-      },
-      async createSigner() {
-        throw new Error("unexpected signer creation");
-      },
+      createSigningKey: () => Promise.reject(new Error(INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE)),
+      createSigner: () => Promise.reject(new Error("unexpected signer creation")),
     };
     const activation = new ActivationStore(app as never, unavailableSigning);
 
@@ -165,13 +161,11 @@ describe("ActivationStore browser enrollment", () => {
     ]);
     let generated = false;
     const signing: InstallationSigningProvider = {
-      async createSigningKey() {
+      createSigningKey: () => {
         generated = true;
-        throw new Error("must not rotate");
+        return Promise.reject(new Error("must not rotate"));
       },
-      async createSigner() {
-        throw new Error("must not create signer");
-      },
+      createSigner: () => Promise.reject(new Error("must not create signer")),
     };
     const app = {
       secretStorage: {
@@ -230,5 +224,8 @@ function binding(value: string): {
   if (encoded === null) throw new Error("missing browser binding");
   const padded = encoded.replace(/-/gu, "+").replace(/_/gu, "/")
     .padEnd(Math.ceil(encoded.length / 4) * 4, "=");
-  return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+  return JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as {
+    readonly installationPublicKey: { readonly keyId: string };
+    readonly client: { readonly platform: string };
+  };
 }
