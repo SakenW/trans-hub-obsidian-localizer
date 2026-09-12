@@ -29,7 +29,6 @@ export default defineConfig({
       "@trans-hub/client-protocol": path("packages/client-protocol/src/index.ts"),
       "@trans-hub/public-client": path("packages/public-client/src/index.ts"),
       "@trans-hub/translation-export-client/web": path("packages/translation-export-client/src/web.ts"),
-      "@trans-hub/translation-export-client/node": path("packages/translation-export-client/src/node.ts"),
       "@trans-hub/translation-export-client": path("packages/translation-export-client/src/index.ts"),
       "@trans-hub/uida": path("packages/uida/src/index.ts"),
       "@trans-hub/language-tags": path("packages/language-tags/src/index.ts"),

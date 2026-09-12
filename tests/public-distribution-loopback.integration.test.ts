@@ -9,7 +9,7 @@ import {
   type CanonicalJsonTranslationExportManifest,
   type TranslationSyncState,
 } from "@trans-hub/translation-export-client";
-import { NodeEd25519ManifestVerifier } from "@trans-hub/translation-export-client/node";
+import { WebCryptoEd25519ManifestVerifier } from "@trans-hub/translation-export-client/web";
 import type { App, Vault } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -417,7 +417,7 @@ async function startFixture(options: Readonly<{ mode?: FailureMode }>) {
     };
   });
 
-  const verifier = new NodeEd25519ManifestVerifier({
+  const verifier = new WebCryptoEd25519ManifestVerifier({
     roots: [{
       keyId: "client-transfer-root-1",
       keyVersion: 1,

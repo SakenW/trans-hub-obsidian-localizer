@@ -29,7 +29,7 @@ export const webCryptoInstallationSigningProvider: InstallationSigningProvider =
 
 export async function createSigningKey(): Promise<StoredSigningKey> {
   try {
-    const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]) as CryptoKeyPair;
+    const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
     const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
     const privateKey = new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
     if (publicKey.byteLength !== ED25519_PUBLIC_KEY_BYTES) {
