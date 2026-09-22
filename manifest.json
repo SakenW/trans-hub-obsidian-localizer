@@ -1,7 +1,7 @@
 {
   "id": "trans-hub-plugin-localizer",
   "name": "Trans-Hub Localizer",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "minAppVersion": "1.11.4",
   "description": "Translate and localize community plugin interfaces on desktop and mobile without AI model or API key setup. Reuse shared translations and preserve native text. Notes stay untouched; plugin files stay unchanged by default.",
   "author": "Trans-Hub",

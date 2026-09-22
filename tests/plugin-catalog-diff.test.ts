@@ -35,7 +35,7 @@ const previous = {
   entries: [
     {
       pluginId: "sample", source: "Settings", target: "设置",
-      sourceCompatibility: compatibility("readme", ["readme", "runtime-ui"]),
+      sourceCompatibility: compatibility("runtime-ui", ["readme", "runtime-ui"]),
     },
     { pluginId: "sample", source: "Removed", target: "已移除" },
     {
@@ -420,7 +420,7 @@ describe("plugin catalog version carry-over", () => {
         {
           pluginId: "sample", source: "Settings", target: "设置（语枢机翻）",
           provenanceKind: "th-automatic" as const,
-          sourceCompatibility: compatibility("readme", ["readme", "runtime-ui"]),
+          sourceCompatibility: compatibility("runtime-ui", ["readme", "runtime-ui"]),
         },
         {
           pluginId: "sample", source: "Rows: {{th:expr:0}}", target: "行数：{{th:expr:0}}",

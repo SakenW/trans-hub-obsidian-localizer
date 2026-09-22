@@ -8,6 +8,7 @@ import {
   normalizePluginBundleV1,
   normalizePluginBundleWithScheme,
   placeholderSignature,
+  resolvePluginStringSemanticRole,
   scanPluginUiStrings,
 } from "../src/plugin-string-scanner";
 
@@ -188,13 +189,18 @@ describe("scanPluginUiStrings", () => {
     expect(catalog.strings.map((item) => item.source)).not.toContain("multi\nline");
   });
 
-  it("bumps the patch evidence revision so persisted catalogs rescan with new sinks", async () => {
+  it("bumps the scanner revision so persisted catalogs rescan with new semantic roles", async () => {
     const catalog = await scanPluginUiStrings({
       plugin,
       sourceLocale: "en",
       bundle: 'el.textContent = "Fresh sink";',
     });
-    expect(catalog.patchEvidenceRevision).toBe(13);
+    expect(catalog.patchEvidenceRevision).toBe(14);
+  });
+
+  it("keeps runtime semantics when README repeats a proven UI literal", () => {
+    expect(resolvePluginStringSemanticRole(["readme", "ui-call"])).toBe("runtime-ui");
+    expect(resolvePluginStringSemanticRole(["readme"])).toBe("readme");
   });
 
   it("merges a partial embedded locale pack with the hardcoded UI scan", async () => {

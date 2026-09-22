@@ -65,7 +65,7 @@ export interface PluginUiCatalog {
   /** Active target locale when this catalog's embedded native targets were scanned. */
   readonly scannerTargetLocale?: string;
   /** Bumped when persisted catalogs gain patch-safe literal evidence. */
-  readonly patchEvidenceRevision?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
+  readonly patchEvidenceRevision?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
   /** Missing only on catalogs persisted before identity revision 1. */
   readonly catalogIdentity?: SourceCatalogIdentity;
   readonly strings: readonly PluginUiString[];
@@ -118,8 +118,11 @@ export function resolvePluginStringSemanticRole(
   const values = new Set(origins);
   if (values.has("manifest.name") || values.has("registry.name")) return "official-name";
   if (values.has("manifest.description") || values.has("registry.description")) return "description";
-  if (values.has("readme")) return "readme";
-  return "runtime-ui";
+  // A local README can repeat a real runtime literal. Keep that string in the
+  // runtime contract; otherwise a documentation observation would make a
+  // compatible public UI translation inapplicable.
+  if (values.has("ui-call") || values.has("ui-property")) return "runtime-ui";
+  return "readme";
 }
 
 export function resolvePluginStringScopes(

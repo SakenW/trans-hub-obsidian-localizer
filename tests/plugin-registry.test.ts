@@ -5,6 +5,7 @@ import { resetRequestUrlHandler, setRequestUrlHandler } from "./obsidian-mock";
 import {
   classifyCommunityPluginSources,
   parseCommunityRegistry,
+  resolveCommunityPluginIdentity,
   resolveCommunityPluginSourceEligibility,
 } from "../src/plugin-registry";
 
@@ -68,5 +69,33 @@ describe("parseCommunityRegistry", () => {
     expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({
       url: "https://github.com/obsidianmd/obsidian-releases/raw/refs/heads/master/community-plugins.json",
     }));
+  });
+
+  it("解析同步身份时不下载版本 README", async () => {
+    const requestedUrls: string[] = [];
+    const request = vi.fn((input: unknown) => {
+      if (typeof input === "object" && input !== null
+        && "url" in input && typeof input.url === "string") {
+        requestedUrls.push(input.url);
+      }
+      return Promise.resolve({
+        status: 200,
+        text: JSON.stringify([{
+          id: "notebook-navigator",
+          name: "Notebook Navigator",
+          author: "Johan Sanneblad",
+          description: "A better file browser.",
+          repo: "johansan/notebook-navigator",
+        }]),
+      });
+    });
+    setRequestUrlHandler(request);
+
+    await expect(resolveCommunityPluginIdentity("notebook-navigator", "1.0.0"))
+      .resolves.toMatchObject({
+        repository: "johansan/notebook-navigator",
+        officialName: "Notebook Navigator",
+      });
+    expect(requestedUrls.some((url) => url.includes("/README.md"))).toBe(false);
   });
 });

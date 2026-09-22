@@ -206,7 +206,6 @@ export class PluginAutomationController {
           name: identity?.officialName ?? plugin.name,
           description: identity?.officialDescription ?? plugin.description,
         },
-        ...(identity?.readmeMarkdown === undefined ? {} : { readmeMarkdown: identity.readmeMarkdown }),
       });
       stringCount += catalog.strings.length;
       const unchanged = previous?.digest === catalog.digest &&
@@ -505,7 +504,7 @@ export function canReuseScannedPluginCatalog(
     && previous.pluginName === plugin.name
     && previous.artifactDigest === artifactDigest
     && previous.scannerTargetLocale === targetLocale
-    && previous.patchEvidenceRevision === 13;
+    && previous.patchEvidenceRevision === 14;
 }
 
 export function selectApplicablePluginTranslations(

@@ -328,6 +328,7 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
     && value.patchEvidenceRevision !== 11
     && value.patchEvidenceRevision !== 12
     && value.patchEvidenceRevision !== 13
+    && value.patchEvidenceRevision !== 14
   ) return null;
   let catalogIdentity: SourceCatalogIdentity | undefined;
   try {

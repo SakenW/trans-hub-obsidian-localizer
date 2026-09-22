@@ -149,7 +149,9 @@ export async function scanPluginUiStrings(input: {
     digest: catalogIdentity.digest,
     artifactDigest,
     ...(targetLocale === undefined ? {} : { scannerTargetLocale: targetLocale }),
-    patchEvidenceRevision: 13,
+    // Semantic role participates in cross-version compatibility. Re-scan
+    // persisted catalogs that used the old README-first ordering.
+    patchEvidenceRevision: 14,
     catalogIdentity,
     strings,
     scannedAt: (input.now?.() ?? new Date()).toISOString(),

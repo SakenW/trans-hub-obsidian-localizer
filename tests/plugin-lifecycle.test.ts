@@ -31,6 +31,12 @@ function fixture() {
   return { plugin, restore, refresh, internals };
 }
 
+function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
+
 describe("plugin locale transitions", () => {
   it("切换语言先恢复文件补丁再更新运行时，相同语言不恢复", async () => {
     const { plugin, restore, refresh } = fixture();
@@ -48,6 +54,28 @@ describe("plugin locale transitions", () => {
     expect(await last).toBe(result);
     expect(restore).toHaveBeenCalledOnce();
     expect(internals.processPluginsNow).toHaveBeenCalledExactlyOnceWith(undefined, "ja", undefined, 0);
+  });
+});
+
+describe("automatic plugin translation", () => {
+  it("在重叠的启动检查完成后补查一次晚注册插件", async () => {
+    const plugin = new TransHubObsidianPlugin({} as never, {} as never);
+    const first = deferred();
+    const internal = plugin as unknown as {
+      runAutomaticPluginTranslation: () => Promise<void>;
+      runAutomaticPluginTranslationNow: () => Promise<void>;
+    };
+    const run = vi.spyOn(internal, "runAutomaticPluginTranslationNow")
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce();
+
+    const onloadCheck = internal.runAutomaticPluginTranslation();
+    const layoutReadyCheck = internal.runAutomaticPluginTranslation();
+    expect(run).toHaveBeenCalledTimes(1);
+
+    first.resolve();
+    await Promise.all([onloadCheck, layoutReadyCheck]);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
   });
 });
 

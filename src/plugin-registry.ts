@@ -10,7 +10,6 @@ export interface CommunityPluginIdentity {
   readonly officialName: string;
   readonly officialDescription: string;
   readonly candidateLocators: readonly string[];
-  readonly readmeMarkdown?: string;
 }
 
 export interface CommunityPluginRegistryEntry {
@@ -39,12 +38,14 @@ export function isCommunityPluginNotFoundError(
 }
 
 let cachedRegistry: ReadonlyMap<string, CommunityPluginRegistryEntry> | null = null;
-const cachedReadmes = new Map<string, string | null>();
 
 export async function resolveCommunityPluginIdentity(
   pluginId: string,
   pluginVersion: string,
 ): Promise<CommunityPluginIdentity> {
+  // Synchronization needs only the official directory identity. Fetching a
+  // README here would serially block each plugin's UI catalog scan even though
+  // README text is outside the public source contract.
   const registry = cachedRegistry ?? await loadCommunityRegistry();
   cachedRegistry = registry;
   const entry = registry.get(pluginId);
@@ -53,7 +54,6 @@ export async function resolveCommunityPluginIdentity(
   }
   const { repository } = entry;
   const root = `https://github.com/${repository}`;
-  const readmeMarkdown = await loadVersionReadme(repository, pluginVersion);
   return {
     repository,
     officialName: entry.officialName,
@@ -63,7 +63,6 @@ export async function resolveCommunityPluginIdentity(
       `${root}/releases/tag/${encodeURIComponent(pluginVersion)}`,
       `${root}/releases/tag/v${encodeURIComponent(pluginVersion)}`,
     ],
-    ...(readmeMarkdown === undefined ? {} : { readmeMarkdown }),
   };
 }
 
@@ -87,33 +86,6 @@ export function classifyCommunityPluginSources(
       : { kind: "supported", repository: entry.repository });
   }
   return result;
-}
-
-async function loadVersionReadme(repository: string, pluginVersion: string): Promise<string | undefined> {
-  const cacheKey = `${repository}@${pluginVersion}`;
-  const cached = cachedReadmes.get(cacheKey);
-  if (cached !== undefined) return cached ?? undefined;
-  for (const tag of [pluginVersion, `v${pluginVersion}`]) {
-    let response: Awaited<ReturnType<typeof requestUrl>>;
-    try {
-      response = await requestUrl({
-        url: `https://raw.githubusercontent.com/${repository}/${encodeURIComponent(tag)}/README.md`,
-        method: "GET",
-        throw: false,
-      });
-    } catch {
-      cachedReadmes.set(cacheKey, null);
-      return undefined;
-    }
-    if (response.status === 404) continue;
-    if (response.status !== 200) break;
-    const markdown = response.text.normalize("NFC");
-    if (markdown.includes("\u0000") || new TextEncoder().encode(markdown).byteLength > 1024 * 1024) break;
-    cachedReadmes.set(cacheKey, markdown);
-    return markdown;
-  }
-  cachedReadmes.set(cacheKey, null);
-  return undefined;
 }
 
 async function loadCommunityRegistry(): Promise<ReadonlyMap<string, CommunityPluginRegistryEntry>> {

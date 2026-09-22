@@ -72,6 +72,7 @@ export default class TransHubObsidianPlugin extends Plugin {
   private readonly pluginProcessingQueue = new PluginProcessingQueue();
   private readonly pluginFileQueue = new PluginProcessingQueue();
   private automaticPluginTranslationInFlight: Promise<void> | null = null;
+  private automaticPluginTranslationFollowUpRequested = false;
   private targetLocaleRevision = 0;
   private resetPluginLocalizationDerivedCache = false;
   private lastFileRestore: PluginFileRestoreSummary | undefined;
@@ -199,6 +200,7 @@ export default class TransHubObsidianPlugin extends Plugin {
   override onunload(): void {
     this.unloaded = true;
     this.lifecycleRevision += 1;
+    this.automaticPluginTranslationFollowUpRequested = false;
     this.clearPendingTranslationRetry();
     this.pluginAutomation?.stop();
   }
@@ -537,6 +539,10 @@ export default class TransHubObsidianPlugin extends Plugin {
 
   private runAutomaticPluginTranslation(announce = false): Promise<void> {
     if (this.automaticPluginTranslationInFlight !== null) {
+      // onload can race layout-ready while Obsidian is still registering
+      // community plugins. Reuse the active pass, then perform one fresh pass
+      // so late registrations are not skipped until the periodic timer.
+      this.automaticPluginTranslationFollowUpRequested = true;
       return this.automaticPluginTranslationInFlight;
     }
     const operation = this.runAutomaticPluginTranslationNow(announce);
@@ -544,6 +550,9 @@ export default class TransHubObsidianPlugin extends Plugin {
     void operation.finally(() => {
       if (this.automaticPluginTranslationInFlight === operation) {
         this.automaticPluginTranslationInFlight = null;
+        const needsFollowUp = this.automaticPluginTranslationFollowUpRequested;
+        this.automaticPluginTranslationFollowUpRequested = false;
+        if (needsFollowUp && !this.unloaded) void this.runAutomaticPluginTranslation();
       }
     });
     return operation;
