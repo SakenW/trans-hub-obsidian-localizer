@@ -213,14 +213,14 @@ describe("selectApplicablePluginTranslations", () => {
       pluginVersion: "1.0.0",
       artifactDigest: "a".repeat(64),
       scannerTargetLocale: "zh-CN",
-      patchEvidenceRevision: 11,
+      patchEvidenceRevision: 13,
       catalogIdentity: {},
     } as Parameters<typeof canReuseScannedPluginCatalog>[0];
 
     expect(canReuseScannedPluginCatalog(catalog, {
       name: "Large Plugin", version: "1.0.0",
     }, "a".repeat(64), "zh-CN")).toBe(true);
-    expect(canReuseScannedPluginCatalog({ ...catalog!, patchEvidenceRevision: 10 }, {
+    expect(canReuseScannedPluginCatalog({ ...catalog!, patchEvidenceRevision: 12 }, {
       name: "Large Plugin", version: "1.0.0",
     }, "a".repeat(64), "zh-CN")).toBe(false);
     expect(canReuseScannedPluginCatalog(catalog, {

@@ -40,6 +40,9 @@ export function collectStructuralRuleMatches(
 ): void {
   collectSettingsSchemaEntries(tokens, matching, target, sourceLocale);
   collectSettingsGroupDescriptors(tokens, matching, target, sourceLocale);
+  collectSvelteFormDescriptors(tokens, matching, target, sourceLocale);
+  collectSvelteTemplateText(tokens, target, sourceLocale);
+  collectChoiceNameFactories(tokens, matching, target, sourceLocale);
   collectGroupedUiTextDictionary(tokens, matching, target, sourceLocale);
 }
 
@@ -263,6 +266,7 @@ function addSettingsSchemaValue(
   expression: readonly Token[],
   key: Token,
   sourceLocale: string,
+  symbol = "settingsSchema",
 ): void {
   const counter = { value: 0 };
   const rendered = renderExpression(expression, counter);
@@ -271,7 +275,7 @@ function addSettingsSchemaValue(
   addCandidate(target, rendered.text, "ui-property", sourceLocale, {
     origin: "ui-property",
     strategy: "structured",
-    symbol: "settingsSchema",
+    symbol,
     offset: key.start,
     line: key.line,
     column: key.column,
@@ -312,9 +316,144 @@ function collectSettingsGroupDescriptors(
         const expression = staticObjectStringProperty(item, property);
         if (expression !== undefined) {
           addSettingsSchemaValue(target, expression, descriptorKey, sourceLocale);
+        } else if (property !== "name") {
+          const documentationLead = firstLiteralArgument(staticObjectProperty(item, property));
+          if (documentationLead !== undefined) {
+            addSettingsSchemaValue(target, documentationLead, descriptorKey, sourceLocale, "settingsDocumentation");
+          }
         }
       }
+      collectSettingsDropdownOptions(item, descriptorKey, target, sourceLocale);
     }
+  }
+}
+
+/**
+ * Some settings frameworks keep dropdown labels inside an item's declarative
+ * control object rather than calling Obsidian's `addOptions`. Those values are
+ * still visible UI copy, but only accept them while already inside a proven
+ * settings-group descriptor.
+ */
+function collectSettingsDropdownOptions(
+  item: readonly Token[],
+  descriptorKey: Token,
+  target: Map<string, CandidateAggregate>,
+  sourceLocale: string,
+): void {
+  const control = staticObjectProperty(item, "control");
+  if (control === undefined) return;
+  const object = stripWrappingParentheses(control);
+  if (object[0]?.raw !== "{" || matchingTokenIndex(object, 0) !== object.length - 1) return;
+  const type = staticObjectStringProperty(object, "type");
+  if (type === undefined || decodeJsLiteral(type[0]?.raw ?? "") !== "dropdown") return;
+  const options = staticObjectProperty(object, "options");
+  if (options === undefined) return;
+  const optionObject = stripWrappingParentheses(options);
+  if (optionObject[0]?.raw !== "{" || matchingTokenIndex(optionObject, 0) !== optionObject.length - 1) return;
+  for (const entry of splitTopLevelTokens(optionObject.slice(1, -1))) {
+    const colon = topLevelTokenIndex(entry, ":");
+    if (colon <= 0) continue;
+    const value = entry.slice(colon + 1);
+    if (value.length !== 1 || value[0]?.kind !== "literal") continue;
+    addSettingsSchemaValue(target, value, descriptorKey, sourceLocale, "settingsDropdownOption");
+  }
+}
+
+/**
+ * Svelte's production compiler commonly lowers a form row to an arbitrary
+ * minified function call with an object such as `{name, desc, control}` or
+ * `{name, desc, children}`. The constructor name is unstable, so the shape is
+ * the proof: an interactive control/children slot, or an explicit heading.
+ */
+function collectSvelteFormDescriptors(
+  tokens: readonly Token[],
+  matching: MatchingTokenIndexes,
+  target: Map<string, CandidateAggregate>,
+  sourceLocale: string,
+): void {
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index]?.raw !== "{") continue;
+    const end = matching[index];
+    if (end < 0 || end - index > SETTINGS_SCHEMA_MAX_ENTRY_TOKENS) continue;
+    const object = tokens.slice(index, end + 1);
+    const name = staticObjectStringProperty(object, "name");
+    if (name === undefined) continue;
+    const heading = staticObjectProperty(object, "heading");
+    const isHeading = (heading?.length === 1 && heading[0]?.raw === "true")
+      || (heading?.length === 2 && heading[0]?.raw === "!" && heading[1]?.raw === "0");
+    const isInteractive = ["control", "children", "$$slots"].some((property) => (
+      staticObjectProperty(object, property) !== undefined
+    ));
+    if (!isHeading && !isInteractive) continue;
+    const descriptorKey = tokens[index + 1] ?? tokens[index] ?? name[0];
+    addSettingsSchemaValue(target, name, descriptorKey, sourceLocale, "svelteForm");
+    for (const property of ["desc", "description"]) {
+      const description = staticObjectStringProperty(object, property);
+      if (description !== undefined) addSettingsSchemaValue(target, description, descriptorKey, sourceLocale, "svelteForm");
+    }
+  }
+}
+
+/** Svelte templates retain static text inside string literals with `<!>`
+ * insertion markers. Restricting extraction to that compiler marker avoids
+ * treating arbitrary HTML strings as application UI. */
+function collectSvelteTemplateText(
+  tokens: readonly Token[],
+  target: Map<string, CandidateAggregate>,
+  sourceLocale: string,
+): void {
+  for (let index = 0; index + 3 < tokens.length; index += 1) {
+    if (tokens[index]?.kind !== "identifier" || tokens[index + 1]?.raw !== "(") continue;
+    const literal = tokens[index + 2];
+    if (literal?.kind !== "literal" || tokens[index + 3]?.raw !== ")") continue;
+    const template = decodeJsLiteral(literal.raw);
+    if (template === null || !template.includes("<!>")) continue;
+    const text = template
+      .replaceAll("<!>", " ")
+      .replace(/<[^>]*>/gu, " ")
+      .replace(/\s+/gu, " ")
+      .trim();
+    if (text === "") continue;
+    addCandidate(target, text, "ui-property", sourceLocale, {
+      origin: "ui-property", strategy: "structured", symbol: "svelteTemplate",
+      offset: literal.start, line: literal.line, column: literal.column,
+      literalStart: literal.start, literalEnd: literal.end,
+    }, text, true);
+  }
+}
+
+/** Choice factories render their returned `New …` values as UI titles. */
+function collectChoiceNameFactories(
+  tokens: readonly Token[],
+  matching: MatchingTokenIndexes,
+  target: Map<string, CandidateAggregate>,
+  sourceLocale: string,
+): void {
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index]?.raw !== "switch") continue;
+    const open = tokens.findIndex((token, candidate) => candidate > index && token.raw === "{");
+    if (open < 0) continue;
+    const end = matching[open];
+    if (end < 0) continue;
+    const values: Token[] = [];
+    for (let candidate = open + 1; candidate + 4 < end; candidate += 1) {
+      if (
+        tokens[candidate]?.raw !== "case"
+        || tokens[candidate + 1]?.kind !== "literal"
+        || tokens[candidate + 2]?.raw !== ":"
+        || tokens[candidate + 3]?.raw !== "return"
+        || tokens[candidate + 4]?.kind !== "literal"
+      ) continue;
+      const value = tokens[candidate + 4];
+      if (value !== undefined) values.push(value);
+    }
+    if (values.length < 3) continue;
+    const rendered = values.map((value) => decodeJsLiteral(value.raw));
+    if (rendered.some((value) => value === null || !/^New\s+/iu.test(value))) continue;
+    for (const value of values) {
+      addSettingsSchemaValue(target, [value], value, sourceLocale, "choiceNameFactory");
+    }
+    index = end;
   }
 }
 
@@ -331,4 +470,23 @@ function staticObjectArrayProperty(
     return splitTopLevelTokens(value.slice(1, -1));
   }
   return undefined;
+}
+
+function staticObjectProperty(
+  object: readonly Token[],
+  property: string,
+): readonly Token[] | undefined {
+  for (const prop of splitTopLevelTokens(object.slice(1, -1))) {
+    const colon = topLevelTokenIndex(prop, ":");
+    if (colon <= 0 || staticCatalogKey(prop.slice(0, colon)) !== property) continue;
+    return prop.slice(colon + 1);
+  }
+  return undefined;
+}
+
+function firstLiteralArgument(value: readonly Token[] | undefined): readonly Token[] | undefined {
+  if (value === undefined) return undefined;
+  const open = value.findIndex((token) => token.raw === "(");
+  const first = open < 0 ? undefined : value[open + 1];
+  return first?.kind === "literal" ? [first] : undefined;
 }

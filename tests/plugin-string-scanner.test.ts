@@ -194,7 +194,7 @@ describe("scanPluginUiStrings", () => {
       sourceLocale: "en",
       bundle: 'el.textContent = "Fresh sink";',
     });
-    expect(catalog.patchEvidenceRevision).toBe(11);
+    expect(catalog.patchEvidenceRevision).toBe(13);
   });
 
   it("merges a partial embedded locale pack with the hardcoded UI scan", async () => {
@@ -349,6 +349,60 @@ describe("scanPluginUiStrings", () => {
     expect(sources).toContain("New note from template");
     // A type+heading object without an items array stays configuration.
     expect(sources).not.toContain("Internal model metadata");
+  });
+
+  it("extracts QuickAdd-style dropdown, Svelte form, template, and choice-factory copy", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: [
+        'function choiceName(kind) { switch (kind) { case "Template": return "New template"; case "Capture": return "New capture"; case "Macro": return "New macro"; } }',
+        'const markup = q(\'<div><h4>Location</h4><!></div>\');',
+        'const group = { type: "group", heading: "Choice picker", items: [{ name: "New note from template", desc: docs("Collect a choice\\\'s inputs in one form before it runs.", ref), control: { type: "dropdown", options: { bottom: "Show at the bottom (keeps your top choice first)", top: "Show at the top", off: "Hide" } } }] };',
+        'mount(node, { name: "Capture to active file", desc: "Capture into whichever note is open when the choice runs, instead of a fixed target.", control: value => value });',
+        'mount(node, { name: "Create file if it doesn\\\'t exist", control: value => value });',
+        'mount(node, { name: "Behavior", heading: !0 });',
+      ].join("\n"),
+    });
+
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toEqual(expect.arrayContaining([
+      "New template",
+      "New capture",
+      "New macro",
+      "Location",
+      "Collect a choice's inputs in one form before it runs.",
+      "Show at the bottom (keeps your top choice first)",
+      "Show at the top",
+      "Hide",
+      "Capture to active file",
+      "Capture into whichever note is open when the choice runs, instead of a fixed target.",
+      "Create file if it doesn't exist",
+      "Behavior",
+    ]));
+    expect(catalog.strings.find((item) => item.source === "Show at the top")?.evidence?.[0])
+      .toMatchObject({ symbol: "settingsDropdownOption" });
+    expect(catalog.strings.find((item) => item.source === "Capture to active file")?.evidence?.[0])
+      .toMatchObject({ symbol: "svelteForm" });
+    expect(catalog.strings.find((item) => item.source === "Behavior")?.evidence?.[0])
+      .toMatchObject({ symbol: "svelteForm" });
+  });
+
+  it("keeps README-only copy local while excluding it from public source identity", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      readmeMarkdown: "# README-only help\n\nRuntime help",
+      bundle: 'button.setTooltip("Runtime help");',
+    });
+
+    expect(catalog.strings.map((item) => item.source)).toEqual(expect.arrayContaining([
+      "README-only help",
+      "Runtime help",
+    ]));
+    expect(catalog.catalogIdentity?.scopes.map((scope) => scope.scope))
+      .toEqual(["metadata", "runtime-ui"]);
+    expect(catalog.catalogIdentity?.unitCount).toBe(3);
   });
 
   it("extracts grouped UI copy dictionaries while rejecting flat lookup tables", async () => {

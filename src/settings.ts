@@ -74,6 +74,8 @@ export class TransHubSettingTab extends PluginSettingTab {
   private patchStateByPluginId = new Map<string, PluginFilePatchState>();
   private selectionStatusAt: Date | null = null;
   private connectionPending = false;
+  private otherLocaleEditorOpen = false;
+  private otherLocaleDraft: string | null = null;
   private managerActionPending = false;
   private readonly stalePluginIds = new Set<string>();
   private renderedContainerEl: HTMLElement | null = null;
@@ -245,40 +247,68 @@ export class TransHubSettingTab extends PluginSettingTab {
       .addDropdown((dropdown) => {
         const options: Record<string, string> = Object.fromEntries(TARGET_LOCALE_OPTIONS.map((option) => [option.value, option.label]));
         if (!(this.plugin.settings.targetLocale in options)) options[this.plugin.settings.targetLocale] = this.plugin.settings.targetLocale;
+        options.other = translate("其他语言…");
         dropdown.addOptions(options);
-        dropdown.setValue(this.plugin.settings.targetLocale).setDisabled(!this.plugin.settings.pluginTranslationEnabled)
+        dropdown.setValue(this.otherLocaleEditorOpen ? "other" : this.plugin.settings.targetLocale).setDisabled(!this.plugin.settings.pluginTranslationEnabled)
           .onChange(async (value) => {
+            if (value === "other") {
+              this.otherLocaleEditorOpen = true;
+              this.otherLocaleDraft ??= TARGET_LOCALE_OPTIONS.some((option) => option.value === this.plugin.settings.targetLocale)
+                ? "" : this.plugin.settings.targetLocale;
+              this.refreshSettings();
+              return;
+            }
             const targetLocale = parseTargetLocale(value);
             if (targetLocale === null) return;
+            this.otherLocaleEditorOpen = false;
+            if (targetLocale === this.plugin.settings.targetLocale) {
+              this.refreshSettings();
+              return;
+            }
             await this.applyTargetLocale(targetLocale);
           });
       });
-    let otherLocaleInput = this.plugin.settings.targetLocale;
-    const otherLocaleSetting = new Setting(preferences)
-      .setName(translate("其他语言"))
-      .setDesc(translate("输入语言标识并应用，例如 it、ar 或 sr-Latn。"))
-      .addText((text) => {
-        text.setPlaceholder(translate("例如 it、ar、uk、zh-Hant-TW 或 sr-Latn-RS"));
-        text.setValue(otherLocaleInput).setDisabled(!this.plugin.settings.pluginTranslationEnabled)
-          .onChange((value) => { otherLocaleInput = String(value); });
-      })
-      .addButton((button) => {
-        button.setButtonText(translate("应用其他语言"));
-        button.setDisabled(!this.plugin.settings.pluginTranslationEnabled).onClick(async () => {
-          const targetLocale = parseTargetLocale(otherLocaleInput);
-          if (targetLocale === null) {
-            this.selectionStatus = translate("请输入有效的语言标识，例如 zh-Hant-TW。当前语言未更改。");
-            this.selectionStatusFailed = true;
-            this.selectionStatusAt = new Date();
-            new Notice(this.selectionStatus, 10_000);
+    if (this.otherLocaleEditorOpen) {
+      const otherLocaleSetting = new Setting(preferences)
+        .setName(translate("其他语言"))
+        .setDesc(translate("当前使用 {language}；应用后才会切换。", { language: this.plugin.settings.targetLocale }))
+        .addText((text) => {
+          text.setPlaceholder(translate("例如 it、ar、uk、zh-Hant-TW 或 sr-Latn-RS"));
+          text.inputEl.setAttr("aria-label", translate("语言标识"));
+          text.setValue(this.otherLocaleDraft ?? "").setDisabled(!this.plugin.settings.pluginTranslationEnabled)
+            .onChange((value) => { this.otherLocaleDraft = String(value); });
+        })
+        .addButton((button) => {
+          button.setButtonText(translate("应用"));
+          button.setDisabled(!this.plugin.settings.pluginTranslationEnabled).onClick(async () => {
+            const targetLocale = parseTargetLocale(this.otherLocaleDraft ?? "");
+            if (targetLocale === null) {
+              this.selectionStatus = translate("请输入有效的语言标识，例如 zh-Hant-TW。当前语言未更改。");
+              this.selectionStatusFailed = true;
+              this.selectionStatusAt = new Date();
+              new Notice(this.selectionStatus, 10_000);
+              this.refreshSettings();
+              return;
+            }
+            this.otherLocaleDraft = targetLocale;
+            this.otherLocaleEditorOpen = false;
+            if (targetLocale === this.plugin.settings.targetLocale) {
+              this.refreshSettings();
+              return;
+            }
+            button.setDisabled(true);
+            await this.applyTargetLocale(targetLocale);
+          });
+        })
+        .addButton((button) => {
+          button.setButtonText(translate("取消")).onClick(() => {
+            this.otherLocaleEditorOpen = false;
             this.refreshSettings();
-            return;
-          }
-          await this.applyTargetLocale(targetLocale);
+          });
         });
-      });
-    otherLocaleSetting.settingEl.addClass("trans-hub-settings__other-language");
-    otherLocaleSetting.settingEl.toggleClass("is-disabled", !this.plugin.settings.pluginTranslationEnabled);
+      otherLocaleSetting.settingEl.addClass("trans-hub-settings__other-language");
+      otherLocaleSetting.settingEl.toggleClass("is-disabled", !this.plugin.settings.pluginTranslationEnabled);
+    }
     localeSetting.settingEl.toggleClass("is-disabled", !this.plugin.settings.pluginTranslationEnabled);
 
     const pluginHeading = new Setting(containerEl).setName(translate("插件管理")).setHeading();

@@ -26,6 +26,13 @@ describe("Obsidian settings page layout", () => {
     expect(styles).toMatch(/@media\s*\(max-width:\s*520px\)\s*\{[\s\S]*\.trans-hub-settings__connection\s*\{[^}]*display:\s*block;/u);
   });
 
+  it("aligns the plugin manager connection row with its summary", () => {
+    expect(styles).toMatch(/\.trans-hub-plugin-picker__context\s*\{[^}]*display:\s*grid;/su);
+    expect(styles).toMatch(/\.trans-hub-plugin-picker__context\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/su);
+    expect(styles).toMatch(/\.trans-hub-plugin-picker__context\s*\{[^}]*margin:\s*0\s+0\s+0\.75rem;/su);
+    expect(styles).toMatch(/@media\s*\(max-width:\s*520px\)\s*\{[\s\S]*\.trans-hub-plugin-picker__context\s*\{[^}]*display:\s*block;/u);
+  });
+
   it("keeps primary controls ahead of folded advanced settings", () => {
     expect(settingsSource.indexOf("this.renderConnection(containerEl)")).toBeLessThan(settingsSource.indexOf('translate("译文语言")', settingsSource.indexOf("private renderSettings")));
     expect(settingsSource.indexOf('translate("打开插件管理器")')).toBeLessThan(settingsSource.indexOf('translate("高级选项")'));

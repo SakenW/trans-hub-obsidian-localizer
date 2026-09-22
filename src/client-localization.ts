@@ -3,6 +3,11 @@ import type { TargetLocale } from "./product-config";
 type MessageParameters = Readonly<Record<string, string | number>>;
 
 const ENGLISH_MESSAGES: Readonly<Record<string, string>> = {
+  "其他语言…": "Other language…",
+  "当前使用 {language}；应用后才会切换。": "Currently using {language}. Apply to switch languages.",
+  "语言标识": "Language code",
+  "应用": "Apply",
+  "取消": "Cancel",
   "其他语言": "Other languages",
   "输入语言标识并应用，例如 it、ar 或 sr-Latn。": "Enter and apply a language tag, such as it, ar, or sr-Latn.",
   "例如 it、ar、uk、zh-Hant-TW 或 sr-Latn-RS": "For example: it, ar, uk, zh-Hant-TW, or sr-Latn-RS",

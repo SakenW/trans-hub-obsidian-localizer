@@ -108,7 +108,13 @@ export async function scanPluginUiStrings(input: {
     })));
 
   const artifactDigest = await digestPluginBundle(input.bundle);
-  const canonicalStrings = strings.filter(isCanonicalPluginCatalogString);
+  // Public discovery's trusted executor receives only manifest.json and
+  // main.js. Keep README-only copy available to the local runtime, but never
+  // make it part of the public source identity: otherwise a client can keep
+  // requesting an expansion the executor is intentionally unable to produce.
+  const canonicalStrings = strings.filter((item) => (
+    isCanonicalPluginCatalogString(item) && !item.origins.every((origin) => origin === "readme")
+  ));
   const canonicalUnits = canonicalStrings.map((item) => ({
     item,
     sourceKey: resolvePluginStringSourceKey(item.origins),
@@ -130,7 +136,7 @@ export async function scanPluginUiStrings(input: {
       text: item.source,
       placeholderSignature: item.placeholderSignature,
       formatSignature: "plain-text-v1",
-      scopes: resolvePluginStringScopes(item.origins),
+      scopes: resolvePluginStringScopes(item.origins.filter((origin) => origin !== "readme")),
       sourceKey,
     })),
   }, { sha256Hex });
@@ -143,7 +149,7 @@ export async function scanPluginUiStrings(input: {
     digest: catalogIdentity.digest,
     artifactDigest,
     ...(targetLocale === undefined ? {} : { scannerTargetLocale: targetLocale }),
-    patchEvidenceRevision: 11,
+    patchEvidenceRevision: 13,
     catalogIdentity,
     strings,
     scannedAt: (input.now?.() ?? new Date()).toISOString(),

@@ -133,7 +133,7 @@ export interface PluginState {
 export const PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION = 3;
 
 export function isPluginLocalizationDerivedCacheCurrent(value: unknown): boolean {
-  return value === 2 || value === PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION;
+  return value === PLUGIN_LOCALIZATION_DERIVED_CACHE_REVISION;
 }
 
 export const EMPTY_PLUGIN_STATE: PluginState = {
@@ -326,6 +326,8 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
     && value.patchEvidenceRevision !== 7
     && value.patchEvidenceRevision !== 10
     && value.patchEvidenceRevision !== 11
+    && value.patchEvidenceRevision !== 12
+    && value.patchEvidenceRevision !== 13
   ) return null;
   let catalogIdentity: SourceCatalogIdentity | undefined;
   try {

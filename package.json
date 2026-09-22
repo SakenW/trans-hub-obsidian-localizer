@@ -1,6 +1,6 @@
 {
   "name": "@trans-hub/obsidian-client",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "license": "Apache-2.0",
   "description": "Translate and localize Obsidian community plugin interfaces on desktop and mobile without AI model or API key setup. Reuse shared translations and preserve native text.",

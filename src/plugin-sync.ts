@@ -337,10 +337,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
         continue;
       }
     } catch (error) {
-      if (isGlobalSynchronizationError(error)) {
-        if (isAuthorizationSynchronizationError(error)) input.activationStore.invalidateConnection();
-        throw error;
-      }
+      if (isGlobalSynchronizationError(error)) throw error;
       failedPluginIds.push(catalog.pluginId);
       await saveSynchronizationError(input, catalog, bootstrap.installationId, error);
     }
@@ -720,13 +717,9 @@ function isTemporaryPublishedCatalogError(error: unknown): boolean {
 }
 
 
-function isAuthorizationSynchronizationError(error: unknown): boolean {
-  return isDiagnosticError(error) && (error.diagnostic.status === 401 || error.diagnostic.status === 403);
-}
-
 function isGlobalSynchronizationError(error: unknown): boolean {
   if (!isDiagnosticError(error)) return false;
-  if (isAuthorizationSynchronizationError(error)) return true;
+  if (error.diagnostic.status === 401 || error.diagnostic.status === 403) return true;
   return [
     "PC_CONFIGURATION",
     "PC_CREDENTIAL_AUDIENCE",
@@ -738,7 +731,6 @@ function isGlobalSynchronizationError(error: unknown): boolean {
 
 function synchronizationErrorCode(error: unknown): string {
   if (error instanceof Error && error.message === "此插件的译文目录读取失败，请稍后重试。") return "public_catalog_unavailable";
-  if (error instanceof Error && error.message.startsWith("译文包第 ")) return "translation_pack_invalid";
   return isDiagnosticError(error) ? error.code : "plugin_sync_failed";
 }
 

@@ -505,7 +505,7 @@ export function canReuseScannedPluginCatalog(
     && previous.pluginName === plugin.name
     && previous.artifactDigest === artifactDigest
     && previous.scannerTargetLocale === targetLocale
-    && previous.patchEvidenceRevision === 11;
+    && previous.patchEvidenceRevision === 13;
 }
 
 export function selectApplicablePluginTranslations(

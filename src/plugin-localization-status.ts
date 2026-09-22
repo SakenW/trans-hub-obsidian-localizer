@@ -219,7 +219,6 @@ export function pluginManualRetryKind(input: {
     && isCurrentLocaleSynchronizationError(submission.lastError, input.targetLocale)
   ) return "resynchronize";
   if (hasCurrentPublishedTranslation(input, submission)) return null;
-  if (submission.lastError?.code === "translation_pack_invalid") return null;
   if (
     submission.contributionState === "rejected"
     && !hasCompleteAuthoritativeTranslation(input, submission)
@@ -461,12 +460,6 @@ export function describePluginLocalizationStatus(input: {
   }
   const submission = input.submission;
   const recoverableSynchronizationError = submission?.lastError;
-  if (recoverableSynchronizationError?.code === "translation_pack_invalid") {
-    return {
-      kind: "failed",
-      label: translate("译文包校验未通过，已保留现有译文；无需重试，等待服务端修复。"),
-    };
-  }
   if (
     recoverableSynchronizationError !== undefined
     && recoverableSynchronizationError.code !== "source_artifact_mismatch"
@@ -508,11 +501,6 @@ export function describePluginLocalizationStatus(input: {
   }
   if (submission.sourceVersionId !== undefined) return { kind: "waiting", label: translate("等待目标语言译文发布") };
   return { kind: "waiting", label: translate("等待来源收录") };
-}
-
-function equivalentPluginVersion(left: string, right: string): boolean {
-  const normalize = (value: string) => value.trim().replace(/^v(?=\d)/iu, "");
-  return normalize(left) === normalize(right);
 }
 
 function hasExactLocalPublishedTranslation(input: {
@@ -764,7 +752,7 @@ function safeIntersectionStatus(
       total: totalCount,
     });
   const authorityPluginVersion = translation.authorityPluginVersion ?? translation.pluginVersion;
-  const versionNotice = equivalentPluginVersion(authorityPluginVersion, catalog.pluginVersion)
+  const versionNotice = authorityPluginVersion === catalog.pluginVersion
     ? undefined
     : translate("当前使用 {version} 的本地化译文；插件可继续使用，建议升级至 {version} 以获得最佳匹配", {
         version: authorityPluginVersion,

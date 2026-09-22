@@ -734,15 +734,6 @@ describe("describePluginLocalizationStatus", () => {
     });
   });
 
-  it("权威版本仅有 v 前缀差异时不重复提示升级", () => {
-    const status = describePluginLocalizationStatus({
-      catalog: { pluginId: "git", pluginName: "Git", pluginVersion: "2.39.0", sourceLocale: "en", digest: "exact", artifactDigest: "artifact", scannedAt: "2026-09-11T00:00:00Z", strings: [{ key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" }] },
-      translation: { pluginId: "git", pluginVersion: "v2.39.0", authorityPluginVersion: "v2.39.0", sourceVersionId: "source", targetLocale: "zh-CN", entries: [{ pluginId: "git", source: "Settings", target: "设置" }], pulledAt: "2026-09-11T00:00:00Z" },
-      targetLocale: "zh-CN",
-    });
-    expect(status.label).not.toContain("建议升级");
-  });
-
   it("精确安装版本应用当前译文时不显示版本一致性建议", () => {
     const status = describePluginLocalizationStatus({
       catalog: {
@@ -1229,32 +1220,5 @@ describe("describePluginLocalizationStatus", () => {
       kind: "waiting",
       label: "已获取 1 条缓存译文，等待当前目录匹配；语枢已校对 1",
     });
-  });
-});
-
-describe("translation package validation failure", () => {
-  it("keeps the package failure visible without offering a futile retry", () => {
-    const catalog = {
-      pluginId: "iconize", pluginName: "Iconize", pluginVersion: "2.14.7",
-      sourceLocale: "en", digest: "iconize-catalog", artifactDigest: "iconize-artifact",
-      scannedAt: "2026-09-10T00:00:00Z",
-      strings: [{ key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
-    };
-    const submission = {
-      ...baseSubmission,
-      pluginId: "iconize",
-      pluginVersion: "2.14.7",
-      catalogDigest: "iconize-catalog",
-      lastError: {
-        code: "translation_pack_invalid",
-        message: "译文包第 1 条缺少有效 occurrence_key：pack-1",
-        targetLocale: "zh-CN" as const,
-        updatedAt: "2026-09-10T00:01:00Z",
-      },
-    };
-    const result = describePluginLocalizationStatus({ catalog, submission, targetLocale: "zh-CN" });
-    expect(result.kind).toBe("failed");
-    expect(result.label).toContain("无需重试");
-    expect(pluginManualRetryKind({ catalog, submission, targetLocale: "zh-CN" })).toBeNull();
   });
 });
