@@ -203,6 +203,53 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     expect(pruneUnreferenced).not.toHaveBeenCalled();
   });
 
+  it("reclaims unused packs once after persisting two plugin translations", async () => {
+    mocks.resolvePublished.mockReturnValueOnce({
+      sourceVersionId: "source-a", objectVersionId: "object-a", authorityPluginVersion: "1.0.0",
+      artifactDigest: "a".repeat(64), catalogIdentityExact: true,
+      sourceUnitCount: 1, upstreamNativeCount: 0, publishedUnitCount: 1, missingUnitCount: 0,
+    }).mockReturnValueOnce({
+      sourceVersionId: "source-b", objectVersionId: "object-b", authorityPluginVersion: "1.0.0",
+      artifactDigest: "a".repeat(64), catalogIdentityExact: true,
+      sourceUnitCount: 1, upstreamNativeCount: 0, publishedUnitCount: 1, missingUnitCount: 0,
+    });
+    mocks.download.mockImplementation(({ sourceVersionId }: { sourceVersionId: string }) => Promise.resolve({
+      rows: [{ stringKey: STRING_KEY, translatedText: "设置" }],
+      etag: '"generation"', manifest: { ...exportManifest, sourceVersionId },
+    }));
+    const catalog = (pluginId: string) => ({
+      pluginId, pluginName: pluginId, pluginVersion: "1.0.0", sourceLocale: "en",
+      digest: `${pluginId}-catalog`, artifactDigest: "a".repeat(64),
+      scannedAt: "2026-09-23T00:00:00Z",
+      strings: [{ key: STRING_KEY, source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
+    });
+    let state: PluginState = {
+      ...EMPTY_PLUGIN_STATE,
+      pluginCatalogs: { first: catalog("first"), second: catalog("second") },
+    };
+    const pruneUnreferenced = vi.fn().mockResolvedValue(0);
+    const packStore = { ...translationPackStore, pruneUnreferenced };
+    const save = vi.fn().mockResolvedValue(undefined);
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: {}, bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+
+    const summary = await synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
+      activationStore, translationPackStore: packStore,
+      getState: () => state, replaceState: (next) => { state = next; }, save,
+    });
+
+    expect(summary.pulledCount).toBe(2);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(pruneUnreferenced).toHaveBeenCalledOnce();
+    expect(getPluginTranslation(state, "first", "zh-CN")?.sourceVersionId).toBe("source-a");
+    expect(getPluginTranslation(state, "second", "zh-CN")?.sourceVersionId).toBe("source-b");
+  });
+
   it.each([408, 429, 500, 503])("目录 HTTP %s 失败不伪造等待或提交新发现", async (status) => {
     mocks.loadCatalog.mockRejectedValue(new Error(`读取 Obsidian 公共目录失败：HTTP ${status}`));
     vi.mocked(submitObsidianPluginDiscovery).mockResolvedValue(discoveryReceipt({

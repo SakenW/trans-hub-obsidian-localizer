@@ -131,6 +131,9 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   const demandStateCounts: Partial<Record<LocalizationDemandState, number>> = {};
   const authorityRefreshingCount = 0;
   let nextRetryAfterMs: number | undefined;
+  let packsMayNeedPruning = false;
+  const markPersisted = (): void => { packsMayNeedPruning = true; };
+  try {
   for (const catalog of catalogs) {
     if (stalePluginIds.has(catalog.pluginId)) {
       if (projectionRefresh.summary.waitingPluginIds?.includes(catalog.pluginId)) {
@@ -175,6 +178,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           input,
           catalog.pluginId,
           authoritativeSourceVersionId,
+          markPersisted,
         );
       }
       // Prefer the resolved coverage identity digest: it is the current
@@ -220,6 +224,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             accessToken: bootstrap.intakeCredential.value,
             authorityWorkspaceId,
             upstreamNativeCount: published.upstreamNativeCount,
+            onPersisted: markPersisted,
           });
           pulledCount += 1;
           translationCount += count;
@@ -235,6 +240,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             published,
             published.upstreamNativeCount,
             !exportWithdrawn,
+            markPersisted,
           );
           if (exportWithdrawn) {
             // A 410 is an explicit revocation, unlike a transient 404 while
@@ -342,6 +348,12 @@ export async function synchronizeConfiguredPluginTranslations(input: {
       await saveSynchronizationError(input, catalog, bootstrap.installationId, error);
     }
   }
+  } finally {
+    // All downloads in this pass have settled before collecting unreferenced
+    // packs. Use the latest persisted references, including other plugins and
+    // languages, and never reclaim after a failed first save.
+    if (packsMayNeedPruning) await pruneUnreferencedTranslationPacks(input, input.getState());
+  }
   return {
     submittedCount,
     requestedCount,
@@ -401,6 +413,7 @@ async function pullPluginTranslation(input: {
   readonly accessToken: string;
   readonly authorityWorkspaceId: string;
   readonly upstreamNativeCount?: number;
+  readonly onPersisted: () => void;
 }): Promise<number> {
   const exportStateKey = translationExportStateKey(
     input.published.sourceVersionId,
@@ -458,7 +471,7 @@ async function pullPluginTranslation(input: {
     if (input.input.getState() === nextState) input.input.replaceState(state);
     throw error;
   }
-  await pruneUnreferencedTranslationPacks(input.input, nextState);
+  input.onPersisted();
   return dictionary.entries.length;
 }
 
@@ -468,6 +481,7 @@ async function saveNativeCoverage(
   published: PublishedPluginSource,
   upstreamNativeCount = 0,
   preserveSameSourceEntries = true,
+  onPersisted: () => void,
 ): Promise<void> {
   const state = input.getState();
   const exportStateKey = translationExportStateKey(published.sourceVersionId, input.targetLocale);
@@ -524,7 +538,7 @@ async function saveNativeCoverage(
     if (input.getState() === nextState) input.replaceState(state);
     throw error;
   }
-  await pruneUnreferencedTranslationPacks(input, nextState);
+  onPersisted();
 }
 
 async function discardSupersededActiveTranslation(
@@ -534,6 +548,7 @@ async function discardSupersededActiveTranslation(
   >,
   pluginId: string,
   sourceVersionId: string,
+  onPersisted: () => void,
 ): Promise<void> {
   const previousState = input.getState();
   const active = getPluginTranslation(previousState, pluginId, input.targetLocale);
@@ -563,7 +578,7 @@ async function discardSupersededActiveTranslation(
     if (input.getState() === nextState) input.replaceState(previousState);
     throw error;
   }
-  await pruneUnreferencedTranslationPacks(input, nextState);
+  onPersisted();
 }
 
 async function pruneUnreferencedTranslationPacks(

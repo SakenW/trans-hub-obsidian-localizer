@@ -98,4 +98,28 @@ describe("parseCommunityRegistry", () => {
       });
     expect(requestedUrls.some((url) => url.includes("/README.md"))).toBe(false);
   });
+
+  it("合并重叠的官方目录请求并在失败后允许重试", async () => {
+    vi.resetModules();
+    const registry = await import("../src/plugin-registry");
+    const freshObsidianMock = await import("./obsidian-mock");
+    const request = vi.fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue({ status: 200, text: JSON.stringify([{
+        id: "sample", name: "Sample", description: "A sample plugin.", repo: "owner/sample",
+      }]) });
+    freshObsidianMock.setRequestUrlHandler(request);
+
+    const first = Promise.allSettled([
+      registry.resolveCommunityPluginSourceEligibility(["sample"]),
+      registry.resolveCommunityPluginIdentity("sample", "1.0.0"),
+    ]);
+    expect((await first).every((result) => result.status === "rejected")).toBe(true);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    await expect(registry.resolveCommunityPluginIdentity("sample", "1.0.0"))
+      .resolves.toMatchObject({ repository: "owner/sample" });
+    expect(request).toHaveBeenCalledTimes(3);
+  });
 });

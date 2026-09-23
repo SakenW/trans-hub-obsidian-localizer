@@ -38,6 +38,7 @@ export function isCommunityPluginNotFoundError(
 }
 
 let cachedRegistry: ReadonlyMap<string, CommunityPluginRegistryEntry> | null = null;
+let pendingRegistry: Promise<ReadonlyMap<string, CommunityPluginRegistryEntry>> | null = null;
 
 export async function resolveCommunityPluginIdentity(
   pluginId: string,
@@ -46,8 +47,7 @@ export async function resolveCommunityPluginIdentity(
   // Synchronization needs only the official directory identity. Fetching a
   // README here would serially block each plugin's UI catalog scan even though
   // README text is outside the public source contract.
-  const registry = cachedRegistry ?? await loadCommunityRegistry();
-  cachedRegistry = registry;
+  const registry = await communityRegistry();
   const entry = registry.get(pluginId);
   if (entry === undefined) {
     throw new CommunityPluginNotFoundError(pluginId);
@@ -69,9 +69,22 @@ export async function resolveCommunityPluginIdentity(
 export async function resolveCommunityPluginSourceEligibility(
   pluginIds: readonly string[],
 ): Promise<ReadonlyMap<string, CommunityPluginSourceEligibility>> {
-  const registry = cachedRegistry ?? await loadCommunityRegistry();
-  cachedRegistry = registry;
+  const registry = await communityRegistry();
   return classifyCommunityPluginSources(pluginIds, registry);
+}
+
+async function communityRegistry(): Promise<ReadonlyMap<string, CommunityPluginRegistryEntry>> {
+  if (cachedRegistry !== null) return cachedRegistry;
+  if (pendingRegistry !== null) return pendingRegistry;
+  const pending = loadCommunityRegistry();
+  pendingRegistry = pending;
+  try {
+    const registry = await pending;
+    cachedRegistry = registry;
+    return registry;
+  } finally {
+    if (pendingRegistry === pending) pendingRegistry = null;
+  }
 }
 
 export function classifyCommunityPluginSources(
