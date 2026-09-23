@@ -184,6 +184,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       translationExportStates: { "current-source:zh-CN:default": oldExport },
     };
     const pruneUnreferenced = vi.fn().mockResolvedValue(0);
+    const onPluginPersisted = vi.fn();
     const packStore = { ...translationPackStore, pruneUnreferenced };
     const save = vi.fn().mockRejectedValue(new Error("fixture_disk_full"));
     const activationStore = {
@@ -195,12 +196,14 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     await expect(synchronizeConfiguredPluginTranslations({
       apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
       activationStore, translationPackStore: packStore,
+      onPluginPersisted,
       getState: () => state, replaceState: (next) => { state = next; }, save,
     })).rejects.toThrow("fixture_disk_full");
     expect(save).toHaveBeenCalled();
     expect(getPluginTranslation(state, "dataview", "zh-CN")).toBe(oldDictionary);
     expect(state.translationExportStates["current-source:zh-CN:default"]).toBe(oldExport);
     expect(pruneUnreferenced).not.toHaveBeenCalled();
+    expect(onPluginPersisted).not.toHaveBeenCalled();
   });
 
   it("reclaims unused packs once after persisting two plugin translations", async () => {
@@ -228,6 +231,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       pluginCatalogs: { first: catalog("first"), second: catalog("second") },
     };
     const pruneUnreferenced = vi.fn().mockResolvedValue(0);
+    const onPluginPersisted = vi.fn();
     const packStore = { ...translationPackStore, pruneUnreferenced };
     const save = vi.fn().mockResolvedValue(undefined);
     const activationStore = {
@@ -240,11 +244,13 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     const summary = await synchronizeConfiguredPluginTranslations({
       apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
       activationStore, translationPackStore: packStore,
+      onPluginPersisted,
       getState: () => state, replaceState: (next) => { state = next; }, save,
     });
 
     expect(summary.pulledCount).toBe(2);
     expect(save).toHaveBeenCalledTimes(2);
+    expect(onPluginPersisted).toHaveBeenCalledTimes(2);
     expect(pruneUnreferenced).toHaveBeenCalledOnce();
     expect(getPluginTranslation(state, "first", "zh-CN")?.sourceVersionId).toBe("source-a");
     expect(getPluginTranslation(state, "second", "zh-CN")?.sourceVersionId).toBe("source-b");

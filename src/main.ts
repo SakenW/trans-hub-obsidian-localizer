@@ -53,6 +53,7 @@ import type { PluginFilePatchState } from "./third-party-plugin-patcher";
 import { PluginRetrySchedule } from "./plugin-retry-schedule";
 
 const AUTOMATION_INTERVAL_MS = 15 * 60 * 1000;
+const PROGRESSIVE_RUNTIME_REFRESH_MS = 150;
 
 interface StoredPluginData {
   readonly pluginLocalizationDerivedCacheRevision?: unknown;
@@ -68,6 +69,7 @@ export default class TransHubObsidianPlugin extends Plugin {
   private settingTab!: TransHubSettingTab;
   private translationPackStore!: ObsidianTranslationPackStore;
   private pendingRetryTimer: number | null = null;
+  private progressiveRuntimeRefreshTimer: number | null = null;
   private readonly pendingRetries = new PluginRetrySchedule();
   private readonly pluginProcessingQueue = new PluginProcessingQueue();
   private readonly pluginFileQueue = new PluginProcessingQueue();
@@ -202,6 +204,7 @@ export default class TransHubObsidianPlugin extends Plugin {
     this.lifecycleRevision += 1;
     this.automaticPluginTranslationFollowUpRequested = false;
     this.clearPendingTranslationRetry();
+    this.clearProgressiveRuntimeRefresh();
     this.pluginAutomation?.stop();
   }
 
@@ -499,6 +502,11 @@ export default class TransHubObsidianPlugin extends Plugin {
         if (this.isLifecycleCurrent(lifecycleRevision)) this.state = state;
       },
       save: () => this.savePluginDataForLifecycle(lifecycleRevision),
+      onPluginPersisted: () => {
+        if (this.isLifecycleCurrent(lifecycleRevision) && this.settings.targetLocale === targetLocale) {
+          this.scheduleProgressiveRuntimeRefresh(lifecycleRevision);
+        }
+      },
     });
     if (result.withdrawnExportPluginIds?.length) {
       if (!this.isLifecycleCurrent(lifecycleRevision)) return result;
@@ -521,8 +529,24 @@ export default class TransHubObsidianPlugin extends Plugin {
         console.warn("[Trans-Hub] 无法恢复已撤回译文的插件文件；已保留当前文件：", error);
       }
     }
-    if (this.isLifecycleCurrent(lifecycleRevision)) this.pluginAutomation.applyCachedTranslations();
+    if (this.isLifecycleCurrent(lifecycleRevision)) {
+      this.clearProgressiveRuntimeRefresh();
+      this.pluginAutomation.applyCachedTranslations();
+    }
     return result;
+  }
+
+  private scheduleProgressiveRuntimeRefresh(lifecycleRevision: number): void {
+    if (this.progressiveRuntimeRefreshTimer !== null) return;
+    this.progressiveRuntimeRefreshTimer = window.setTimeout(() => {
+      this.progressiveRuntimeRefreshTimer = null;
+      if (this.isLifecycleCurrent(lifecycleRevision)) this.pluginAutomation.applyCachedTranslations();
+    }, PROGRESSIVE_RUNTIME_REFRESH_MS);
+  }
+
+  private clearProgressiveRuntimeRefresh(): void {
+    if (this.progressiveRuntimeRefreshTimer !== null) window.clearTimeout(this.progressiveRuntimeRefreshTimer);
+    this.progressiveRuntimeRefreshTimer = null;
   }
 
   private loadPluginData(value: unknown, defaultTargetLocale: TransHubPluginSettings["targetLocale"]): void {

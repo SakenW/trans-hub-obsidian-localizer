@@ -89,6 +89,8 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   readonly getState: () => PluginState;
   readonly replaceState: (state: PluginState) => void;
   readonly save: () => Promise<void>;
+  /** Called only after a plugin's active dictionary is durably saved. */
+  readonly onPluginPersisted?: () => void;
 }): Promise<PluginSyncSummary> {
   const { client, bootstrap, authorityWorkspaceId } = await input.activationStore.client({
     apiBaseUrl: input.apiBaseUrl,
@@ -132,7 +134,15 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   const authorityRefreshingCount = 0;
   let nextRetryAfterMs: number | undefined;
   let packsMayNeedPruning = false;
-  const markPersisted = (): void => { packsMayNeedPruning = true; };
+  const markPersisted = (): void => {
+    packsMayNeedPruning = true;
+    try {
+      input.onPluginPersisted?.();
+    } catch (error) {
+      // A presentation refresh cannot undo an already durable dictionary.
+      console.warn("[Trans-Hub] 已保存译文，界面刷新将在本轮结束时重试：", error);
+    }
+  };
   try {
   for (const catalog of catalogs) {
     if (stalePluginIds.has(catalog.pluginId)) {

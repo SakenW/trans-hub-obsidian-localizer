@@ -77,6 +77,38 @@ describe("automatic plugin translation", () => {
     await Promise.all([onloadCheck, layoutReadyCheck]);
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
   });
+
+  it("合并逐插件持久化后的运行时刷新并可在退出时取消", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", {
+      setTimeout,
+      clearTimeout,
+    });
+    try {
+      const plugin = new TransHubObsidianPlugin({} as never, {} as never);
+      const apply = vi.fn();
+      Object.assign(plugin, { pluginAutomation: { applyCachedTranslations: apply } });
+      const internal = plugin as unknown as {
+        scheduleProgressiveRuntimeRefresh: (revision: number) => void;
+        clearProgressiveRuntimeRefresh: () => void;
+      };
+
+      internal.scheduleProgressiveRuntimeRefresh(0);
+      internal.scheduleProgressiveRuntimeRefresh(0);
+      vi.advanceTimersByTime(149);
+      expect(apply).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(apply).toHaveBeenCalledOnce();
+
+      internal.scheduleProgressiveRuntimeRefresh(0);
+      internal.clearProgressiveRuntimeRefresh();
+      vi.advanceTimersByTime(150);
+      expect(apply).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("disconnect and withdrawal recovery", () => {
