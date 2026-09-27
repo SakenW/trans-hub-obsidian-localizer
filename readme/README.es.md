@@ -10,13 +10,15 @@ Trans-Hub Localizer es un complemento de Obsidian que traduce y localiza las int
 
 [Instalar en Obsidian](obsidian://show-plugin?id=trans-hub-plugin-localizer) · [Progreso de localización](https://trans-hub.net/ecosystems/obsidian) · [Comentarios y comunidad](https://github.com/SakenW/Trans-Hub/discussions)
 
+**El registro requiere una invitación.** [Únete a la comunidad de usuarios para conversar con el desarrollador](https://trans-hub.net/en-US/ecosystems/obsidian/invite): los usuarios internacionales pueden hablar del complemento en Discord. Si hablas chino, puedes contactar con el desarrollador por WeChat para recibir una invitación manual y entrar en el grupo. Si solo quieres probar el complemento o no usas WeChat, puedes solicitar una invitación por correo electrónico en esa misma página, sin tener que unirte antes a una comunidad. Cuando recibas la invitación, regístrate y vuelve al complemento para conectar tu cuenta.
+
 <!-- section: getting-started -->
 ## Primeros pasos
 
 Necesitas **Obsidian 1.11.4 o posterior**, una cuenta de Trans-Hub y conexión de red para la autorización y la sincronización. Se admiten equipos de escritorio y dispositivos móviles; los parches avanzados de compatibilidad de archivos solo están disponibles en escritorio.
 
 1. Instala y activa **Trans-Hub Localizer** en **Ajustes → Complementos comunitarios**.
-2. Abre sus ajustes y conecta tu cuenta de Trans-Hub. No necesitas configurar un modelo de IA, una cuenta de proveedor de modelos ni una clave API.
+2. [Consulta las opciones de invitación](https://trans-hub.net/en-US/ecosystems/obsidian/invite): contacta con el desarrollador por WeChat para recibir una invitación manual o solicita una invitación por correo electrónico. Cuando recibas la invitación, regístrate y vuelve a los ajustes del complemento para conectar tu cuenta de Trans-Hub. No necesitas configurar un modelo de IA, una cuenta de proveedor de modelos ni una clave API.
 3. Confirma el idioma de destino. Se detectan automáticamente los complementos comunitarios activados; puedes excluir los que no quieras localizar.
 
 Las traducciones ya publicadas se reutilizan. Para el contenido que falta se envía automáticamente una solicitud de localización; se sincroniza después de su procesamiento en segundo plano y publicación. El texto puede permanecer en el idioma original mientras espera procesamiento, publicación o comprobaciones de compatibilidad.

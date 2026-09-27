@@ -7,7 +7,7 @@ import {
 } from "@trans-hub/client-protocol";
 
 import type { ActivationStore } from "../src/activation";
-import { refreshConfiguredPluginStatuses, synchronizeConfiguredPluginTranslations } from "../src/plugin-sync";
+import { refreshConfiguredPluginStatuses, synchronizeConfiguredPluginTranslations, type PublishedPluginSyncProgress } from "../src/plugin-sync";
 import {
   EMPTY_PLUGIN_STATE,
   getPluginTranslation,
@@ -149,6 +149,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       catalogIdentityExact: true,
     });
     mocks.download.mockResolvedValue({
+      status: "updated",
       rows: [{ stringKey: STRING_KEY, translatedText: "当前译文" }],
       etag: '"generation"',
       manifest: exportManifest,
@@ -256,6 +257,347 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     expect(getPluginTranslation(state, "second", "zh-CN")?.sourceVersionId).toBe("source-b");
   });
 
+  it("adopts a same-source correction generation even when coverage and counts were already complete", async () => {
+    const catalog = {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68", sourceLocale: "en",
+      digest: "catalog-digest", artifactDigest: "a".repeat(64), scannedAt: "2026-09-24T00:00:00Z",
+      strings: [{ key: STRING_KEY, source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
+    };
+    const oldExport = { etag: '"generation-1"', manifest: exportManifest };
+    let state: PluginState = {
+      ...EMPTY_PLUGIN_STATE,
+      pluginCatalogs: { dataview: catalog },
+      pluginTranslations: { dataview: { "zh-CN": {
+        pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "current-source",
+        targetLocale: "zh-CN", entries: [{ pluginId: "dataview", source: "Settings", target: "旧译文" }],
+        sourceUnitCount: 1, publishedUnitCount: 1, missingUnitCount: 0, pulledAt: "2026-09-23T00:00:00Z",
+      } } },
+      translationExportStates: { "current-source:zh-CN:default": oldExport },
+    };
+    mocks.resolvePublished.mockReturnValue({
+      sourceVersionId: "current-source", objectVersionId: "same-object", authorityPluginVersion: "0.5.68",
+      artifactDigest: "a".repeat(64), catalogIdentityExact: true,
+      sourceUnitCount: 1, upstreamNativeCount: 0, publishedUnitCount: 1, missingUnitCount: 0,
+    });
+    mocks.download.mockResolvedValue({
+      rows: [{ stringKey: STRING_KEY, translatedText: "修订后的译文" }],
+      etag: '"generation-2"', manifest: { ...exportManifest, generationNumber: 2 },
+    });
+    const save = vi.fn().mockResolvedValue(undefined);
+    const onPluginPersisted = vi.fn();
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: {}, bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+    const summary = await synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
+      activationStore, translationPackStore, onPluginPersisted,
+      getState: () => state, replaceState: (next) => { state = next; }, save,
+    });
+    expect(mocks.download).toHaveBeenCalledWith(expect.objectContaining({
+      sourceVersionId: "current-source", previous: oldExport,
+    }));
+    expect(getPluginTranslation(state, "dataview", "zh-CN")?.entries[0]?.target).toBe("修订后的译文");
+    expect(state.translationExportStates["current-source:zh-CN:default"]?.etag).toBe('"generation-2"');
+    expect(summary.pulledCount).toBe(1);
+    expect(save).toHaveBeenCalledOnce();
+    expect(onPluginPersisted).toHaveBeenCalledOnce();
+    expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
+  });
+
+  it("treats a verified 304 as up to date without rewriting the active dictionary, but restores a missing dictionary", async () => {
+    const catalog = {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68", sourceLocale: "en",
+      digest: "catalog-digest", artifactDigest: "a".repeat(64), scannedAt: "2026-09-24T00:00:00Z",
+      strings: [{ key: STRING_KEY, source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
+    };
+    let state: PluginState = { ...EMPTY_PLUGIN_STATE, pluginCatalogs: { dataview: catalog } };
+    mocks.resolvePublished.mockReturnValue({
+      sourceVersionId: "current-source", objectVersionId: "current-object",
+      authorityPluginVersion: "0.5.68", artifactDigest: "a".repeat(64), catalogIdentityExact: true,
+      sourceUnitCount: 1, upstreamNativeCount: 0, publishedUnitCount: 1, missingUnitCount: 0,
+    });
+    const response = { rows: [{ stringKey: STRING_KEY, translatedText: "设置" }],
+      etag: '"generation"', manifest: exportManifest };
+    mocks.download.mockResolvedValue({ ...response, status: "updated" });
+    const save = vi.fn().mockResolvedValue(undefined);
+    const onPluginPersisted = vi.fn();
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: {}, bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+    const run = () => synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
+      activationStore, translationPackStore, onPluginPersisted,
+      getState: () => state, replaceState: (next) => { state = next; }, save,
+    });
+
+    expect((await run()).updatedCount).toBe(1);
+    const active = getPluginTranslation(state, "dataview", "zh-CN");
+    const persisted = state;
+    expect(save).toHaveBeenCalledOnce();
+
+    mocks.download.mockResolvedValue({ ...response, status: "not_modified" });
+    const unchanged = await run();
+    expect(unchanged).toMatchObject({ pulledCount: 1, updatedCount: 0, checkSucceeded: true });
+    expect(state).toBe(persisted);
+    expect(getPluginTranslation(state, "dataview", "zh-CN")).toBe(active);
+    expect(save).toHaveBeenCalledOnce();
+    expect(onPluginPersisted).toHaveBeenCalledOnce();
+
+    state = { ...state, pluginTranslations: {} };
+    expect((await run()).updatedCount).toBe(1);
+    expect(getPluginTranslation(state, "dataview", "zh-CN")?.entries[0]?.target).toBe("设置");
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it("prepares at most three verified packs concurrently and persists a fast plugin before a slow one", async () => {
+    const ids = ["slow", "fast", "third", "fourth"] as const;
+    const catalog = (pluginId: string) => ({
+      pluginId, pluginName: pluginId, pluginVersion: "1.0.0", sourceLocale: "en",
+      digest: `${pluginId}-catalog`, artifactDigest: "a".repeat(64),
+      scannedAt: "2026-09-24T00:00:00Z",
+      strings: [{ key: STRING_KEY, source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
+    });
+    let state: PluginState = {
+      ...EMPTY_PLUGIN_STATE,
+      pluginCatalogs: Object.fromEntries(ids.map((id) => [id, catalog(id)])),
+    };
+    mocks.resolvePublished.mockImplementation((_catalog: unknown, input: { pluginId: string }) => ({
+      sourceVersionId: `source-${input.pluginId}`, objectVersionId: `object-${input.pluginId}`,
+      authorityPluginVersion: "1.0.0", artifactDigest: "a".repeat(64), catalogIdentityExact: true,
+      sourceUnitCount: 1, upstreamNativeCount: 0, publishedUnitCount: 1, missingUnitCount: 0,
+    }));
+    let releaseSlow = (): void => undefined;
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    let activeDownloads = 0;
+    let peakDownloads = 0;
+    mocks.download.mockImplementation(async ({ sourceVersionId }: { sourceVersionId: string }) => {
+      activeDownloads += 1;
+      peakDownloads = Math.max(peakDownloads, activeDownloads);
+      if (sourceVersionId === "source-slow") await slowGate;
+      activeDownloads -= 1;
+      return {
+        rows: [{ stringKey: STRING_KEY, translatedText: `译文 ${sourceVersionId}` }],
+        etag: `"${sourceVersionId}"`, manifest: { ...exportManifest, sourceVersionId },
+      };
+    });
+    const saved: string[] = [];
+    const progress: PublishedPluginSyncProgress[] = [];
+    let activeSaves = 0;
+    let peakSaves = 0;
+    const save = vi.fn(async () => {
+      activeSaves += 1;
+      peakSaves = Math.max(peakSaves, activeSaves);
+      saved.push(...ids.filter((id) => getPluginTranslation(state, id, "zh-CN") !== undefined && !saved.includes(id)));
+      await Promise.resolve();
+      activeSaves -= 1;
+    });
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: {}, bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+    const pending = synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
+      activationStore, translationPackStore,
+      onPublishedProgress: (value) => { progress.push(value); },
+      getState: () => state, replaceState: (next) => { state = next; }, save,
+    });
+    try {
+      await vi.waitFor(() => expect(getPluginTranslation(state, "fast", "zh-CN")).toBeDefined(), { timeout: 500 });
+      await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledTimes(4), { timeout: 500 });
+      expect(getPluginTranslation(state, "slow", "zh-CN")).toBeUndefined();
+      expect(progress.some((value) => value.checkedCount > 0 && value.availableCount > 0 && value.checkedCount < value.totalCount)).toBe(true);
+    } finally {
+      releaseSlow();
+      await pending;
+    }
+    expect(peakDownloads).toBeGreaterThan(1);
+    expect(peakDownloads).toBeLessThanOrEqual(3);
+    expect(peakSaves).toBe(1);
+    expect(saved[0]).not.toBe("slow");
+    expect(new Set(saved)).toEqual(new Set(ids));
+    expect(progress[0]).toEqual({ checkedCount: 0, totalCount: 4, availableCount: 0 });
+    expect(progress.at(-1)).toEqual({ checkedCount: 4, totalCount: 4, availableCount: 4 });
+  });
+
+  it("waits for in-flight pack preparation before GC after a global credential failure", async () => {
+    const ids = ["good", "auth", "slow"] as const;
+    const catalog = (pluginId: string) => ({
+      pluginId, pluginName: pluginId, pluginVersion: "1.0.0", sourceLocale: "en",
+      digest: `${pluginId}-catalog`, artifactDigest: "a".repeat(64),
+      scannedAt: "2026-09-24T00:00:00Z",
+      strings: [{ key: STRING_KEY, source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
+    });
+    let state: PluginState = {
+      ...EMPTY_PLUGIN_STATE,
+      pluginCatalogs: Object.fromEntries(ids.map((id) => [id, catalog(id)])),
+    };
+    mocks.resolvePublished.mockImplementation((_catalog: unknown, input: { pluginId: string }) => ({
+      sourceVersionId: `source-${input.pluginId}`, objectVersionId: `object-${input.pluginId}`,
+      authorityPluginVersion: "1.0.0", artifactDigest: "a".repeat(64), catalogIdentityExact: true,
+      sourceUnitCount: 1, upstreamNativeCount: 0, publishedUnitCount: 1, missingUnitCount: 0,
+    }));
+    let releaseAuth = (): void => undefined;
+    let releaseSlow = (): void => undefined;
+    const authGate = new Promise<void>((resolve) => { releaseAuth = resolve; });
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    let authFailed = false;
+    mocks.download.mockImplementation(async ({ sourceVersionId }: { sourceVersionId: string }) => {
+      if (sourceVersionId === "source-auth") {
+        await authGate;
+        authFailed = true;
+        throw Object.assign(new Error("credential expired"), { code: "PC_EXPIRED", diagnostic: { status: 401 } });
+      }
+      if (sourceVersionId === "source-slow") await slowGate;
+      return {
+        rows: [{ stringKey: STRING_KEY, translatedText: "设置" }],
+        etag: `"${sourceVersionId}"`, manifest: { ...exportManifest, sourceVersionId },
+      };
+    });
+    const pruneUnreferenced = vi.fn().mockResolvedValue(0);
+    const packStore = { ...translationPackStore, pruneUnreferenced };
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: {}, bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+    const pending = synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
+      activationStore, translationPackStore: packStore,
+      getState: () => state, replaceState: (next) => { state = next; }, save: vi.fn().mockResolvedValue(undefined),
+    });
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    try {
+      await vi.waitFor(() => expect(getPluginTranslation(state, "good", "zh-CN")).toBeDefined(), { timeout: 500 });
+      releaseAuth();
+      await vi.waitFor(() => expect(authFailed).toBe(true), { timeout: 500 });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settled).toBe(false);
+      expect(pruneUnreferenced).not.toHaveBeenCalled();
+    } finally {
+      releaseAuth();
+      releaseSlow();
+    }
+    await expect(pending).rejects.toThrow("credential expired");
+    expect(getPluginTranslation(state, "slow", "zh-CN")).toBeUndefined();
+    expect(pruneUnreferenced).toHaveBeenCalledOnce();
+  });
+
+  it("does not start another download after a 429 from the bounded preparation pool", async () => {
+    const ids = ["limited", "held-a", "held-b", "later"] as const;
+    const catalog = (pluginId: string) => ({
+      pluginId, pluginName: pluginId, pluginVersion: "1.0.0", sourceLocale: "en",
+      digest: `${pluginId}-catalog`, artifactDigest: "a".repeat(64),
+      scannedAt: "2026-09-24T00:00:00Z",
+      strings: [{ key: STRING_KEY, source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
+    });
+    let state: PluginState = {
+      ...EMPTY_PLUGIN_STATE,
+      pluginCatalogs: Object.fromEntries(ids.map((id) => [id, catalog(id)])),
+    };
+    mocks.resolvePublished.mockImplementation((_catalog: unknown, value: { pluginId: string }) => ({
+      sourceVersionId: `source-${value.pluginId}`, objectVersionId: `object-${value.pluginId}`,
+      authorityPluginVersion: "1.0.0", artifactDigest: "a".repeat(64), catalogIdentityExact: true,
+      sourceUnitCount: 1, upstreamNativeCount: 0, publishedUnitCount: 1, missingUnitCount: 0,
+    }));
+    let releaseHeld = (): void => undefined;
+    const held = new Promise<void>((resolve) => { releaseHeld = resolve; });
+    mocks.download.mockImplementation(async ({ sourceVersionId }: { sourceVersionId: string }) => {
+      if (sourceVersionId === "source-limited") {
+        throw Object.assign(new Error("rate limited"), { code: "PC_HTTP", diagnostic: { status: 429 } });
+      }
+      await held;
+      return {
+        rows: [{ stringKey: STRING_KEY, translatedText: "设置" }],
+        etag: `"${sourceVersionId}"`, manifest: { ...exportManifest, sourceVersionId },
+      };
+    });
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: {}, bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+    const pending = synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
+      activationStore, translationPackStore,
+      getState: () => state, replaceState: (next) => { state = next; }, save: vi.fn().mockResolvedValue(undefined),
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledTimes(3), { timeout: 500 });
+      expect(mocks.download).not.toHaveBeenCalledWith(expect.objectContaining({ sourceVersionId: "source-later" }));
+    } finally {
+      releaseHeld();
+    }
+    await expect(pending).rejects.toThrow("rate limited");
+    expect(mocks.download).toHaveBeenCalledTimes(3);
+    expect(getPluginTranslation(state, "later", "zh-CN")).toBeUndefined();
+  });
+
+  it.skipIf(process.env.OBSIDIAN_BENCH_SYNC !== "1")("reports first and available times under fixed download latency", async () => {
+    const ids = ["slow", ...Array.from({ length: 10 }, (_value, index) => `fast-${index}`)];
+    const catalog = (pluginId: string) => ({
+      pluginId, pluginName: pluginId, pluginVersion: "1.0.0", sourceLocale: "en",
+      digest: `${pluginId}-catalog`, artifactDigest: "a".repeat(64),
+      scannedAt: "2026-09-24T00:00:00Z",
+      strings: [{ key: STRING_KEY, source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" }],
+    });
+    let state: PluginState = {
+      ...EMPTY_PLUGIN_STATE,
+      pluginCatalogs: Object.fromEntries(ids.map((id) => [id, catalog(id)])),
+    };
+    mocks.resolvePublished.mockImplementation((_catalog: unknown, value: { pluginId: string }) => ({
+      sourceVersionId: `source-${value.pluginId}`, objectVersionId: `object-${value.pluginId}`,
+      authorityPluginVersion: "1.0.0", artifactDigest: "a".repeat(64), catalogIdentityExact: true,
+      sourceUnitCount: 1, upstreamNativeCount: 0, publishedUnitCount: 1, missingUnitCount: 0,
+    }));
+    let active = 0;
+    let peak = 0;
+    mocks.download.mockImplementation(async ({ sourceVersionId }: { sourceVersionId: string }) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, sourceVersionId === "source-slow" ? 200 : 30));
+      active -= 1;
+      return {
+        rows: [{ stringKey: STRING_KEY, translatedText: "设置" }],
+        etag: `"${sourceVersionId}"`, manifest: { ...exportManifest, sourceVersionId },
+      };
+    });
+    const activationStore = {
+      client: vi.fn().mockResolvedValue({
+        client: {}, bootstrap: { installationId: "installation", intakeCredential: { value: "token" } },
+        authorityWorkspaceId: "workspace",
+      }),
+    } as unknown as ActivationStore;
+    const start = performance.now();
+    let firstSavedMs: number | null = null;
+    const summary = await synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "https://api.trans-hub.net", targetLocale: "zh-CN", excludedPluginIds: [],
+      activationStore, translationPackStore,
+      getState: () => state, replaceState: (next) => { state = next; },
+      save: vi.fn(() => { firstSavedMs ??= performance.now() - start; return Promise.resolve(); }),
+    });
+    const availableMs = performance.now() - start;
+    const serialNetworkReferenceMs = 200 + 10 * 30;
+    process.stdout.write(`OBSIDIAN_SYNC_FIXED_BENCH ${JSON.stringify({
+      plugins: ids.length, preparationLimit: 3, peakDownloads: peak,
+      firstSavedMs: Math.round(firstSavedMs ?? -1), availableMs: Math.round(availableMs),
+      serialNetworkReferenceMs,
+    })}\n`);
+    expect(summary.pulledCount).toBe(ids.length);
+    expect(peak).toBe(3);
+    expect(firstSavedMs).not.toBeNull();
+  });
+
   it.each([408, 429, 500, 503])("目录 HTTP %s 失败不伪造等待或提交新发现", async (status) => {
     mocks.loadCatalog.mockRejectedValue(new Error(`读取 Obsidian 公共目录失败：HTTP ${status}`));
     vi.mocked(submitObsidianPluginDiscovery).mockResolvedValue(discoveryReceipt({
@@ -293,6 +635,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
     expect(submitObsidianLocalizationObservation).not.toHaveBeenCalled();
     expect(summary).toEqual(expect.objectContaining({ submittedCount: 0, waitingCount: 0, failedPluginIds: ["dataview"] }));
+    expect(summary.checkSucceeded).toBe(false);
     expect(state.publicPluginDiscoveries.dataview).toBeUndefined();
     expect(state.pluginSubmissions.dataview?.lastError?.code).toBe("public_catalog_unavailable");
   });
@@ -621,9 +964,12 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     ]);
     expect(getPluginTranslation(state, "dataview", "ko")?.entries[0]?.target).toBe("현재 번역");
     expect(summary).toEqual({
+      checkSucceeded: true,
       submittedCount: 0,
       requestedCount: 0,
       pulledCount: 1,
+      updatedCount: 1,
+      updatedTranslationCount: 1,
       waitingCount: 0,
       translationCount: 1,
       waitingPluginIds: [],
@@ -718,6 +1064,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       failedPluginIds: ["dataview"],
       failedSources: ["public-localization"],
     });
+    expect(result.checkSucceeded).toBe(false);
   });
 
   it("refreshes 101 existing discoveries in bounded ordinal-preserving batches", async () => {
@@ -825,6 +1172,7 @@ describe("synchronizeConfiguredPluginTranslations", () => {
       failedPluginIds: Array.from({ length: 100 }, (_unused, index) => `plugin-${index + 100}`),
       failedSources: ["public-localization"],
     });
+    expect(result.checkSucceeded).toBe(false);
   });
 
   it.each([

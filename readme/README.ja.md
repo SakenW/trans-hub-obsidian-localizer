@@ -10,13 +10,15 @@ Trans-Hub Localizer は、Obsidian コミュニティプラグインに翻訳と
 
 [Obsidian にインストール](obsidian://show-plugin?id=trans-hub-plugin-localizer) · [ローカライズの進捗](https://trans-hub.net/ecosystems/obsidian) · [フィードバックとコミュニティ](https://github.com/SakenW/Trans-Hub/discussions)
 
+**登録には招待が必要です。** [ユーザーコミュニティに参加して開発者と交流する](https://trans-hub.net/en-US/ecosystems/obsidian/invite)：海外のユーザーは Discord でプラグインについて話し合えます。中国語を使う方は WeChat で開発者に連絡し、手動の招待を受けてグループにも招いてもらえます。まず試したい方や WeChat を使わない方は、コミュニティへの参加なしで同じページからメールによる招待を申請できます。招待を受けて登録した後、プラグインに戻ってアカウントを接続してください。
+
 <!-- section: getting-started -->
 ## はじめに
 
 **Obsidian 1.11.4 以降**、Trans-Hub アカウント、認可と同期用のネットワーク接続が必要です。デスクトップとモバイルをサポートしますが、高度なファイル互換パッチはデスクトップ専用です。
 
 1. **設定 → コミュニティプラグイン** で **Trans-Hub Localizer** をインストールして有効にします。
-2. プラグイン設定を開き、Trans-Hub アカウントに接続します。AI モデル、モデル提供元アカウント、API Key の設定は不要です。
+2. [招待の取得方法を確認します](https://trans-hub.net/en-US/ecosystems/obsidian/invite)。WeChat で開発者に連絡して手動の招待を受けるか、メールによる招待を申請してください。招待を受けて登録した後、プラグイン設定に戻り、Trans-Hub アカウントを接続します。AI モデル、モデル提供元アカウント、API Key の設定は不要です。
 3. 翻訳言語を確認します。有効なコミュニティプラグインは自動検出され、不要なものは除外できます。
 
 公開済み訳文は直接再利用されます。不足内容はローカライズ要求として自動送信され、バックグラウンド処理と公開後に同期されます。処理、公開、互換性確認待ちの内容は一時的に原文のままの場合があります。

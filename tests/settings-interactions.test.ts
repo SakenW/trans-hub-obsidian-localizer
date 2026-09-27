@@ -167,6 +167,39 @@ describe("settings user interactions", () => {
     expect(control("重试可恢复项（0）").disabled).toBe(true);
   });
 
+  it("主开关关闭时管理器显示插件官方名称和原始说明", () => {
+    const { plugin, internal, container } = fixture();
+    const state = plugin.getPluginState();
+    Object.assign(state.pluginCatalogs, { dataview: {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "1.0.0",
+      sourceLocale: "en", digest: "catalog", artifactDigest: "a".repeat(64), scannedAt: "now",
+      strings: [
+        { key: "name", source: "Dataview", origins: ["manifest.name"], semanticRole: "official-name", placeholderSignature: "" },
+        { key: "desc", source: "Data views", origins: ["manifest.description"], semanticRole: "description", placeholderSignature: "" },
+      ],
+    } });
+    Object.assign(state.pluginTranslations, { dataview: { "zh-CN": {
+      pluginId: "dataview", pluginVersion: "1.0.0", sourceVersionId: "source",
+      targetLocale: "zh-CN", pulledAt: "now", entries: [
+        { pluginId: "dataview", source: "Dataview", target: "数据视图" },
+        { pluginId: "dataview", source: "Data views", target: "数据展示" },
+      ],
+    } } });
+    const installed = [{ ...plugins[0], description: "Data views" }];
+
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, installed);
+    expect(renderedSettings.some((setting) => setting.name === "数据视图")).toBe(true);
+    expect(container.allText()).toContain("数据展示");
+
+    plugin.settings.pluginTranslationEnabled = false;
+    container.empty();
+    renderedSettings.length = 0;
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, installed);
+    expect(renderedSettings.some((setting) => setting.name === "Dataview")).toBe(true);
+    expect(container.allText()).toContain("Data views");
+    expect(container.allText()).not.toContain("数据展示");
+  });
+
   it("批量重试只提交已选择且可恢复的插件", async () => {
     const { plugin, internal, container } = fixture();
     plugin.settings.excludedPluginIds = ["tables"];

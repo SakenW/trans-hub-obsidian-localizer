@@ -10,6 +10,7 @@ import {
   compareUnicodeScalars,
   isCanonicalPluginCatalogString,
   placeholderSignature,
+  PLUGIN_STRING_SCANNER_REVISION,
   resolvePluginStringScopes,
   resolvePluginStringSemanticRole,
   type CandidateAggregate,
@@ -38,6 +39,9 @@ export type {
   PluginUiString,
 } from "./plugin-string-scanner-evidence";
 export {
+  PLUGIN_STRING_SCANNER_REVISION,
+  SUPPORTED_PLUGIN_STRING_SCANNER_REVISIONS,
+  isSupportedPluginStringScannerRevision,
   decodeJsLiteral,
   hasCompatiblePlaceholderSignature,
   isCanonicalPluginCatalogString,
@@ -65,7 +69,15 @@ export async function scanPluginUiStrings(input: {
   /** The active target locale; used only for local upstream-native detection. */
   readonly targetLocale?: string;
   readonly now?: () => Date;
+  /** Local diagnostics only; never includes source text or user content. */
+  readonly onPhaseMeasured?: (phase: string, elapsedMs: number) => void;
 }): Promise<PluginUiCatalog> {
+  let phaseStartedAt = performance.now();
+  const finishPhase = (phase: string): void => {
+    const finishedAt = performance.now();
+    input.onPhaseMeasured?.(phase, Math.round(finishedAt - phaseStartedAt));
+    phaseStartedAt = finishedAt;
+  };
   const sourceLocale = canonicalLocale(input.sourceLocale);
   const targetLocale = input.targetLocale === undefined
     ? undefined
@@ -80,14 +92,16 @@ export async function scanPluginUiStrings(input: {
     sourceLocale,
     targetLocale,
   );
+  finishPhase("embedded-catalog");
   // Embedded catalogs are often partial, so hardcoded UI scanning always
   // continues. Structured parsing owns the normal path; damaged/unbalanced
   // bundles fail over to the conservative regex exits only.
   const structuredScanSucceeded = embeddedCatalog.tokens !== null
-    && collectStructuredMatches(embeddedCatalog.tokens, collected, sourceLocale);
+    && collectStructuredMatches(input.bundle, embeddedCatalog.tokens, collected, sourceLocale, input.onPhaseMeasured);
   if (!structuredScanSucceeded) {
     collectRegexFallbackMatches(input.bundle, collected, sourceLocale);
   }
+  finishPhase(structuredScanSucceeded ? "structured-ui" : "regex-fallback");
 
   const nativeTargets = embeddedCatalog.nativeTargets ?? new Map<string, string>();
   const strings = await Promise.all([...collected.entries()]
@@ -106,8 +120,10 @@ export async function scanPluginUiStrings(input: {
           }),
       evidence: [...aggregate.evidence.values()].sort(compareEvidence),
     })));
+  finishPhase("candidate-keys");
 
   const artifactDigest = await digestPluginBundle(input.bundle);
+  finishPhase("artifact-digest");
   // Public discovery's trusted executor receives only manifest.json and
   // main.js. Keep README-only copy available to the local runtime, but never
   // make it part of the public source identity: otherwise a client can keep
@@ -140,6 +156,7 @@ export async function scanPluginUiStrings(input: {
       sourceKey,
     })),
   }, { sha256Hex });
+  finishPhase("catalog-identity");
 
   return {
     pluginId: input.plugin.id,
@@ -151,7 +168,7 @@ export async function scanPluginUiStrings(input: {
     ...(targetLocale === undefined ? {} : { scannerTargetLocale: targetLocale }),
     // Semantic role participates in cross-version compatibility. Re-scan
     // persisted catalogs that used the old README-first ordering.
-    patchEvidenceRevision: 14,
+    patchEvidenceRevision: PLUGIN_STRING_SCANNER_REVISION,
     catalogIdentity,
     strings,
     scannedAt: (input.now?.() ?? new Date()).toISOString(),

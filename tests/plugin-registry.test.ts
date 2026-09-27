@@ -122,4 +122,34 @@ describe("parseCommunityRegistry", () => {
       .resolves.toMatchObject({ repository: "owner/sample" });
     expect(request).toHaveBeenCalledTimes(3);
   });
+
+  it("revalidates an expired official directory without using stale entries after a failed refresh", async () => {
+    vi.resetModules();
+    const registry = await import("../src/plugin-registry");
+    const freshMock = await import("./obsidian-mock");
+    const oldEntry = { id: "sample", name: "Old name", description: "Old description.", repo: "owner/sample" };
+    const newEntry = { ...oldEntry, name: "New name" };
+    const request = vi.fn()
+      .mockResolvedValueOnce({ status: 200, text: JSON.stringify([oldEntry]) })
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ status: 200, text: JSON.stringify([newEntry]) });
+    freshMock.setRequestUrlHandler(request);
+    const now = Date.UTC(2026, 8, 24);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      expect((await registry.resolveCommunityPluginIdentity("sample", "1.0.0")).officialName).toBe("Old name");
+      expect((await registry.resolveCommunityPluginIdentity("sample", "1.0.0")).officialName).toBe("Old name");
+      expect(request).toHaveBeenCalledOnce();
+      clock.mockReturnValue(now + 16 * 60_000);
+      await expect(registry.resolveCommunityPluginIdentity("sample", "1.0.0"))
+        .rejects.toThrow("读取 Obsidian 官方社区目录失败");
+      expect(request).toHaveBeenCalledTimes(3);
+      expect((await registry.resolveCommunityPluginIdentity("sample", "1.0.0")).officialName).toBe("New name");
+      expect(request).toHaveBeenCalledTimes(4);
+    } finally {
+      clock.mockRestore();
+      freshMock.resetRequestUrlHandler();
+    }
+  });
 });

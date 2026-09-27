@@ -301,6 +301,26 @@ export function describePluginLocalizationStatus(input: {
   }
   const availableProjection = matchingCurrentLocalizationProjection(input);
   const usableCachedTranslation = hasUsableSafeCachedTranslation(input);
+  // A new catalog can safely reuse rows from an older published pack while
+  // its own discovery has been blocked. Do not let that older published
+  // projection hide the current receipt or discard the usable intersection.
+  if (
+    !exactLocalPublishedTranslation
+    && input.catalog !== undefined
+    && input.publicDiscovery?.statusRevision === 2
+    && input.publicDiscovery.targetLocales.includes(input.targetLocale)
+    && input.publicDiscovery.catalogIdentityDigest === input.catalog.digest
+    && input.publicDiscovery.classification === "blocked"
+    && input.publicDiscovery.taskState === "blocked"
+  ) {
+    return {
+      kind: "blocked",
+      label: describeDiscoveryBlock(input.publicDiscovery.blockedReasonCode),
+      ...(usableCachedTranslation && input.translation !== undefined
+        ? { coverage: safeIntersectionStatus(input.translation, input.catalog, input.targetLocale).coverage }
+        : {}),
+    };
+  }
   // A real server block/revocation is current authority truth even when an old
   // exact cache exists. Published/in-flight projections still let safe cache
   // use remain visible.

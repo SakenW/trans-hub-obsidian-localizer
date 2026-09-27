@@ -22,6 +22,104 @@ const plugin = {
 } as const;
 
 describe("scanPluginUiStrings", () => {
+  it("collects static visible DOM attributes without harvesting data attributes", async () => {
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle: [
+      'const button=document.createElement("button");',
+      'button.setAttribute("aria-label","Open choices");',
+      'button.setAttribute("title","Show selected note");',
+      'button.setAttribute("data-key","Internal configuration key");',
+      'button.setAttribute("aria-label","PKMer 插件市场");',
+      'button.setAttribute(dynamicName,"Dynamic internal value");',
+      'config["setAttribute"]("aria-label","Unproven indexed call");',
+    ].join("\n") });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toEqual(expect.arrayContaining(["Open choices", "Show selected note"]));
+    expect(sources).not.toContain("Internal configuration key");
+    expect(sources).not.toContain("PKMer 插件市场");
+    expect(sources).not.toContain("Dynamic internal value");
+    expect(sources).not.toContain("Unproven indexed call");
+  });
+  it("collects PluginSettingTab definitions and proven slider-helper labels", async () => {
+    const bundle = [
+      'class Settings extends Obsidian.PluginSettingTab {',
+      'getSettingDefinitions(){return [{name:"Help",desc:"Read the documentation.",render:setting=>setting.addButton()},',
+      '{type:"group",heading:"Typography",items:[this.sliderSetting("Small font size","Text in sidebars and tabs.","fontSize"),this.internal("Internal network key","Private configuration value")]}]}',
+      'sliderSetting(name,desc,key){return {name:name,desc:desc,render:setting=>setting.addSlider()}}',
+      'internal(name,desc){return {name:name,desc:desc,key:"private"}}',
+      '}',
+      'class Other {getSettingDefinitions(){return [{name:"Internal title",desc:"Private description",render:setting=>setting.addButton()}]}}',
+    ].join("\n");
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toEqual(expect.arrayContaining([
+      "Help", "Read the documentation.", "Typography", "Small font size", "Text in sidebars and tabs.",
+    ]));
+    expect(sources).not.toContain("Internal network key");
+    expect(sources).not.toContain("Private configuration value");
+    expect(sources).not.toContain("Internal title");
+    expect(catalog.strings.find((item) => item.source === "Small font size")?.evidence)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ symbol: "pluginSettingTabHelper" })]));
+  });
+  it("rejects helper labels backed only by nested or shadowed returns", async () => {
+    const bundle = [
+      'class Settings extends Obsidian.PluginSettingTab {',
+      'getSettingDefinitions(){return [{type:"group",heading:"Private group",items:[this.sliderSetting("Private slider","Internal network value","key")]}]}',
+      'sliderSetting(name,desc){const nested=()=>{return {name:name,desc:desc,render:x=>x}};return {key:name}}',
+      'sliderSetting(name,desc){return {name:name,desc:desc,render:x=>x}}',
+      '}',
+    ].join("\n");
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle });
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Private slider");
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Internal network value");
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Private group");
+  });
+  it("collects Svelte DOM accessibility labels only through a proven attribute helper", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin, sourceLocale: "en",
+      bundle: [
+        'function attr(node,attribute,value){if(value==null)node.removeAttribute(attribute);else node.setAttribute(attribute,value)}',
+        'function create(){button=element("button");attr(button,"aria-label","Move Status Bar Item Down");attr(button,"title","Remove Status Bar Item");attr(button,"data-key","Internal configuration key")}',
+        'function internal(node,attribute,value){store.set(attribute,value)}',
+        'internal(button,"aria-label","Internal command key");',
+        'attr(button,"aria-label",dynamicLabel);',
+      ].join("\n"),
+    });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toEqual(expect.arrayContaining(["Move Status Bar Item Down", "Remove Status Bar Item"]));
+    expect(sources).not.toContain("Internal configuration key");
+    expect(sources).not.toContain("Internal command key");
+    expect(catalog.strings.find((item) => item.source === "Move Status Bar Item Down")?.evidence)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ symbol: "svelteDomAttribute" })]));
+  });
+  it("rejects a shadowed Svelte attribute helper", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin, sourceLocale: "en",
+      bundle: 'function attr(node,name,value){node.setAttribute(name,value)} function attr(node,name,value){store.set(name,value)} attr(button,"aria-label","Private workflow key");',
+    });
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Private workflow key");
+  });
+  it("collects bounded Svelte function returns only when its context slot creates text", async () => {
+    const helper = 'function metricToString(kind){switch(kind){case 1:return "Words in Note";case 2:return "Chars in Note";case 3:return "Total Notes";default:return "Select Options"}}';
+    const bound = 'function instance(){return [plugin,items,altItems,metricToString]}';
+    const visible = 'function block(ctx){let label=/*metricToString*/ ctx[3](ctx[0])+"";let node;return {c(){node=text(label)}}}';
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle: [helper, bound, visible].join("\n") });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toEqual(expect.arrayContaining(["Words in Note", "Chars in Note", "Total Notes", "Select Options"]));
+    expect(catalog.strings.find((item) => item.source === "Words in Note")?.evidence)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ symbol: "svelteReturnText" })]));
+    expect(catalog.strings.find((item) => item.source === "Words in Note")?.evidence?.[0])
+      .not.toHaveProperty("literalStart");
+    for (const suffix of [
+      'function block(ctx){let label=/*metricToString*/ ctx[3](ctx[0])+"";log(label)}',
+      'function block(ctx){let label=/*metricToString*/ ctx[2](ctx[0])+"";let node;return {c(){node=text(label)}}}',
+      'function block(ctx){let label=/*metricToString*/ ctx[3](ctx[0])+"";log(label)} function other(){let node=text(label)}',
+    ]) {
+      const rejected = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle: [helper, bound, suffix].join("\n") });
+      expect(rejected.strings.map((item) => item.source)).not.toContain("Words in Note");
+    }
+    const shadowed = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle: [helper, helper, bound, visible].join("\n") });
+    expect(shadowed.strings.map((item) => item.source)).not.toContain("Words in Note");
+  });
   it("将社区安装器附加的 nosourcemap 尾注排除在制品身份之外", async () => {
     const officialBundle = 'setting.setName("Open settings");';
     const [official, installed] = await Promise.all([
@@ -195,7 +293,32 @@ describe("scanPluginUiStrings", () => {
       sourceLocale: "en",
       bundle: 'el.textContent = "Fresh sink";',
     });
-    expect(catalog.patchEvidenceRevision).toBe(14);
+    expect(catalog.patchEvidenceRevision).toBe(31);
+  });
+
+  it("collects indexed warning copy only when a local helper renders it as DOM text", async () => {
+    const warning = "Pandoc is not installed or accessible on your PATH. This plugin's functionality will be limited.";
+    const bundle = [
+      `this.errorMessages = { pandoc: ${JSON.stringify(warning)}, latex: "LaTeX is not installed." };`,
+      'const createError = (text) => containerEl.createEl("p", { cls: "plugin-error", text });',
+      'createError(this.errorMessages[binary]);',
+      'this.internalMessages = { secret: "Internal diagnostic message" };',
+    ].join("\n");
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle });
+    const hit = catalog.strings.find((item) => item.source === warning);
+    expect(hit?.evidence?.[0]).toMatchObject({
+      strategy: "structured", symbol: "indexedErrorMessage",
+    });
+    expect(typeof hit?.evidence?.[0]?.literalStart).toBe("number");
+    expect(typeof hit?.evidence?.[0]?.literalEnd).toBe("number");
+    expect(catalog.strings.map((item) => item.source)).toContain("LaTeX is not installed.");
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Internal diagnostic message");
+
+    const unproven = await scanPluginUiStrings({
+      plugin, sourceLocale: "en",
+      bundle: `this.errorMessages = { pandoc: ${JSON.stringify(warning)} }; const createError = (text) => console.error(text); createError(this.errorMessages[binary]);`,
+    });
+    expect(unproven.strings.map((item) => item.source)).not.toContain(warning);
   });
 
   it("keeps runtime semantics when README repeats a proven UI literal", () => {
@@ -363,8 +486,9 @@ describe("scanPluginUiStrings", () => {
       sourceLocale: "en",
       bundle: [
         'function choiceName(kind) { switch (kind) { case "Template": return "New template"; case "Capture": return "New capture"; case "Macro": return "New macro"; } }',
+        'button.onClick(() => editor.onAddChoice(choiceName(kind), kind));',
         'const markup = q(\'<div><h4>Location</h4><!></div>\');',
-        'const group = { type: "group", heading: "Choice picker", items: [{ name: "New note from template", desc: docs("Collect a choice\\\'s inputs in one form before it runs.", ref), control: { type: "dropdown", options: { bottom: "Show at the bottom (keeps your top choice first)", top: "Show at the top", off: "Hide" } } }] };',
+        'const group = { type: "group", heading: "Choice picker", items: [{ name: "New note from template", desc: this.descWithDocsLink("Collect a choice\\\'s inputs in one form before it runs.", ref), control: { type: "dropdown", options: { bottom: "Show at the bottom (keeps your top choice first)", top: "Show at the top", off: "Hide" } } }] };',
         'mount(node, { name: "Capture to active file", desc: "Capture into whichever note is open when the choice runs, instead of a fixed target.", control: value => value });',
         'mount(node, { name: "Create file if it doesn\\\'t exist", control: value => value });',
         'mount(node, { name: "Behavior", heading: !0 });',
@@ -392,6 +516,196 @@ describe("scanPluginUiStrings", () => {
       .toMatchObject({ symbol: "svelteForm" });
     expect(catalog.strings.find((item) => item.source === "Behavior")?.evidence?.[0])
       .toMatchObject({ symbol: "svelteForm" });
+  });
+
+  it("keeps a long proven settings description without admitting arbitrary long configuration text", async () => {
+    const description = 'List/object values from scripts are always written as proper Obsidian properties (a list becomes a List). This toggle additionally converts string values into typed properties: a comma or bullet-list string becomes a List, "42" becomes a Number, "true" becomes a Checkbox, etc. Disabled by default; the string conversion is a beta heuristic that may have edge cases.';
+    expect(description.length).toBeGreaterThan(300);
+    expect(description.length).toBeLessThan(512);
+    const bundle = `const group={type:"group",heading:"Templates & properties",items:[{name:"Convert values",desc:${JSON.stringify(description)}}]};`;
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle });
+    expect(catalog.strings.map((item) => item.source)).toContain(description);
+    const unproven = await scanPluginUiStrings({
+      plugin, sourceLocale: "en", bundle: `const internal={description:${JSON.stringify(description)}};`,
+    });
+    expect(unproven.strings.map((item) => item.source)).not.toContain(description);
+    const overLimit = "A".repeat(513);
+    const rejected = await scanPluginUiStrings({
+      plugin, sourceLocale: "en", bundle: `setting.setDesc(${JSON.stringify(overLimit)});`,
+    });
+    expect(rejected.strings.map((item) => item.source)).not.toContain(overLimit);
+  });
+
+  it("extracts linked settings text only through proven text-node and link-label helpers", async () => {
+    const lead = "Collect a choice's inputs in one form before it runs, instead of one prompt at a time.";
+    const label = "Learn more about one-page inputs";
+    const bundle = [
+      'function link(parent,url,label){let a=parent.createEl("a");a.textContent=label;a.href=url;parent.append(a);return a}',
+      'function linked(lead,url,label="Learn more"){let fragment=createFragment();return fragment.append(document.createTextNode(lead)),link(fragment,url,label),fragment}',
+      `const group={type:"group",heading:"Input",items:[{name:"One-page input for choices",desc:linked(${JSON.stringify(lead)},docs.onePage,${JSON.stringify(label)}),control:{type:"toggle"}}]};`,
+      'function internal(lead,url,label){return console.log(lead,url,label)}',
+      'const other={type:"group",heading:"Other",items:[{name:"Internal",desc:internal("Internal key",docs.other,"Internal link"),control:{type:"toggle"}}]};',
+    ].join(";");
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle });
+    expect(catalog.strings.map((item) => item.source)).toEqual(expect.arrayContaining([lead, label]));
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Internal key");
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Internal link");
+    expect(catalog.strings.find((item) => item.source === lead)?.evidence?.[0]?.symbol)
+      .toBe("settingsLinkedFragment");
+  });
+
+  it("does not assume an arbitrary helper's first literal is visible settings copy", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: 'const group = { type: "group", heading: "Visible group", items: [{ name: "Visible setting", desc: internalHelper("Internal configuration key", ref), control: { type: "toggle" } }] };',
+    });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toContain("Visible setting");
+    expect(sources).not.toContain("Internal configuration key");
+  });
+
+  it("collects static reactive choice labels only when a Svelte text node consumes them", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: [
+        'let choiceLabel=P(()=>compact()?"Add choice":"New choice"),folderLabel=P(()=>compact()?"Add folder":"New folder");',
+        'var choiceText=de(choiceNode,!0),folderText=de(folderNode,!0);',
+        'ae(()=>{ue(choiceText,h(choiceLabel));ue(folderText,h(folderLabel))});',
+        'let hidden=P(()=>compact()?"Internal enabled":"Internal disabled");',
+        'var wrong=other(node,!0);log(h(hidden));',
+        'function first(){let cross=P(()=>flag()?"Private yes":"Private no");}',
+        'function second(){var text=de(node,!0);ae(()=>{ue(text,h(cross))})}',
+      ].join("\n"),
+    });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toEqual(expect.arrayContaining([
+      "Add choice", "New choice", "Add folder", "New folder",
+    ]));
+    expect(sources).not.toContain("Internal enabled");
+    expect(sources).not.toContain("Internal disabled");
+    expect(sources).not.toContain("Private yes");
+    expect(sources).not.toContain("Private no");
+    expect(catalog.strings.find((item) => item.source === "New choice")?.evidence?.[0])
+      .toMatchObject({ symbol: "svelteReactiveText" });
+    expect(catalog.strings.find((item) => item.source === "New choice")?.evidence?.[0]?.literalStart)
+      .toBeUndefined();
+  });
+
+  it("collects immutable linked settings descriptions as complete text-node variants", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: [
+        'var packageIntro="Bundle or import QuickAdd automations as reusable packages.";',
+        'const group={type:"group",heading:"Choices & packages",items:[{name:"Packages",desc:packageIntro,render:x=>x}]};',
+        'function packageDesc(empty){return this.descWithDocsLink(empty?`${packageIntro} Export becomes available once you have a choice. `:`${packageIntro} `,docs,"Learn more about packages")}',
+        'var internal="Internal connection setting";',
+        'function notVisible(empty){return this.descWithDocsLink(empty?`${internal} enabled`:`${internal} disabled`,docs)}',
+        'var mutable="Mutable description";mutable="Changed description";',
+        'const other={type:"group",heading:"Other",items:[{name:"Mutable",desc:mutable,render:x=>x}]};',
+        'function changed(empty){return this.descWithDocsLink(empty?`${mutable} first`:`${mutable} second`,docs)}',
+      ].join("\n"),
+    });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toContain("Bundle or import QuickAdd automations as reusable packages. Export becomes available once you have a choice.");
+    expect(sources).toContain("Bundle or import QuickAdd automations as reusable packages.");
+    expect(sources).not.toContain("Internal connection setting enabled");
+    expect(sources).not.toContain("Mutable description first");
+    expect(catalog.strings.find((item) => item.source.endsWith("once you have a choice."))?.evidence?.[0])
+      .toMatchObject({ symbol: "settingsComposedDocumentation" });
+  });
+
+  it("does not treat JSX names or MathML AST names with children as setting labels", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: [
+        'new MathNode({ name: "mi", attributes: {}, children: [], value: "x" });',
+        'jsx(Dropdown, { name: "months", children: options, value: currentMonth });',
+        'mount(row, { name: "Visible setting", control: value => value });',
+      ].join("\n"),
+    });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).not.toContain("mi");
+    expect(sources).not.toContain("months");
+    expect(sources).toContain("Visible setting");
+  });
+
+  it("requires a component call before treating name plus control as a form row", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: [
+        'const internal = { name: "Internal control key", control: value => value };',
+        'const hidden = { name: "Network config key", control: { type: "network", key: "network" } };',
+        'const items = [{ name: "Typed setting", desc: "Visible setting description", control: { type: "toggle", key: "enabled" } }];',
+        'mount(row, { name: "Visible setting", control: value => value });',
+      ].join("\n"),
+    });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).not.toContain("Internal control key");
+    expect(sources).not.toContain("Network config key");
+    expect(sources).toContain("Typed setting");
+    expect(sources).toContain("Visible setting description");
+    expect(sources).toContain("Visible setting");
+  });
+
+  it("does not borrow an unrelated brace for a malformed switch choice factory", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: 'switch (kind); const options = { case "Template": return "New template", case "Capture": return "New capture", case "Macro": return "New macro" };',
+    });
+    expect(catalog.strings.map((item) => item.source)).not.toContain("New template");
+  });
+
+  it("does not treat internal New-prefixed switch values as UI without a choice callback", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: 'function internalName(kind) { switch (kind) { case "Template": return "New template"; case "Capture": return "New capture"; case "Macro": return "New macro"; } } const internal = internalName("Template");',
+    });
+    expect(catalog.strings.map((item) => item.source)).not.toContain("New template");
+  });
+
+  it("does not connect a shadowed factory name to another choice callback", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: 'function choiceName(kind) { switch (kind) { case "Template": return "New template"; case "Capture": return "New capture"; case "Macro": return "New macro"; } } function choiceName(other) { return other; } editor.onAddChoice(choiceName(kind), kind);',
+    });
+    expect(catalog.strings.map((item) => item.source)).not.toContain("New template");
+  });
+
+  it("keeps Svelte template text at real node boundaries without patching the whole HTML literal", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: "const markup = q('<div><span>Alpha</span><span>Beta</span><!><p>Save &amp; Close</p><p>Before <!> After</p><span title=\"Hidden > attribute\">Visible</span><span>Unknown &custom;</span><code>Code internals</code><script>Script internals</script><style>Style internals</style></div>');",
+    });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toEqual(expect.arrayContaining(["Alpha", "Beta", "Save & Close", "Before", "After", "Visible"]));
+    expect(sources).not.toEqual(expect.arrayContaining(["Alpha Beta", "Save &amp; Close", "Unknown &custom;", "Code internals", "Script internals", "Style internals", "Hidden > attribute"]));
+    expect(catalog.strings.find((item) => item.source === "Save & Close")?.evidence?.[0])
+      .toMatchObject({ symbol: "svelteTemplate" });
+    expect(catalog.strings.find((item) => item.source === "Save & Close")?.evidence?.[0]?.literalStart)
+      .toBeUndefined();
+  });
+
+  it("keeps punctuated copy in proven UI sinks through a static wrapper but rejects HTML literals", async () => {
+    const catalog = await scanPluginUiStrings({
+      plugin,
+      sourceLocale: "en",
+      bundle: 'new Setting(el).setName(R("Date & Time")).setName(R("Add archive date/time after card title")).setDesc(R("When toggled, dates link to daily notes. Eg. [[2021-04-26]]")).setDesc(R("<div>Unsafe HTML description</div>"));',
+    });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toEqual(expect.arrayContaining([
+      "Date & Time", "Add archive date/time after card title",
+      "When toggled, dates link to daily notes. Eg. [[2021-04-26]]",
+    ]));
+    expect(sources).not.toContain("<div>Unsafe HTML description</div>");
   });
 
   it("keeps README-only copy local while excluding it from public source identity", async () => {
@@ -722,6 +1036,33 @@ describe("scanPluginUiStrings", () => {
     expect(settingsSpan.literalEnd).toBe((settingsSpan.literalStart ?? 0) + "Copilot Settings".length + 2);
   });
 
+  it("collects visible attributes from bundled JSX runtime native elements only", async () => {
+    const bundle = [
+      '(0,Bo.jsx)("div", {className:"nn-shortcuts-resize-handle",role:"separator","aria-label":"Resize pinned shortcuts"});',
+      '(0,Bo.jsxs)("button", {title:"Open pinned shortcuts",children:"Pinned shortcuts"});',
+      '(0,Bo.jsx)("input", {placeholder:"Find files"});',
+      '(0,Bo.jsx)("span", {"aria-hidden":"true",children:"Decorative glyph"});',
+      '(0,Bo.jsx)("span", {"aria-hidden":true,children:"Decorative boolean"});',
+      '(0,Bo.jsx)("span", {"aria-hidden":!0,children:"Decorative minified"});',
+      '(0,Bo.jsx)(Dropdown, {title:"Component config title",name:"months"});',
+      '(0,Bo.jsx)("script", {title:"Script payload"});',
+      '(0,Bo.jsx)("div", {"aria-label":getLabel(),"data-title":"Internal metadata"});',
+      'Bo.jsx("div", {"aria-label":"Unproven direct factory"});',
+    ].join("\n");
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle });
+    const sources = catalog.strings.map((item) => item.source);
+
+    expect(sources).toEqual(expect.arrayContaining([
+      "Resize pinned shortcuts", "Open pinned shortcuts", "Pinned shortcuts", "Find files",
+    ]));
+    for (const rejected of [
+      "Component config title", "months", "Script payload", "Internal metadata", "Unproven direct factory",
+      "Decorative glyph", "Decorative boolean", "Decorative minified",
+    ]) expect(sources).not.toContain(rejected);
+    expect(catalog.strings.find((item) => item.source === "Resize pinned shortcuts")?.evidence)
+      .toEqual([expect.objectContaining({ origin: "ui-property", strategy: "structured", symbol: "aria-label" })]);
+  });
+
   it("records exact literal spans for default-interop React regex fallback", async () => {
     const bundle = [
       'factory.default.createElement("span", null, "Copilot Settings");',
@@ -858,6 +1199,30 @@ describe("scanPluginUiStrings", () => {
       "Arrays maskieren",
       "Internal worker",
     ]));
+  });
+
+  it("follows bounded aliases from a locale registry to its literal dictionaries", async () => {
+    const bundle = [
+      'var english={"Tag sort order":"Tag sort order","Set an explicit sort order for the specified tags.":"Set an explicit sort order for the specified tags.","Add tag":"Add tag"},enAlias=english;',
+      'var zh={"Tag sort order":"标签排序","Set an explicit sort order for the specified tags.":"指定标签的排序顺序。","Add tag":"添加标签"},zhAlias=zh;',
+      'var de={"Tag sort order":"Tag-Sortierung","Set an explicit sort order for the specified tags.":"Tags sortieren.","Add tag":"Tag hinzufügen"};',
+      'var locales={de:de,en:enAlias,zh:zhAlias};',
+      'var internal={"Debug worker":"Debug worker"};',
+    ].join("");
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", targetLocale: "zh-CN", bundle });
+    expect(catalog.strings.map((item) => item.source)).toContain("Tag sort order");
+    expect(catalog.strings.find((item) => item.source === "Tag sort order")?.nativeTarget).toBe("标签排序");
+    expect(catalog.strings.map((item) => item.source)).not.toContain("Debug worker");
+
+    const second = 'var en={month:"April",day:"Monday",year:"Year"},fr={month:"Avril",day:"Lundi",year:"Année"},es={month:"Abril",day:"Lunes",year:"Año"},dates={en:en,fr:fr,es:es};';
+    const combined = await scanPluginUiStrings({ plugin, sourceLocale: "en", targetLocale: "zh-CN", bundle: bundle + second });
+    expect(combined.strings.map((item) => item.source)).toEqual(expect.arrayContaining(["Tag sort order", "April"]));
+
+    const cycle = await scanPluginUiStrings({
+      plugin, sourceLocale: "en",
+      bundle: bundle.replace("enAlias=english", "enAlias=other,other=enAlias"),
+    });
+    expect(cycle.strings.map((item) => item.source)).not.toContain("Tag sort order");
   });
 
   it("prefers the generic locale registry over STRINGS_* export aliases", async () => {
@@ -1021,6 +1386,18 @@ describe("scanPluginUiStrings", () => {
 });
 
 describe("literal and placeholder safety", () => {
+  it("decodes ES Unicode code-point escapes while rejecting invalid scalar values", async () => {
+    const literal = String.raw`"Text and Highlight Colors \u{1F9EA}"`;
+    expect(decodeJsLiteral(literal)).toBe("Text and Highlight Colors 🧪");
+    for (const invalid of [String.raw`"\u{}"`, String.raw`"\u{D800}"`, String.raw`"\u{110000}"`, String.raw`"\u{1234567}"`]) {
+      expect(decodeJsLiteral(invalid)).toBeNull();
+    }
+    const catalog = await scanPluginUiStrings({
+      plugin, sourceLocale: "en", bundle: String.raw`setting.setName("Text and Highlight Colors \u{1F9EA}");`,
+    });
+    expect(catalog.strings.map((item) => item.source)).toContain("Text and Highlight Colors 🧪");
+  });
+
   it("accepts a legal escaped Unicode surrogate pair but rejects isolated halves", () => {
     expect(decodeJsLiteral('"\\uD83D\\uDE80 Launch"')).toBe("🚀 Launch");
     expect(decodeJsLiteral('"\\uD83D Launch"')).toBeNull();

@@ -49,7 +49,7 @@ describe("Obsidian settings page layout", () => {
     expect(settingsSource).not.toContain("refreshSelectedPluginStatus");
     expect(settingsSource).toContain("retryRecoverablePlugins");
     expect(settingsSource).not.toContain("syncInstalledPluginTranslations(");
-    expect(settingsSource).toContain("processSelectedPlugins()");
+    expect(settingsSource).toContain("processSelectedPlugins(false, (progress)");
     expect(settingsSource).not.toContain("processSelectedPlugins(true)");
   });
 

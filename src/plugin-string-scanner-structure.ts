@@ -37,9 +37,16 @@ export async function collectEmbeddedEnglishCatalog(
   const tokens = tokenizeJavascript(bundle);
   if (tokens === null) return { nativeTargets: null, tokens: null };
   const assignments = new Map<string, readonly Token[]>();
+  const aliases = new Map<string, string>();
   for (let index = 0; index < tokens.length - 2; index += 1) {
     const name = tokens[index];
-    if (name?.kind !== "identifier" || tokens[index + 1]?.raw !== "=" || tokens[index + 2]?.raw !== "{") continue;
+    if (name?.kind !== "identifier" || tokens[index + 1]?.raw !== "=") continue;
+    if (tokens[index + 2]?.kind === "identifier"
+      && ["var", "let", "const", ",", ";"].includes(tokens[index - 1]?.raw ?? "")
+      && [",", ";"].includes(tokens[index + 3]?.raw ?? "")) {
+      aliases.set(name.raw, tokens[index + 2]?.raw ?? "");
+    }
+    if (tokens[index + 2]?.raw !== "{") continue;
     const end = matchingTokenIndex(tokens, index + 2);
     if (end === -1) continue;
     assignments.set(name.raw, tokens.slice(index + 2, end + 1));
@@ -62,6 +69,7 @@ export async function collectEmbeddedEnglishCatalog(
     if (englishEntries !== undefined) {
       const nativeEntries = await collectNativeLocaleEntries(
         assignments,
+        aliases,
         new Map(),
         targetLocale,
       );
@@ -72,29 +80,64 @@ export async function collectEmbeddedEnglishCatalog(
       }
     }
   }
-  for (const registry of assignments.values()) {
-    const localeTargets = localeRegistryTargets(registry);
-    if (localeTargets.size < 3) continue;
+  const registries = [...assignments.values()]
+    .map((registry) => localeRegistryTargets(registry))
+    .filter((targets) => targets.size >= 3 && targets.has("en"))
+    .sort((left, right) => Number(assignments.has(right.get("en") ?? ""))
+      - Number(assignments.has(left.get("en") ?? "")));
+  const nativeTargets = new Map<string, string>();
+  const rejectedNativeSources = new Set<string>();
+  let acceptedRegistries = 0;
+  for (const localeTargets of registries) {
     const englishTarget = localeTargets.get("en");
-    const english = englishTarget === undefined ? undefined : assignments.get(englishTarget);
+    const english = englishTarget === undefined ? undefined : resolveAssignedObject(englishTarget, assignments, aliases);
     if (english === undefined) continue;
     const englishEntries = collectBoundedLocaleEntries(english);
     if (englishEntries === undefined) continue;
     addLocaleEntries(target, englishEntries, sourceLocale);
-    if (targetLocale === undefined) return { nativeTargets: new Map(), tokens };
-    const nativeEntries = await collectNativeLocaleEntries(
-      assignments,
-      localeTargets,
-      targetLocale,
-    );
-    return { nativeTargets: mapNativeTargets(englishEntries, nativeEntries), tokens };
+    acceptedRegistries += 1;
+    if (targetLocale !== undefined) {
+      const nativeEntries = await collectNativeLocaleEntries(
+        assignments, aliases, localeTargets, targetLocale,
+      );
+      for (const [source, translation] of mapNativeTargets(englishEntries, nativeEntries)) {
+        if (rejectedNativeSources.has(source)) continue;
+        const previous = nativeTargets.get(source);
+        if (previous !== undefined && previous !== translation) {
+          nativeTargets.delete(source);
+          rejectedNativeSources.add(source);
+        } else nativeTargets.set(source, translation);
+      }
+    }
+    // Bound source growth to two proven registries. Direct bindings come
+    // first, preserving the existing catalog when an aliased one is added.
+    if (acceptedRegistries === 2) break;
   }
+  if (acceptedRegistries > 0) return { nativeTargets, tokens };
   const exportedNative = collectExportedLocaleCatalog(tokens, targetLocale);
   if (exportedNative !== undefined) {
     addLocaleEntries(target, exportedNative.english, sourceLocale);
     return { nativeTargets: exportedNative.nativeTargets, tokens };
   }
   return { nativeTargets: null, tokens };
+}
+
+function resolveAssignedObject(
+  name: string,
+  assignments: ReadonlyMap<string, readonly Token[]>,
+  aliases: ReadonlyMap<string, string>,
+): readonly Token[] | undefined {
+  const visited = new Set<string>();
+  for (let depth = 0; depth < 3; depth += 1) {
+    const object = assignments.get(name);
+    if (object !== undefined) return object;
+    if (visited.has(name)) return undefined;
+    visited.add(name);
+    const next = aliases.get(name);
+    if (next === undefined) return undefined;
+    name = next;
+  }
+  return undefined;
 }
 
 /**
@@ -319,12 +362,13 @@ function collectBoundedLocaleEntries(tokens: readonly Token[]): readonly LocaleE
 
 async function collectNativeLocaleEntries(
   assignments: ReadonlyMap<string, readonly Token[]>,
+  aliases: ReadonlyMap<string, string>,
   localeTargets: ReadonlyMap<string, string>,
   targetLocale: string,
 ): Promise<readonly LocaleEntry[]> {
   const target = localeTargets.get(canonicalLocale(targetLocale));
   if (target !== undefined) {
-    const tokens = assignments.get(target);
+    const tokens = resolveAssignedObject(target, assignments, aliases);
     if (tokens !== undefined) return collectBoundedLocaleEntries(tokens) ?? [];
   }
   const packed = packedLocaleValue(assignments.get("PLUGIN_LANGUAGES"), targetLocale);

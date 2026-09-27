@@ -10,13 +10,15 @@ Trans-Hub Localizer는 Obsidian 커뮤니티 플러그인에 번역 및 UI 현�
 
 [Obsidian에서 설치](obsidian://show-plugin?id=trans-hub-plugin-localizer) · [현지화 진행 상황 보기](https://trans-hub.net/ecosystems/obsidian) · [피드백 및 커뮤니티](https://github.com/SakenW/Trans-Hub/discussions)
 
+**가입하려면 초대가 필요합니다.** [사용자 커뮤니티에 참여해 개발자와 소통하세요](https://trans-hub.net/en-US/ecosystems/obsidian/invite). 해외 사용자는 Discord에서 플러그인에 관해 이야기할 수 있습니다. 중국어 사용자는 WeChat으로 개발자에게 연락해 수동 초대를 받고 그룹에도 초대받을 수 있습니다. 먼저 사용해 보고 싶거나 WeChat을 사용하지 않는다면 커뮤니티에 가입하지 않고도 같은 페이지에서 이메일 초대를 신청할 수 있습니다. 초대를 받아 가입한 뒤 플러그인으로 돌아와 계정을 연결하세요.
+
 <!-- section: getting-started -->
 ## 시작하기
 
 **Obsidian 1.11.4 이상**, Trans-Hub 계정, 그리고 인증 및 동기화를 위한 네트워크 연결이 필요합니다. 데스크톱과 모바일을 지원하지만, 고급 파일 호환성 패치는 데스크톱에서만 사용할 수 있습니다.
 
 1. **설정 → 커뮤니티 플러그인**에서 **Trans-Hub Localizer**를 설치하고 활성화합니다.
-2. 플러그인 설정을 열고 Trans-Hub 계정에 연결합니다. AI 모델, 모델 공급자 계정 또는 API Key를 설정할 필요가 없습니다.
+2. [초대 방법을 확인하세요](https://trans-hub.net/en-US/ecosystems/obsidian/invite). WeChat으로 개발자에게 연락해 수동 초대를 받거나 이메일 초대를 신청하세요. 초대를 받아 가입한 다음 플러그인 설정으로 돌아와 Trans-Hub 계정을 연결합니다. AI 모델, 모델 공급자 계정 또는 API Key를 설정할 필요가 없습니다.
 3. 번역 언어를 확인합니다. 플러그인이 활성화된 커뮤니티 플러그인을 자동으로 찾아내며, 현지화하지 않을 플러그인은 제외할 수 있습니다.
 
 이미 게시된 번역은 바로 재사용합니다. 누락된 내용은 현지화 요청으로 자동 제출되며, 백그라운드에서 처리되고 게시된 후 동기화됩니다. 처리, 게시 또는 호환성 검사를 기다리는 내용은 일시적으로 원문으로 남을 수 있습니다.

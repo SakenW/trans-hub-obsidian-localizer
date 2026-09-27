@@ -170,6 +170,56 @@ describe("describePluginLocalizationStatus", () => {
     expect(result.label).toContain("来源验证未通过");
   });
 
+  it("shows a current discovery block alongside safely reused older translations", () => {
+    const catalog = {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+      sourceLocale: "en", digest: "current-catalog", artifactDigest: "artifact",
+      scannedAt: "2026-09-09T00:00:00Z",
+      strings: [
+        { key: "one", source: "Settings", origins: ["ui-call" as const], placeholderSignature: "" },
+        { key: "two", source: "New option", origins: ["ui-call" as const], placeholderSignature: "" },
+      ],
+    };
+    const translation = {
+      pluginId: "dataview", pluginVersion: "0.5.68", sourceVersionId: "old-source",
+      targetLocale: "zh-CN" as const,
+      entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }],
+      pulledAt: "2026-09-09T00:00:00Z",
+    };
+    const publicDiscovery = {
+      discoveryId: "discovery", installationId: "installation", submittedAt: "2026-09-09T00:00:00Z",
+      statusRevision: 2 as const, targetLocales: ["zh-CN"],
+      classification: "blocked", taskState: "blocked", blockedReasonCode: "validator_not_approved",
+      catalogIdentityDigest: catalog.digest,
+      localizationProjection: {
+        kind: "public_localization_status_projection" as const,
+        protocol: { protocol: "trans-hub.client-protocol" as const, revision: 1 as const, schemaRevision: 1 as const },
+        projectionRevision: 1 as const, discoveryId: "discovery", registryKey: "official-directory",
+        externalObjectId: "dataview", targetLocale: "zh-CN" as never,
+        catalogIdentityDigest: { algorithm: "sha256" as const, domain: "logical_object" as const, hex: "old-catalog" as never },
+        sourceVersionId: "old-source", stage: "published" as const, updatedAt: "2026-09-09T00:00:00Z",
+      },
+    };
+    const blocked = describePluginLocalizationStatus({ catalog, translation, publicDiscovery, targetLocale: "zh-CN" });
+    expect(blocked.kind).toBe("blocked");
+    expect(blocked.label).toContain("服务端核查");
+    expect(blocked.coverage?.headline).toContain("1/2");
+    expect(blocked.coverage?.complete).toBe(false);
+
+    const withoutCache = describePluginLocalizationStatus({
+      catalog, publicDiscovery, targetLocale: "zh-CN",
+    });
+    expect(withoutCache.kind).toBe("blocked");
+    expect(withoutCache.coverage).toBeUndefined();
+
+    const stale = describePluginLocalizationStatus({
+      catalog, translation, targetLocale: "zh-CN",
+      publicDiscovery: { ...publicDiscovery, catalogIdentityDigest: "previous-catalog" },
+    });
+    expect(stale.kind).toBe("localized");
+    expect(stale.coverage?.headline).toContain("1/2");
+  });
+
   it("将公共目录发现的等待与阻断状态明确呈现", () => {
     const baseDiscovery = {
       discoveryId: "019f0000-0000-7000-8000-000000000001",

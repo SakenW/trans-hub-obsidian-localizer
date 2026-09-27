@@ -14,7 +14,7 @@ import { isClientDisplayName, localizedClientName, translate } from "./client-lo
 import type TransHubObsidianPlugin from "./main";
 import { localizedPluginDescription, localizedPluginDisplayName } from "./plugin-catalog-diff";
 import { discoverInstalledPlugins, type InstalledObsidianPlugin } from "./plugin-discovery";
-import { getPluginSubmissionForLocale, getPluginTranslation } from "./plugin-state";
+import { getPluginSubmissionForLocale, getPluginTranslation, translationExportStateKey } from "./plugin-state";
 import {
   filterSelectablePlugins,
   selectedPluginCount,
@@ -55,7 +55,7 @@ import {
 
 import { PLUGIN_PICKER_FILTERS, presentPluginLocalization, type PluginPickerDisplayKind } from "./plugin-picker-presentation";
 import { describeFileRestore, renderPluginPatchControls } from "./plugin-patch-controls";
-import type { PluginStatusReadResult } from "./plugin-sync";
+import type { PluginStatusReadResult, PublishedPluginSyncProgress } from "./plugin-sync";
 import type { PluginFilePatchState } from "./third-party-plugin-patcher";
 
 const ORIGINAL_PLUGIN_NAME_ATTRIBUTE = "data-trans-hub-official-plugin-name";
@@ -77,6 +77,7 @@ export class TransHubSettingTab extends PluginSettingTab {
   private otherLocaleEditorOpen = false;
   private otherLocaleDraft: string | null = null;
   private managerActionPending = false;
+  private localeChangesInFlight = 0;
   private readonly stalePluginIds = new Set<string>();
   private renderedContainerEl: HTMLElement | null = null;
   private managerContainerEl: HTMLElement | null = null;
@@ -107,7 +108,6 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.refreshSettings();
       return;
     }
-    this.selectionStatusAt = new Date();
     status.setText(this.describeLastAction());
     status.toggleClass("mod-warning", this.selectionStatusFailed);
     status.setAttr("role", "status");
@@ -176,9 +176,9 @@ export class TransHubSettingTab extends PluginSettingTab {
   }
 
   private async applyTargetLocale(targetLocale: TargetLocale): Promise<void> {
+    this.localeChangesInFlight += 1;
     this.selectionStatus = translate("正在切换目标语言…");
     this.selectionStatusFailed = false;
-    this.selectionStatusAt = new Date();
     try {
       const result = await this.plugin.changeTargetLocale(targetLocale);
       if (result !== null && this.plugin.settings.targetLocale === targetLocale) {
@@ -192,7 +192,11 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.selectionStatus = errorMessage(error);
       this.selectionStatusFailed = true;
       new Notice(this.selectionStatus, 10_000);
-    } finally { this.refreshSettings(); }
+    } finally {
+      this.localeChangesInFlight -= 1;
+      if (this.localeChangesInFlight === 0) this.selectionStatusAt = new Date();
+      this.refreshSettings();
+    }
   }
 
   private renderSettings(containerEl: HTMLElement): void {
@@ -442,7 +446,7 @@ export class TransHubSettingTab extends PluginSettingTab {
         ? translate("重启后自动连接；离线时使用已缓存译文。断开连接会清除本机同步记录，之后需要重新连接并同步。")
         : reconnectRequired
           ? translate("此设备的授权已过期或被撤销。重新连接后会继续同步；已缓存译文仍可离线使用。")
-          : translate("将在系统默认浏览器中登录并授权此设备；Obsidian 内置浏览器无法完成回调。注册目前为邀请制，插件不会接触或保存账号密码。"));
+          : translate("将在系统默认浏览器中登录并授权此设备；Obsidian 内置浏览器无法完成回调。新用户可加入社群交流，通过微信人工领取或邮件申请邀请码；插件不会接触或保存账号密码。"));
     connection.settingEl.addClass("trans-hub-settings__card", "trans-hub-settings__connection");
     if (this.selectionStatusAt !== null) {
       const feedback = connection.settingEl.createDiv({
@@ -487,6 +491,18 @@ export class TransHubSettingTab extends PluginSettingTab {
       }))
       .addButton((button) => {
         button
+          .setButtonText(translate("获取邀请码"))
+          .setTooltip(translate("查看社群与邮件领码方式"))
+          .onClick(async () => {
+            try {
+              await this.plugin.openInvitationGuide();
+            } catch (error) {
+              new Notice(errorMessage(error), 10_000);
+            }
+          });
+      })
+      .addButton((button) => {
+        button
           .setButtonText(translate("注册"))
           .setTooltip(translate("打开邀请制注册页面"))
           .onClick(async () => {
@@ -500,7 +516,9 @@ export class TransHubSettingTab extends PluginSettingTab {
   }
 
   private describeLastAction(): string {
-    return this.selectionStatusAt === null ? this.selectionStatus : translate("上次操作 {time}：{message}", {
+    return this.selectionStatusAt === null || this.managerActionPending
+      || this.selectionProcessing !== null || this.localeChangesInFlight > 0
+      ? this.selectionStatus : translate("上次操作 {time}：{message}", {
       time: this.selectionStatusAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       message: this.selectionStatus,
     });
@@ -660,6 +678,14 @@ export class TransHubSettingTab extends PluginSettingTab {
     this.managerStatusEl = status;
     status.setAttr("role", "status");
     status.setAttr("aria-live", "polite");
+    const lastSuccessfulCheck = this.plugin.getPluginState().lastSuccessfulPluginCheckAt?.[this.plugin.settings.targetLocale];
+    const lastSuccessfulEpoch = lastSuccessfulCheck === undefined ? NaN : Date.parse(lastSuccessfulCheck);
+    overview.createDiv({
+      text: !Number.isFinite(lastSuccessfulEpoch)
+        ? translate("尚无成功的整轮检查记录")
+        : translate("最近成功检查：{time}", { time: new Date(lastSuccessfulEpoch).toLocaleString() }),
+      cls: "trans-hub-plugin-picker__metadata",
+    });
 
     const controls = container.createDiv({ cls: "trans-hub-plugin-picker__controls" });
     const searchSetting = new Setting(controls)
@@ -767,7 +793,8 @@ export class TransHubSettingTab extends PluginSettingTab {
           translation, catalog: pluginState.pluginCatalogs[plugin.id],
           targetLocale: this.plugin.settings.targetLocale, hasSession, requiresReconnect,
         });
-        const displayName = this.plugin.settings.pluginMetadataTranslationEnabled
+        const displayName = this.plugin.settings.pluginTranslationEnabled
+          && this.plugin.settings.pluginMetadataTranslationEnabled
           ? localizedPluginDisplayName(plugin.name, pluginState.pluginCatalogs[plugin.id], translation, this.plugin.settings.targetLocale)
           : plugin.name;
         const presentation = presentPluginLocalization({
@@ -803,7 +830,8 @@ export class TransHubSettingTab extends PluginSettingTab {
       for (const plugin of visiblePlugins) {
         const sourceStatus = pluginSourceStatus(plugin.source);
         const { localizationStatus, displayName, presentation } = plugin;
-        const displayDescription = this.plugin.settings.pluginMetadataTranslationEnabled
+        const displayDescription = this.plugin.settings.pluginTranslationEnabled
+          && this.plugin.settings.pluginMetadataTranslationEnabled
           ? localizedPluginDescription(
             plugin.description,
             pluginState.pluginCatalogs[plugin.id],
@@ -828,6 +856,9 @@ export class TransHubSettingTab extends PluginSettingTab {
           cls: "trans-hub-plugin-picker__metadata",
         });
         descriptionEl.createDiv({ text: statusLabel, cls: "trans-hub-plugin-picker__provenance" });
+        if (localizationStatus.kind === "blocked" && localizationStatus.coverage !== undefined) {
+          descriptionEl.createDiv({ text: localizationStatus.label, cls: "mod-warning" });
+        }
         if (statusStale) descriptionEl.createDiv({ text: translate("进度可能已过期，请检查进度。"), cls: "mod-warning" });
         if (presentation.kind === "processing" && !statusStale && localizationStatus.kind === "unrecorded") {
           descriptionEl.createDiv({
@@ -853,6 +884,7 @@ export class TransHubSettingTab extends PluginSettingTab {
           || localizationStatus.catalogMismatch !== undefined
           || detailStatus !== statusLabel
           || showInitialPreparationNote
+          || plugin.translation !== undefined
           || missing.length > 0;
         if (shouldRenderDetails) {
           const details = descriptionEl.createEl("details", { cls: "trans-hub-plugin-picker__details" });
@@ -865,6 +897,30 @@ export class TransHubSettingTab extends PluginSettingTab {
               text: translate("首次准备完成后会自动同步，无需反复重试。"),
             });
           }
+          if (plugin.translation !== undefined) {
+            const active = plugin.translation;
+            const exportState = pluginState.translationExportStates[
+              translationExportStateKey(active.sourceVersionId, this.plugin.settings.targetLocale)
+            ];
+            const manifest = exportState?.manifest.sourceVersionId === active.sourceVersionId
+              && exportState.manifest.targetLocale === this.plugin.settings.targetLocale
+              ? exportState.manifest : undefined;
+            const checkedAt = Date.parse(active.pulledAt);
+            const checkedTime = Number.isFinite(checkedAt)
+              ? new Date(checkedAt).toLocaleString() : translate("时间待核验");
+            details.createDiv({
+              text: manifest === undefined
+                ? translate("当前采用 {version} 来源的译文；发布代次待核验，本机采用于 {time}", {
+                  version: active.authorityPluginVersion ?? active.pluginVersion, time: checkedTime,
+                })
+                : translate("当前采用 {version} 来源的第 {generation} 代译文；本机采用于 {time}", {
+                  version: active.authorityPluginVersion ?? active.pluginVersion,
+                  generation: manifest.generationNumber,
+                  time: checkedTime,
+                }),
+              cls: "trans-hub-plugin-picker__metadata",
+            });
+          }
           if (sourceStatus === null && localizationStatus.catalogMismatch !== undefined) {
             renderPluginPickerCatalogMismatchDetails(details, localizationStatus.catalogMismatch);
           } else if (renderCoverageDetails) {
@@ -875,11 +931,12 @@ export class TransHubSettingTab extends PluginSettingTab {
               cls: "trans-hub-plugin-picker__missing-details",
             });
             missingDetails.createEl("summary", { text: translate("未匹配文案（{count}）", { count: missing.length }) });
-            const reasons = [...new Set(missing.map((entry) => entry.reason))];
-            const singleReason = reasons.length === 1 ? reasons[0] : undefined;
-            if (singleReason !== undefined) {
+            const reasonCounts = new Map<string, number>();
+            for (const entry of missing) reasonCounts.set(entry.reason, (reasonCounts.get(entry.reason) ?? 0) + 1);
+            const singleReason = reasonCounts.size === 1 ? reasonCounts.keys().next().value : undefined;
+            for (const [reason, count] of reasonCounts) {
               missingDetails.createDiv({
-                text: singleReason,
+                text: translate("{reason}（{count}）", { reason, count }),
                 cls: "trans-hub-plugin-picker__missing-reason",
               });
             }
@@ -996,7 +1053,11 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.selectionStatus = translate("处理失败：{message}", { message: errorMessage(error) });
       this.selectionStatusFailed = true;
       new Notice(this.selectionStatus, 10_000);
-    } finally { this.managerActionPending = false; this.refreshSettings(scrollSource); }
+    } finally {
+      this.managerActionPending = false;
+      this.selectionStatusAt = new Date();
+      this.refreshSettings(scrollSource);
+    }
   }
 
   private selectedRecoverablePluginIds(plugins: readonly InstalledPluginWithSource[]): string[] {
@@ -1030,7 +1091,11 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.selectionStatus = translate("处理失败：{message}", { message: errorMessage(error) });
       this.selectionStatusFailed = true;
       new Notice(this.selectionStatus, 10_000);
-    } finally { this.managerActionPending = false; this.refreshSettings(scrollSource); }
+    } finally {
+      this.managerActionPending = false;
+      this.selectionStatusAt = new Date();
+      this.refreshSettings(scrollSource);
+    }
   }
 
   private async refreshSelectedPlugins(scrollSource: HTMLElement): Promise<void> {
@@ -1043,7 +1108,9 @@ export class TransHubSettingTab extends PluginSettingTab {
     try {
       // Normal synchronization checks changes and downloads available translations.
       // Fresh recovery observations belong to the explicit retry action.
-      const result = await this.plugin.processSelectedPlugins();
+      const result = await this.plugin.processSelectedPlugins(false, (progress) => {
+        this.reportManualSyncProgress(progress);
+      });
       this.selectionStatus = describePluginSelectionProcessing(result);
       this.selectionStatusFailed = pluginSelectionNeedsAttention(result);
       if (result.kind === "synchronized") this.updateStalePluginStatus(result.sync.statusRead, result.sync.statusReadPluginIds ?? []);
@@ -1053,7 +1120,21 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.selectionStatus = translate("处理失败：{message}", { message: errorMessage(error) });
       this.selectionStatusFailed = true;
       new Notice(this.selectionStatus, 10_000);
-    } finally { this.managerActionPending = false; this.refreshSettings(scrollSource); }
+    } finally {
+      this.managerActionPending = false;
+      this.selectionStatusAt = new Date();
+      this.refreshSettings(scrollSource);
+    }
+  }
+
+  private reportManualSyncProgress(progress: PublishedPluginSyncProgress): void {
+    if (!this.managerActionPending) return;
+    this.selectionStatus = translate("已核对可用来源 {checked}/{total}；本轮确认译文可用 {available} 个插件。", {
+      checked: progress.checkedCount,
+      total: progress.totalCount,
+      available: progress.availableCount,
+    });
+    this.updateStatusLine();
   }
 
   private async refreshPluginPatchStates(pluginIds: readonly string[]): Promise<void> {
@@ -1077,13 +1158,14 @@ export class TransHubSettingTab extends PluginSettingTab {
       this.selectionProcessingPluginIds.add(pluginId);
     }
     this.selectionStatus = translate("正在准备所选插件的译文…");
-    this.selectionStatusAt = new Date();
     this.selectionStatusFailed = false;
     status.setText(this.selectionStatus);
     status.removeClass("mod-warning");
     if (this.selectionProcessing !== null) return;
     this.selectionProcessing = this.processLatestSelection().finally(() => {
       this.selectionProcessing = null;
+      this.selectionStatusAt = new Date();
+      this.refreshSettings();
     });
   }
 
@@ -1111,7 +1193,6 @@ export class TransHubSettingTab extends PluginSettingTab {
         }
       }
     }
-    this.refreshSettings();
   }
 
   private refreshSettings(scrollSource?: HTMLElement): void {

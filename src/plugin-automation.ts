@@ -27,6 +27,7 @@ import {
 } from "./plugin-state";
 import {
   digestPluginBundle,
+  PLUGIN_STRING_SCANNER_REVISION,
   scanPluginUiStrings,
   type PluginUiCatalog,
 } from "./plugin-string-scanner";
@@ -262,7 +263,8 @@ export class PluginAutomationController {
    * manifests/identities are never touched.
    */
   applyPluginDisplayNames(): void {
-    if (!this.input.settings().pluginMetadataTranslationEnabled) {
+    if (!this.input.settings().pluginTranslationEnabled
+      || !this.input.settings().pluginMetadataTranslationEnabled) {
       this.restorePluginDisplayNames();
       return;
     }
@@ -310,7 +312,8 @@ export class PluginAutomationController {
    * the plugin stops.
    */
   localizeSettingsWindowNavigation(): void {
-    if (!this.input.settings().pluginMetadataTranslationEnabled) {
+    if (!this.input.settings().pluginTranslationEnabled
+      || !this.input.settings().pluginMetadataTranslationEnabled) {
       this.restoreSettingsWindowNavigation();
       return;
     }
@@ -470,7 +473,7 @@ export class PluginAutomationController {
       imported,
     ));
     await this.input.save();
-    this.runtime.update(this.allTranslations());
+    this.runtime.update(this.input.settings().pluginTranslationEnabled ? this.allTranslations() : []);
     return imported;
   }
 
@@ -504,7 +507,7 @@ export function canReuseScannedPluginCatalog(
     && previous.pluginName === plugin.name
     && previous.artifactDigest === artifactDigest
     && previous.scannerTargetLocale === targetLocale
-    && previous.patchEvidenceRevision === 14;
+    && previous.patchEvidenceRevision === PLUGIN_STRING_SCANNER_REVISION;
 }
 
 export function selectApplicablePluginTranslations(

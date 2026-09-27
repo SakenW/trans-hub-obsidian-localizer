@@ -38,7 +38,9 @@ export function isCommunityPluginNotFoundError(
 }
 
 let cachedRegistry: ReadonlyMap<string, CommunityPluginRegistryEntry> | null = null;
+let cachedRegistryAt = 0;
 let pendingRegistry: Promise<ReadonlyMap<string, CommunityPluginRegistryEntry>> | null = null;
+const COMMUNITY_REGISTRY_MAX_AGE_MS = 15 * 60_000;
 
 export async function resolveCommunityPluginIdentity(
   pluginId: string,
@@ -74,13 +76,15 @@ export async function resolveCommunityPluginSourceEligibility(
 }
 
 async function communityRegistry(): Promise<ReadonlyMap<string, CommunityPluginRegistryEntry>> {
-  if (cachedRegistry !== null) return cachedRegistry;
+  const age = Date.now() - cachedRegistryAt;
+  if (cachedRegistry !== null && age >= 0 && age < COMMUNITY_REGISTRY_MAX_AGE_MS) return cachedRegistry;
   if (pendingRegistry !== null) return pendingRegistry;
   const pending = loadCommunityRegistry();
   pendingRegistry = pending;
   try {
     const registry = await pending;
     cachedRegistry = registry;
+    cachedRegistryAt = Date.now();
     return registry;
   } finally {
     if (pendingRegistry === pending) pendingRegistry = null;

@@ -10,13 +10,15 @@ Trans-Hub Localizer est une extension Obsidian qui traduit et localise les inter
 
 [Installer dans Obsidian](obsidian://show-plugin?id=trans-hub-plugin-localizer) · [Suivre la localisation](https://trans-hub.net/ecosystems/obsidian) · [Retours et communauté](https://github.com/SakenW/Trans-Hub/discussions)
 
+**L’inscription nécessite une invitation.** [Rejoignez la communauté des utilisateurs pour échanger avec le développeur](https://trans-hub.net/en-US/ecosystems/obsidian/invite) : les utilisateurs internationaux peuvent discuter de l’extension sur Discord. Si vous utilisez le chinois, contactez le développeur sur WeChat pour recevoir une invitation manuelle et être ajouté au groupe. Pour simplement essayer l’extension, ou si vous n’utilisez pas WeChat, vous pouvez demander une invitation par e-mail sur la même page, sans rejoindre de communauté au préalable. Après avoir reçu l’invitation, inscrivez-vous puis revenez dans l’extension pour connecter votre compte.
+
 <!-- section: getting-started -->
 ## Premiers pas
 
 Vous avez besoin d’**Obsidian 1.11.4 ou ultérieur**, d’un compte Trans-Hub et d’une connexion réseau pour l’autorisation et la synchronisation. Les ordinateurs et appareils mobiles sont pris en charge ; les correctifs avancés de compatibilité des fichiers sont réservés à la version de bureau.
 
 1. Installez et activez **Trans-Hub Localizer** dans **Paramètres → Extensions communautaires**.
-2. Ouvrez ses paramètres et connectez votre compte Trans-Hub. Aucun modèle d’IA, compte de fournisseur de modèles ou clé API n’est à configurer.
+2. [Consultez les moyens d’obtenir une invitation](https://trans-hub.net/en-US/ecosystems/obsidian/invite) : contactez le développeur sur WeChat pour une invitation manuelle, ou demandez une invitation par e-mail. Après réception de l’invitation, inscrivez-vous, puis revenez dans les paramètres de l’extension pour connecter votre compte Trans-Hub. Aucun modèle d’IA, compte de fournisseur de modèles ou clé API n’est à configurer.
 3. Confirmez la langue cible. Les extensions communautaires activées sont détectées automatiquement ; vous pouvez exclure celles que vous ne souhaitez pas localiser.
 
 Les traductions déjà publiées sont réutilisées. Les contenus manquants font automatiquement l’objet d’une demande de localisation, puis sont synchronisés après traitement en arrière-plan et publication. Le texte peut rester dans sa langue d’origine pendant le traitement, la publication ou les vérifications de compatibilité.

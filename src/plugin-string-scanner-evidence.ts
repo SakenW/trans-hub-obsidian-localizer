@@ -19,6 +19,18 @@ export type PluginStringOrigin =
 export type PluginStringExtractionStrategy = "manifest" | "registry" | "markdown" | "structured" | "regex-fallback";
 export type PluginStringSemanticRole = "official-name" | "description" | "readme" | "runtime-ui";
 
+export const PLUGIN_STRING_SCANNER_REVISION = 31 as const;
+export const SUPPORTED_PLUGIN_STRING_SCANNER_REVISIONS: ReadonlySet<number> = new Set([
+  1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+  PLUGIN_STRING_SCANNER_REVISION,
+]);
+
+export function isSupportedPluginStringScannerRevision(
+  value: unknown,
+): value is NonNullable<PluginUiCatalog["patchEvidenceRevision"]> {
+  return typeof value === "number" && SUPPORTED_PLUGIN_STRING_SCANNER_REVISIONS.has(value);
+}
+
 export function isCanonicalPluginCatalogString(
   item: Pick<PluginUiString, "origins">,
 ): boolean {
@@ -65,7 +77,7 @@ export interface PluginUiCatalog {
   /** Active target locale when this catalog's embedded native targets were scanned. */
   readonly scannerTargetLocale?: string;
   /** Bumped when persisted catalogs gain patch-safe literal evidence. */
-  readonly patchEvidenceRevision?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
+  readonly patchEvidenceRevision?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31;
   /** Missing only on catalogs persisted before identity revision 1. */
   readonly catalogIdentity?: SourceCatalogIdentity;
   readonly strings: readonly PluginUiString[];
@@ -177,7 +189,9 @@ export function renderExpression(tokens: readonly Token[], counter: { value: num
 
 function isPlausibleTransparentWrapperText(value: string): boolean {
   const text = value.trim();
-  if (text.includes("_") || /[^\p{Script=Latin}\p{N}\s.,:;!?()'"-]/u.test(text)) return false;
+  const punctuation = ".,:;!?()'\"&/[]+-";
+  if (text.includes("_") || [...text].some((character) =>
+    !/[\p{Script=Latin}\p{N}\s]/u.test(character) && !punctuation.includes(character))) return false;
   const latinLetters = [...text].filter((character) => /\p{Script=Latin}/u.test(character));
   if (latinLetters.length < 2) return false;
   return /^\p{Lu}/u.test(text) || /\s/u.test(text);
@@ -360,7 +374,9 @@ export function addCandidate(
     && (UI_PROPERTY_EVIDENCE_SYMBOLS.has(evidence.symbol) || evidence.symbol === "ui-property")
     && !uiContextVerified
   ) return;
-  if (!isTranslatableUiText(value) || !isTranslatableUiText(probe) || !isPlausibleSourceLocaleText(value, sourceLocale)) return;
+  const maxLength = uiContextVerified || origin === "ui-call" ? 512 : 300;
+  if (!isTranslatableUiText(value, maxLength) || !isTranslatableUiText(probe, maxLength)
+    || !isPlausibleSourceLocaleText(value, sourceLocale)) return;
   const aggregate = target.get(value) ?? { origins: new Set<PluginStringOrigin>(), evidence: new Map<string, PluginStringEvidence>() };
   aggregate.origins.add(origin);
   aggregate.evidence.set(JSON.stringify(evidence), evidence);
@@ -406,8 +422,8 @@ export function isPlausibleSourceLocaleText(value: string, sourceLocale: string)
   return letterCount === 0 || latinLetterCount * 2 >= letterCount;
 }
 
-export function isTranslatableUiText(value: string): boolean {
-  if (value.length < 2 || value.length > 300 || !/\p{L}/u.test(value)) return false;
+export function isTranslatableUiText(value: string, maxLength = 300): boolean {
+  if (value.length < 2 || value.length > maxLength || !/\p{L}/u.test(value)) return false;
   if (/^(?:https?:|data:|app:|obsidian:)/iu.test(value)) return false;
   if (/[/\\].+\.(?:js|ts|json|css|svg|png|md)$/iu.test(value)) return false;
   if (/^[a-z0-9_.-]+(?:\/[a-z0-9_.{}:-]+)+$/u.test(value)) return false;
@@ -516,6 +532,16 @@ export function decodeJsLiteral(literal: string): string | null {
       output += String.fromCodePoint(Number.parseInt(hex, 16));
       index += 2;
     } else if (escaped === "u") {
+      if (body[index + 1] === "{") {
+        const close = body.indexOf("}", index + 2);
+        const hex = close < 0 ? "" : body.slice(index + 2, close);
+        if (!/^[0-9a-f]{1,6}$/iu.test(hex)) return null;
+        const codePoint = Number.parseInt(hex, 16);
+        if (codePoint > 0x10FFFF || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) return null;
+        output += String.fromCodePoint(codePoint);
+        index = close;
+        continue;
+      }
       const hex = body.slice(index + 1, index + 5);
       if (!/^[0-9a-f]{4}$/iu.test(hex)) return null;
       const codePoint = Number.parseInt(hex, 16);

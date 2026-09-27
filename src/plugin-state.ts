@@ -125,6 +125,8 @@ export interface PluginState {
   readonly translationExportStates: Readonly<
     Record<string, TranslationSyncState<AnyTranslationExportManifest>>
   >;
+  /** Last fully successful selected-plugin check per locale, not a pack generation. */
+  readonly lastSuccessfulPluginCheckAt?: Readonly<Record<string, string>>;
 }
 
 // v3 removes every locally persisted discovery and delivery reference from
@@ -146,6 +148,7 @@ export const EMPTY_PLUGIN_STATE: PluginState = {
   publicPluginDiscoveries: {},
   pluginTranslations: {},
   translationExportStates: {},
+  lastSuccessfulPluginCheckAt: {},
 };
 
 export function parsePluginState(value: unknown): PluginState {
@@ -176,6 +179,7 @@ export function parsePluginState(value: unknown): PluginState {
     translationExportStates: isRecord(value.translationExportStates)
       ? parseRecord(value.translationExportStates, parseTranslationExportState)
       : {},
+    lastSuccessfulPluginCheckAt: parseSuccessfulPluginCheckTimes(value.lastSuccessfulPluginCheckAt),
   };
 }
 
@@ -186,7 +190,23 @@ export function resetPluginLocalizationDerivedState(state: PluginState): PluginS
     publicPluginDiscoveries: {},
     pluginTranslations: {},
     translationExportStates: {},
+    lastSuccessfulPluginCheckAt: {},
   };
+}
+
+export function translationExportStateKey(sourceVersionId: string, targetLocale: string): string {
+  return `${encodeURIComponent(sourceVersionId)}:${encodeURIComponent(targetLocale)}:default`;
+}
+
+function parseSuccessfulPluginCheckTimes(value: unknown): Readonly<Record<string, string>> {
+  if (!isRecord(value)) return {};
+  const result: Record<string, string> = {};
+  for (const [key, timestamp] of Object.entries(value)) {
+    const locale = parseTargetLocale(key);
+    const epoch = typeof timestamp === "string" ? Date.parse(timestamp) : NaN;
+    if (locale !== null && Number.isFinite(epoch)) result[locale] = new Date(epoch).toISOString();
+  }
+  return result;
 }
 
 export function getPluginTranslation(
@@ -315,21 +335,8 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
     : undefined;
   const scannedAt = stringValue(value.scannedAt);
   if ([pluginId, pluginName, pluginVersion, sourceLocale, digest, artifactDigest, scannedAt].some((item) => item === null)) return null;
-  if (
-    value.patchEvidenceRevision !== undefined
-    && value.patchEvidenceRevision !== 1
-    && value.patchEvidenceRevision !== 2
-    && value.patchEvidenceRevision !== 3
-    && value.patchEvidenceRevision !== 4
-    && value.patchEvidenceRevision !== 5
-    && value.patchEvidenceRevision !== 6
-    && value.patchEvidenceRevision !== 7
-    && value.patchEvidenceRevision !== 10
-    && value.patchEvidenceRevision !== 11
-    && value.patchEvidenceRevision !== 12
-    && value.patchEvidenceRevision !== 13
-    && value.patchEvidenceRevision !== 14
-  ) return null;
+  if (value.patchEvidenceRevision !== undefined
+    && !isSupportedPluginStringScannerRevision(value.patchEvidenceRevision)) return null;
   let catalogIdentity: SourceCatalogIdentity | undefined;
   try {
     catalogIdentity = value.catalogIdentity === undefined
@@ -787,7 +794,7 @@ import type {
   PluginStringSemanticRole,
   PluginUiCatalog,
 } from "./plugin-string-scanner";
-import { resolvePluginStringSemanticRole } from "./plugin-string-scanner";
+import { isSupportedPluginStringScannerRevision, resolvePluginStringSemanticRole } from "./plugin-string-scanner";
 import type { PluginUiTranslation } from "./plugin-ui-runtime";
 import {
   parseStoredTranslationExportManifest,

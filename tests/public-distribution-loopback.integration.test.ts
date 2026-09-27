@@ -152,6 +152,7 @@ describe("Obsidian public distribution loopback component integration", () => {
   it("verifies signed revision 3 bytes over loopback and applies then restores exact runtime text", async () => {
     await withFixture({}, async (fixture) => {
       const output = await fixture.download();
+      expect(output.status).toBe("updated");
       expect(output.manifest.revision).toBe(3);
       expect(output.rows).toEqual([{
         pluginId: PLUGIN_ID,
@@ -211,6 +212,34 @@ describe("Obsidian public distribution loopback component integration", () => {
       controller.applyCachedTranslations();
       expect(host.text.data).toBe("Settings");
       controller.stop();
+    });
+  });
+
+  it("revalidates an unchanged signed generation with 304 and no CDN request, then repairs a missing cached pack", async () => {
+    await withFixture({}, async (fixture) => {
+      const first = await fixture.download();
+      expect(first.status).toBe("updated");
+      expect(fixture.packRequests).toBe(1);
+      expect(fixture.ticketRequests).toBe(1);
+      const previous = { etag: first.etag, manifest: first.manifest };
+
+      const unchanged = await fixture.download(previous);
+      expect(unchanged.status).toBe("not_modified");
+      expect(unchanged.rows).toEqual(first.rows);
+      expect(fixture.notModifiedResponses).toBe(1);
+      expect(fixture.packRequests).toBe(1);
+      expect(fixture.ticketRequests).toBe(1);
+
+      const cachedPath = [...fixture.adapter.files.keys()].find((path) =>
+        /translation-cache\/[0-9a-f]{64}\.json$/u.test(path));
+      expect(cachedPath).toBeDefined();
+      fixture.adapter.files.delete(cachedPath!);
+      const repaired = await fixture.download(previous);
+      expect(repaired.status).toBe("not_modified");
+      expect(repaired.rows).toEqual(first.rows);
+      expect(fixture.notModifiedResponses).toBe(2);
+      expect(fixture.packRequests).toBe(2);
+      expect(fixture.ticketRequests).toBe(2);
     });
   });
 
@@ -283,6 +312,8 @@ async function startFixture(options: Readonly<{ mode?: FailureMode }>) {
   const adapter = new RecordingVaultAdapter();
   const pack = translationPackBytes();
   let packRequests = 0;
+  let ticketRequests = 0;
+  let notModifiedResponses = 0;
   let origin = "";
   const responseState: {
     currentWire?: ReturnType<typeof signedManifestWire>;
@@ -298,13 +329,23 @@ async function startFixture(options: Readonly<{ mode?: FailureMode }>) {
         response.end();
         return;
       }
+      const etag = `"${currentWire.manifest_digest}"`;
+      if (options.mode !== "generation-rollback" && options.mode !== "generation-conflict"
+        && request.headers["if-none-match"] === etag) {
+        notModifiedResponses += 1;
+        response.statusCode = 304;
+        response.setHeader("etag", etag);
+        response.end();
+        return;
+      }
       response.statusCode = 200;
       response.setHeader("content-type", "application/json");
-      response.setHeader("etag", `"${currentWire.manifest_digest}"`);
+      response.setHeader("etag", etag);
       response.end(JSON.stringify(currentWire));
       return;
     }
     if (request.method === "POST" && url.pathname.endsWith("/download-tickets")) {
+      ticketRequests += 1;
       const issuedAt = options.mode === "expired-ticket" ? NOW - 300_001 : NOW;
       const lifetime = options.mode === "ticket-window-299"
         ? 299_000
@@ -429,7 +470,7 @@ async function startFixture(options: Readonly<{ mode?: FailureMode }>) {
   const previous = options.mode === "generation-rollback" || options.mode === "generation-conflict"
     ? previousState(keys.privateKey, origin, pack)
     : undefined;
-  const download = () => downloadPluginTranslations({
+  const download = (cached?: TranslationSyncState<CanonicalJsonTranslationExportManifest>) => downloadPluginTranslations({
     transport: new ObsidianHttpTransport(origin),
     accessToken: "fixture-access-token",
     workspaceId: "scope-1",
@@ -439,7 +480,7 @@ async function startFixture(options: Readonly<{ mode?: FailureMode }>) {
     developmentDownloadOrigin: origin,
     manifestVerifier: verifier,
     expectedPluginId: PLUGIN_ID,
-    ...(previous === undefined ? {} : { previous }),
+    ...((cached ?? previous) === undefined ? {} : { previous: cached ?? previous }),
   });
   return {
     server,
@@ -447,6 +488,8 @@ async function startFixture(options: Readonly<{ mode?: FailureMode }>) {
     adapter,
     download,
     get packRequests() { return packRequests; },
+    get ticketRequests() { return ticketRequests; },
+    get notModifiedResponses() { return notModifiedResponses; },
     get ticketLifetimeMs() { return ticketLifetimeMs; },
   };
 }

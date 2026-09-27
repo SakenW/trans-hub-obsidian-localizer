@@ -7,8 +7,46 @@ import {
   parsePluginState,
   resetPluginLocalizationDerivedState,
 } from "../src/plugin-state";
+import { canReuseScannedPluginCatalog } from "../src/plugin-automation";
+import { scanPluginUiStrings } from "../src/plugin-string-scanner";
 
 describe("parsePluginState", () => {
+  it("retains the current scanner catalog after a save and reload while rejecting unknown revisions", () => {
+    const catalog = {
+      pluginId: "quickadd", pluginName: "QuickAdd", pluginVersion: "2.25.0",
+      sourceLocale: "en", digest: "catalog", artifactDigest: "a".repeat(64),
+      scannerTargetLocale: "zh-CN", scannedAt: "2026-09-24T00:00:00.000Z", strings: [],
+      patchEvidenceRevision: 31,
+    };
+    expect(parsePluginState({ pluginCatalogs: { quickadd: catalog } }).pluginCatalogs.quickadd?.patchEvidenceRevision)
+      .toBe(31);
+    expect(parsePluginState({ pluginCatalogs: { quickadd: { ...catalog, patchEvidenceRevision: 30 } } })
+      .pluginCatalogs.quickadd?.patchEvidenceRevision).toBe(30);
+    expect(parsePluginState({ pluginCatalogs: { quickadd: { ...catalog, patchEvidenceRevision: 26 } } })
+      .pluginCatalogs.quickadd?.patchEvidenceRevision).toBe(26);
+    expect(parsePluginState({ pluginCatalogs: { quickadd: { ...catalog, patchEvidenceRevision: 32 } } })
+      .pluginCatalogs.quickadd).toBeUndefined();
+  });
+
+  it("reuses a freshly scanned catalog after persisted state is parsed again", async () => {
+    const plugin = { id: "quickadd", name: "QuickAdd", version: "2.25.0", description: "Test plugin", dir: "quickadd", enabled: true };
+    const catalog = await scanPluginUiStrings({
+      plugin, bundle: 'new Setting(el).setName("Visible setting");', sourceLocale: "en", targetLocale: "zh-CN",
+    });
+    const restored = parsePluginState({ pluginCatalogs: { quickadd: catalog } }).pluginCatalogs.quickadd;
+    expect(restored?.patchEvidenceRevision).toBe(31);
+    expect(canReuseScannedPluginCatalog(restored, plugin, catalog.artifactDigest, "zh-CN")).toBe(true);
+  });
+  it("retains only valid locale-scoped successful check times and clears them with retired derived state", () => {
+    const state = parsePluginState({ lastSuccessfulPluginCheckAt: {
+      "zh-CN": "2026-09-24T01:02:03.000Z",
+      "ja": "not-a-time",
+      "bad locale!": "2026-09-24T01:02:03.000Z",
+    } });
+    expect(state.lastSuccessfulPluginCheckAt).toEqual({ "zh-CN": "2026-09-24T01:02:03.000Z" });
+    expect(resetPluginLocalizationDerivedState(state).lastSuccessfulPluginCheckAt).toEqual({});
+  });
+
   it("清空退役发现运行态及派生缓存，同时保留本地插件目录", () => {
     expect(isPluginLocalizationDerivedCacheCurrent(undefined)).toBe(false);
     expect(isPluginLocalizationDerivedCacheCurrent(1)).toBe(false);

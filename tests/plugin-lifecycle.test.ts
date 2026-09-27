@@ -38,6 +38,27 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
 }
 
 describe("plugin locale transitions", () => {
+  it("等待旧同步收尾后才使新语言生效，旧扫描期间设置语言不变", async () => {
+    const { plugin, internals } = fixture();
+    plugin.settings.targetLocale = "zh-CN";
+    const first = deferred();
+    const run = vi.mocked(internals.processPluginsNow)
+      .mockImplementationOnce(async () => { await first.promise; return result; })
+      .mockResolvedValueOnce(result);
+
+    const oldRound = plugin.processSelectedPlugins();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    const switchLocale = plugin.changeTargetLocale("ja");
+    expect(plugin.settings.targetLocale).toBe("zh-CN");
+    expect(run).toHaveBeenCalledTimes(1);
+
+    first.resolve();
+    await oldRound;
+    await expect(switchLocale).resolves.toBe(result);
+    expect(plugin.settings.targetLocale).toBe("ja");
+    expect(run).toHaveBeenNthCalledWith(2, undefined, "ja", undefined, 0);
+  });
+
   it("切换语言先恢复文件补丁再更新运行时，相同语言不恢复", async () => {
     const { plugin, restore, refresh } = fixture();
     await plugin.changeTargetLocale("en");
@@ -58,6 +79,148 @@ describe("plugin locale transitions", () => {
 });
 
 describe("automatic plugin translation", () => {
+  it("切语言请求后旧轮不播报结果或重提旧语言恢复任务", async () => {
+    const { plugin, internals } = fixture();
+    plugin.settings.targetLocale = "zh-CN";
+    const first = deferred();
+    const run = vi.mocked(internals.processPluginsNow)
+      .mockImplementationOnce(async () => { await first.promise; return result; })
+      .mockResolvedValueOnce(result);
+    const reportCommandStatus = vi.fn();
+    const refreshPluginCards = vi.fn();
+    Object.assign(plugin, { settingTab: { reportCommandStatus, refreshPluginCards } });
+    const internal = plugin as unknown as { runAutomaticPluginTranslationNow: (announce: boolean) => Promise<void> };
+
+    const automatic = internal.runAutomaticPluginTranslationNow(true);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    const switching = plugin.changeTargetLocale("ja");
+    first.resolve();
+    await automatic;
+    await switching;
+
+    expect(reportCommandStatus).not.toHaveBeenCalled();
+    expect(refreshPluginCards).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("切语言请求后旧轮的手动进度回调不写新语言界面", async () => {
+    const { plugin, internals } = fixture();
+    plugin.settings.targetLocale = "zh-CN";
+    const first = deferred();
+    vi.mocked(internals.processPluginsNow)
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        await first.promise;
+        const progress = args[4] as ((value: { checkedCount: number; totalCount: number; availableCount: number }) => void) | undefined;
+        progress?.({ checkedCount: 1, totalCount: 2, availableCount: 1 });
+        return result;
+      })
+      .mockResolvedValueOnce(result);
+    const onProgress = vi.fn();
+
+    const oldRound = plugin.processSelectedPlugins(false, onProgress);
+    await vi.waitFor(() => expect(internals.processPluginsNow).toHaveBeenCalledTimes(1));
+    const switching = plugin.changeTargetLocale("ja");
+    first.resolve();
+    await oldRound;
+    await switching;
+    expect(onProgress).not.toHaveBeenCalled();
+  });
+
+  it("仅完整成功检查持久化当前语言的最近成功时间", async () => {
+    const plugin = new TransHubObsidianPlugin({} as never, {} as never);
+    const save = vi.fn(async () => {});
+    Object.assign(plugin, {
+      settings: { ...plugin.settings, targetLocale: "zh-CN" },
+      pluginAutomation: { applyCachedTranslations: vi.fn() },
+      savePluginDataForLifecycle: save,
+    });
+    const internal = plugin as unknown as {
+      synchronizePluginTranslationsNow: (
+        ids: readonly string[] | undefined, locale: TargetLocale, manual: undefined,
+        selected: readonly string[], revision: number,
+      ) => Promise<unknown>;
+    };
+    const summary = { submittedCount: 0, requestedCount: 0, pulledCount: 0,
+      waitingCount: 0, translationCount: 0, checkSucceeded: true };
+    vi.mocked(synchronizeConfiguredPluginTranslations).mockResolvedValue(summary);
+
+    await internal.synchronizePluginTranslationsNow(undefined, "zh-CN", undefined, [], 0);
+    const successfulAt = plugin.getPluginState().lastSuccessfulPluginCheckAt?.["zh-CN"];
+    expect(successfulAt).toBeDefined();
+    expect(save).toHaveBeenCalledOnce();
+
+    vi.mocked(synchronizeConfiguredPluginTranslations).mockResolvedValue({ ...summary, checkSucceeded: false });
+    await internal.synchronizePluginTranslationsNow(undefined, "zh-CN", undefined, [], 0);
+    vi.mocked(synchronizeConfiguredPluginTranslations).mockResolvedValue(summary);
+    await internal.synchronizePluginTranslationsNow(["demo"], "zh-CN", undefined, ["demo"], 0);
+    expect(plugin.getPluginState().lastSuccessfulPluginCheckAt?.["zh-CN"]).toBe(successfulAt);
+    expect(save).toHaveBeenCalledOnce();
+  });
+
+  it("最近成功检查时间写盘失败时保留此前的成功事实", async () => {
+    const plugin = new TransHubObsidianPlugin({} as never, {} as never);
+    const earlier = "2026-09-23T00:00:00.000Z";
+    Object.assign(plugin, {
+      settings: { ...plugin.settings, targetLocale: "zh-CN" },
+      state: { ...EMPTY_PLUGIN_STATE, lastSuccessfulPluginCheckAt: { "zh-CN": earlier } },
+      pluginAutomation: { applyCachedTranslations: vi.fn() },
+      savePluginDataForLifecycle: vi.fn().mockRejectedValue(new Error("disk full")),
+    });
+    vi.mocked(synchronizeConfiguredPluginTranslations).mockResolvedValue({
+      submittedCount: 0, requestedCount: 0, pulledCount: 0,
+      waitingCount: 0, translationCount: 0, checkSucceeded: true,
+    });
+    const internal = plugin as unknown as {
+      synchronizePluginTranslationsNow: (
+        ids: undefined, locale: TargetLocale, manual: undefined,
+        selected: readonly string[], revision: number,
+      ) => Promise<unknown>;
+    };
+    await expect(internal.synchronizePluginTranslationsNow(undefined, "zh-CN", undefined, [], 0))
+      .rejects.toThrow("disk full");
+    expect(plugin.getPluginState().lastSuccessfulPluginCheckAt?.["zh-CN"]).toBe(earlier);
+  });
+
+  it("自动检查期间的手动同步排队后重新读取发布版本", async () => {
+    const { plugin, internals } = fixture();
+    const first = deferred();
+    const observedGenerations: string[] = [];
+    let publishedGeneration = "old";
+    vi.mocked(internals.processPluginsNow).mockImplementation(async () => {
+      observedGenerations.push(publishedGeneration);
+      if (observedGenerations.length === 1) await first.promise;
+      return result;
+    });
+
+    // Both the startup check and the manager button enter processSelectedPlugins.
+    const automatic = plugin.processSelectedPlugins();
+    await vi.waitFor(() => expect(observedGenerations).toEqual(["old"]));
+    publishedGeneration = "new";
+    const manual = plugin.processSelectedPlugins();
+    expect(observedGenerations).toEqual(["old"]);
+
+    first.resolve();
+    await Promise.all([automatic, manual]);
+    expect(observedGenerations).toEqual(["old", "new"]);
+  });
+
+  it("自动检查失败不阻止排队的手动同步重新检查", async () => {
+    const { plugin, internals } = fixture();
+    const first = deferred();
+    const run = vi.mocked(internals.processPluginsNow)
+      .mockImplementationOnce(async () => { await first.promise; throw new Error("offline"); })
+      .mockResolvedValueOnce(result);
+
+    const automatic = plugin.processSelectedPlugins();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    const manual = plugin.processSelectedPlugins();
+    first.resolve();
+
+    await expect(automatic).rejects.toThrow("offline");
+    await expect(manual).resolves.toEqual(result);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("在重叠的启动检查完成后补查一次晚注册插件", async () => {
     const plugin = new TransHubObsidianPlugin({} as never, {} as never);
     const first = deferred();

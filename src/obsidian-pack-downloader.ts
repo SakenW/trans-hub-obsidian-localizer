@@ -48,35 +48,42 @@ export class ObsidianPackDownloader implements PackDownloadPort {
       () => controller.abort(),
       this.options.timeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS,
     );
-    let response: Response;
     try {
-      response = await this.request(input.url, {
-        method: "GET",
-        redirect: "error",
-        credentials: "omit",
-        cache: "no-store",
-        signal: controller.signal,
-      });
-    } catch {
-      if (controller.signal.aborted) {
-        throw new Error("translation_pack_download_timeout");
+      let response: Response;
+      try {
+        response = await this.request(input.url, {
+          method: "GET",
+          redirect: "error",
+          credentials: "omit",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+      } catch {
+        if (controller.signal.aborted) {
+          throw new Error("translation_pack_download_timeout");
+        }
+        throw new Error("translation_pack_redirect_or_network_rejected");
       }
-      throw new Error("translation_pack_redirect_or_network_rejected");
+      if (response.redirected) {
+        throw new Error("translation_pack_redirect_rejected");
+      }
+      assertSafeDownloadUrl(
+        response.url,
+        input.allowedOrigin,
+        this.options.developmentOrigin,
+      );
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`translation_pack_download_failed:${response.status}`);
+      }
+      try {
+        return await readBoundedResponse(response, input.expectedBytes);
+      } catch (error) {
+        if (controller.signal.aborted) throw new Error("translation_pack_download_timeout");
+        throw error;
+      }
     } finally {
       window.activeWindow.clearTimeout(timer);
     }
-    if (response.redirected) {
-      throw new Error("translation_pack_redirect_rejected");
-    }
-    assertSafeDownloadUrl(
-      response.url,
-      input.allowedOrigin,
-      this.options.developmentOrigin,
-    );
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`translation_pack_download_failed:${response.status}`);
-    }
-    return readBoundedResponse(response, input.expectedBytes);
   }
 }
 

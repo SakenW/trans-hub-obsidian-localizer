@@ -2,10 +2,14 @@ packages:
   - "."
 
 overrides:
-  "brace-expansion@<1.1.17": "1.1.17"
+  "nanoid@<3.3.18": "3.3.18"
+  "baseline-browser-mapping@>=2.0.0 <2.11.0": "2.11.0"
+  "browserslist@<=4.28.6": "4.28.7"
+  "brace-expansion@<1.1.18": "1.1.18"
+  "brace-expansion@>=2.0.0 <2.1.4": "2.1.4"
   "brace-expansion@>=4.0.0 <5.0.9": "5.0.9"
-  "fast-uri@<3.1.5": "3.1.5"
-  "js-yaml@>=4.0.0 <4.3.1": "4.3.1"
+  "fast-uri@>=3.0.0 <3.1.6": "3.1.6"
+  "js-yaml@>=4.0.0 <4.3.2": "4.3.2"
   "postcss@<8.5.23": "8.5.23"
   "undici@<7.29.0": "7.29.0"
 

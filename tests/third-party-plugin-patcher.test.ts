@@ -14,6 +14,7 @@ import {
   hasActivePluginFilePatch,
   inspectPluginFilePatch,
   logicalPluginBundle,
+  previewPublishedPluginFilePatch,
   restorePublishedPluginFilePatch,
 } from "../src/third-party-plugin-patcher";
 
@@ -114,6 +115,15 @@ describe("third-party plugin file patching", () => {
     vault.files.set(`${plugin.dir}/main.js`, bundle);
 
     const vaultLike = vault as unknown as Vault;
+    const preview = await previewPublishedPluginFilePatch({ plugin, catalog, translation, original: bundle });
+    expect(preview.kind).toBe("candidate");
+    expect(preview.patchCount).toBeGreaterThanOrEqual(3);
+    expect(await previewPublishedPluginFilePatch({
+      plugin, catalog, translation: { ...translation, authorityPluginVersion: "1.1.0" }, original: bundle,
+    })).toEqual({ kind: "skipped", reason: "cross-version", patchCount: 0 });
+    expect(await previewPublishedPluginFilePatch({
+      plugin, catalog, translation, original: `${bundle}\n// external edit`,
+    })).toEqual({ kind: "conflict", reason: "artifact-mismatch", patchCount: 0 });
     const crossVersion = await applyPublishedPluginFilePatch({
       vault: vaultLike,
       plugin,

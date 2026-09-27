@@ -19,6 +19,22 @@ const scanResult = {
 };
 
 describe("processPluginSelection", () => {
+  it("reports a verified unchanged generation as up to date, not as an update", () => {
+    const result = { kind: "synchronized" as const, scan: scanResult,
+      sync: { submittedCount: 0, requestedCount: 0, pulledCount: 2, updatedCount: 0,
+        waitingCount: 0, translationCount: 80, checkSucceeded: true } };
+    expect(describePluginSelectionProcessing(result)).toBe("已检查 2 个插件，译文已是最新。");
+  });
+
+  it("keeps already available packs visible while other sources are processing", () => {
+    const result = { kind: "synchronized" as const, scan: scanResult,
+      sync: { submittedCount: 0, requestedCount: 0, pulledCount: 1, updatedCount: 0,
+        waitingCount: 1, translationCount: 40, waitingPluginIds: ["tasks"], checkSucceeded: true } };
+    const message = describePluginSelectionProcessing(result);
+    expect(message).toContain("1 个正在处理");
+    expect(message).toContain("本轮确认 1 个插件已有可用译文");
+  });
+
   it("reports delivered translations alongside remaining work and blocked plugins", () => {
     const message = describePluginSelectionProcessing({ kind: "synchronized", scan: scanResult,
       sync: { submittedCount: 0, requestedCount: 0, pulledCount: 24, translationCount: 500,

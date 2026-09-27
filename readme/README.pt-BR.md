@@ -10,13 +10,15 @@ O Trans-Hub Localizer é um plugin do Obsidian que traduz e localiza as interfac
 
 [Instalar no Obsidian](obsidian://show-plugin?id=trans-hub-plugin-localizer) · [Progresso da localização](https://trans-hub.net/ecosystems/obsidian) · [Feedback e comunidade](https://github.com/SakenW/Trans-Hub/discussions)
 
+**O cadastro exige um convite.** [Entre na comunidade de usuários para conversar com o desenvolvedor](https://trans-hub.net/en-US/ecosystems/obsidian/invite): usuários internacionais podem discutir o plugin no Discord. Se você usa chinês, pode falar com o desenvolvedor pelo WeChat para receber um convite manual e entrar no grupo. Se quiser apenas experimentar o plugin ou não usar WeChat, pode solicitar um convite por e-mail nessa mesma página, sem precisar entrar antes em uma comunidade. Após receber o convite, cadastre-se e volte ao plugin para conectar sua conta.
+
 <!-- section: getting-started -->
 ## Primeiros passos
 
 Você precisa do **Obsidian 1.11.4 ou superior**, de uma conta do Trans-Hub e de conexão de rede para autorização e sincronização. Há suporte a desktop e dispositivos móveis; os patches avançados de compatibilidade de arquivos estão disponíveis apenas no desktop.
 
 1. Instale e ative o **Trans-Hub Localizer** em **Configurações → Plugins da comunidade**.
-2. Abra as configurações do plugin e conecte sua conta do Trans-Hub. Não é necessário configurar um modelo de IA, uma conta de provedor de modelos ou uma chave de API.
+2. [Veja as opções de convite](https://trans-hub.net/en-US/ecosystems/obsidian/invite): fale com o desenvolvedor pelo WeChat para receber um convite manual ou solicite um convite por e-mail. Após receber o convite, cadastre-se e volte às configurações do plugin para conectar sua conta do Trans-Hub. Não é necessário configurar um modelo de IA, uma conta de provedor de modelos ou uma chave de API.
 3. Confirme o idioma de destino. Os plugins da comunidade ativados são detectados automaticamente; você pode excluir aqueles que não deseja localizar.
 
 As traduções já publicadas são reutilizadas. O conteúdo ausente gera automaticamente uma solicitação de localização e é sincronizado após o processamento em segundo plano e a publicação. O texto pode continuar no idioma original enquanto aguarda processamento, publicação ou verificações de compatibilidade.

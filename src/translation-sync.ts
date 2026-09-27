@@ -48,6 +48,7 @@ export interface PluginTranslationRow {
 }
 
 export interface TranslationSyncOutput<Row> {
+  readonly status: "not_modified" | "updated";
   readonly manifest: TranslationExportManifest;
   readonly rows: readonly Row[];
   readonly etag: string;
@@ -82,7 +83,7 @@ export async function downloadTranslations(input: DownloadInput & {
     return { noteId: match[1], blockId: match[2], translatedText: row.translatedText };
   });
   assertUnique(rows.map((row) => `${row.noteId}\u0000${row.blockId}`), "译文 occurrence 重复");
-  return { manifest: result.manifest, rows, etag: result.etag };
+  return { status: result.status, manifest: result.manifest, rows, etag: result.etag };
 }
 
 export async function downloadPluginTranslations(input: DownloadInput & {
@@ -100,7 +101,7 @@ export async function downloadPluginTranslations(input: DownloadInput & {
     };
   });
   assertUnique(rows.map((row) => row.stringKey), "插件译文 occurrence 重复");
-  return { manifest: result.manifest, rows, etag: result.etag };
+  return { status: result.status, manifest: result.manifest, rows, etag: result.etag };
 }
 
 export function parseObsidianTranslationPack(
@@ -181,7 +182,7 @@ async function downloadTranslationOccurrences(
     return parseTranslationPack(verified.bytes, result.manifest, pack);
   });
   assertUnique(rows.map((row) => row.occurrenceKey), "译文 occurrence 重复");
-  return { manifest: result.manifest, rows, etag: result.etag };
+  return { status: result.status, manifest: result.manifest, rows, etag: result.etag };
 }
 
 function parseTranslationPack(

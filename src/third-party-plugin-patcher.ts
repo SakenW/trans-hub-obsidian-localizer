@@ -34,6 +34,24 @@ interface PatchReceipt {
 
 export interface FilePatchResult { readonly applied: number; readonly skipped: number; readonly conflicts: number; }
 
+export type PluginFilePatchPreview = Readonly<{
+  kind: "candidate" | "skipped" | "conflict";
+  reason: "candidate" | "no-catalog" | "no-pack" | "cross-version" | "catalog-mismatch"
+    | "artifact-mismatch" | "no-exact-literal" | "overlapping-literals";
+  patchCount: number;
+}>;
+
+interface StaticPatch {
+  readonly start: number;
+  readonly end: number;
+  readonly source: string;
+  readonly target: string;
+}
+
+type StaticPatchPlan =
+  | { readonly kind: "candidate"; readonly originalDigest: string; readonly patches: readonly StaticPatch[] }
+  | { readonly kind: "skipped" | "conflict"; readonly reason: Exclude<PluginFilePatchPreview["reason"], "candidate"> };
+
 const CURRENT_DIGEST_SCHEME: PluginBundleDigestScheme = "bundle-v2";
 
 function receiptDigestScheme(receipt: PatchReceipt): PluginBundleDigestScheme {
@@ -126,10 +144,7 @@ export async function applyPublishedPluginFilePatch(input: {
   readonly translation: PluginTranslationState | undefined;
 }): Promise<FilePatchResult> {
   const { vault, plugin, catalog, translation } = input;
-  if (catalog === undefined || translation === undefined || catalog.pluginVersion !== plugin.version
-    || translation.pluginVersion !== plugin.version
-    || (translation.authorityPluginVersion ?? translation.pluginVersion) !== plugin.version
-    || !comparePluginCatalogIdentity(catalog, translation).exact) {
+  if (patchMetadataRejection(plugin, catalog, translation) !== null) {
     return { applied: 0, skipped: 1, conflicts: 0 };
   }
   // A receipt for this exact plugin version may carry digests from an older
@@ -149,34 +164,11 @@ export async function applyPublishedPluginFilePatch(input: {
   }
   const main = normalizePath(`${plugin.dir}/main.js`);
   const original = await vault.adapter.read(main);
-  const originalDigest = await digestBundle(original, CURRENT_DIGEST_SCHEME);
-  if (originalDigest !== catalog.artifactDigest) {
-    return { applied: 0, skipped: 0, conflicts: 1 };
-  }
-  const replacements = new Map(selectCurrentCatalogTranslations(catalog, translation, false)
-    .filter((entry) => entry.scopes?.includes("runtime-ui")
-      && !entry.source.includes("{{th:expr:")
-      && typeof entry.target === "string")
-    .map((entry) => [entry.source, entry.target]));
-  const patches = catalog.strings.flatMap((item) => {
-    const target = replacements.get(item.source);
-    if (target === undefined || item.placeholderSignature !== "") return [];
-    return (item.evidence ?? []).flatMap((evidence) =>
-      evidence.literalStart !== undefined && evidence.literalEnd !== undefined
-        && (evidence.strategy === "structured"
-          || evidence.strategy === "regex-fallback" && evidence.symbol === "createElement")
-        && decodeStaticLiteral(original.slice(evidence.literalStart, evidence.literalEnd)) === item.source
-        ? [{
-            start: evidence.literalStart,
-            end: evidence.literalEnd,
-            source: item.source,
-            target,
-          }]
-        : []);
-  }).sort((left, right) => right.start - left.start);
-  if (patches.length === 0 || patches.some((patch, index) => index > 0 && patch.end > (patches[index - 1]?.start ?? 0))) {
-    return { applied: 0, skipped: 1, conflicts: 0 };
-  }
+  const plan = await planPublishedPluginFilePatch({ plugin, catalog, translation, original });
+  if (plan.kind !== "candidate") return plan.kind === "conflict"
+    ? { applied: 0, skipped: 0, conflicts: 1 }
+    : { applied: 0, skipped: 1, conflicts: 0 };
+  const { originalDigest, patches } = plan;
   let patched = original;
   for (const patch of patches) {
     const raw = patched.slice(patch.start, patch.end);
@@ -211,6 +203,66 @@ export async function applyPublishedPluginFilePatch(input: {
     throw new Error(`第三方插件补丁写入校验失败：${plugin.id}`);
   }
   return { applied: patches.length, skipped: 0, conflicts: 0 };
+}
+
+/** Read-only byte-level preview. It never grants permission to write a plugin file. */
+export async function previewPublishedPluginFilePatch(input: {
+  readonly plugin: InstalledObsidianPlugin;
+  readonly catalog: PluginUiCatalog | undefined;
+  readonly translation: PluginTranslationState | undefined;
+  readonly original: string;
+}): Promise<PluginFilePatchPreview> {
+  const plan = await planPublishedPluginFilePatch(input);
+  return plan.kind === "candidate"
+    ? { kind: "candidate", reason: "candidate", patchCount: plan.patches.length }
+    : { kind: plan.kind, reason: plan.reason, patchCount: 0 };
+}
+
+function patchMetadataRejection(
+  plugin: InstalledObsidianPlugin,
+  catalog: PluginUiCatalog | undefined,
+  translation: PluginTranslationState | undefined,
+): "no-catalog" | "no-pack" | "cross-version" | "catalog-mismatch" | null {
+  if (catalog === undefined) return "no-catalog";
+  if (translation === undefined) return "no-pack";
+  if (catalog.pluginVersion !== plugin.version || translation.pluginVersion !== plugin.version
+    || (translation.authorityPluginVersion ?? translation.pluginVersion) !== plugin.version) return "cross-version";
+  return comparePluginCatalogIdentity(catalog, translation).exact ? null : "catalog-mismatch";
+}
+
+async function planPublishedPluginFilePatch(input: {
+  readonly plugin: InstalledObsidianPlugin;
+  readonly catalog: PluginUiCatalog | undefined;
+  readonly translation: PluginTranslationState | undefined;
+  readonly original: string;
+}): Promise<StaticPatchPlan> {
+  const { plugin, catalog, translation, original } = input;
+  const rejection = patchMetadataRejection(plugin, catalog, translation);
+  if (rejection !== null) return { kind: "skipped", reason: rejection };
+  if (catalog === undefined || translation === undefined) throw new Error("plugin_patch_preflight_inconsistent");
+  const originalDigest = await digestBundle(original, CURRENT_DIGEST_SCHEME);
+  if (originalDigest !== catalog.artifactDigest) return { kind: "conflict", reason: "artifact-mismatch" };
+  const replacements = new Map(selectCurrentCatalogTranslations(catalog, translation, false)
+    .filter((entry) => entry.scopes?.includes("runtime-ui")
+      && !entry.source.includes("{{th:expr:")
+      && typeof entry.target === "string")
+    .map((entry) => [entry.source, entry.target]));
+  const patches = catalog.strings.flatMap((item) => {
+    const target = replacements.get(item.source);
+    if (target === undefined || item.placeholderSignature !== "") return [];
+    return (item.evidence ?? []).flatMap((evidence) =>
+      evidence.literalStart !== undefined && evidence.literalEnd !== undefined
+        && (evidence.strategy === "structured"
+          || evidence.strategy === "regex-fallback" && evidence.symbol === "createElement")
+        && decodeStaticLiteral(original.slice(evidence.literalStart, evidence.literalEnd)) === item.source
+        ? [{ start: evidence.literalStart, end: evidence.literalEnd, source: item.source, target }]
+        : []);
+  }).sort((left, right) => right.start - left.start);
+  if (patches.length === 0) return { kind: "skipped", reason: "no-exact-literal" };
+  if (patches.some((patch, index) => index > 0 && patch.end > (patches[index - 1]?.start ?? 0))) {
+    return { kind: "skipped", reason: "overlapping-literals" };
+  }
+  return { kind: "candidate", originalDigest, patches };
 }
 
 export async function restorePublishedPluginFilePatch(

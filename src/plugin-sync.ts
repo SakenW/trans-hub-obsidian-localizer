@@ -30,7 +30,9 @@ import {
   deletePluginTranslation,
   getPluginTranslation,
   setPluginTranslation,
+  translationExportStateKey,
   type PluginState,
+  type PluginTranslationState,
   type PublicPluginDiscoveryState,
   type PluginSubmissionState,
 } from "./plugin-state";
@@ -53,9 +55,14 @@ const ALLOW_DEVELOPMENT_DOWNLOAD_ORIGIN =
   __TRANS_HUB_OBSIDIAN_BUILD_CHANNEL__ === "development";
 
 export interface PluginSyncSummary {
+  /** Full checked scope completed without stale status or per-plugin delivery failures. */
+  readonly checkSucceeded?: boolean;
   readonly submittedCount: number;
   readonly requestedCount: number;
   readonly pulledCount: number;
+  /** Published generation or local safe projection actually changed. */
+  readonly updatedCount?: number;
+  readonly updatedTranslationCount?: number;
   readonly waitingCount: number;
   /**
    * Machine translation is complete and the server is building its public
@@ -77,6 +84,12 @@ export interface PluginSyncSummary {
   readonly statusReadPluginIds?: readonly string[];
 }
 
+export interface PublishedPluginSyncProgress {
+  readonly checkedCount: number;
+  readonly totalCount: number;
+  readonly availableCount: number;
+}
+
 export async function synchronizeConfiguredPluginTranslations(input: {
   readonly apiBaseUrl: string;
   readonly targetLocale: TargetLocale;
@@ -91,6 +104,8 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   readonly save: () => Promise<void>;
   /** Called only after a plugin's active dictionary is durably saved. */
   readonly onPluginPersisted?: () => void;
+  /** Presentation-only progress over plugins with a current published source. */
+  readonly onPublishedProgress?: (progress: PublishedPluginSyncProgress) => void;
 }): Promise<PluginSyncSummary> {
   const { client, bootstrap, authorityWorkspaceId } = await input.activationStore.client({
     apiBaseUrl: input.apiBaseUrl,
@@ -122,6 +137,8 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   let submittedCount = 0;
   const requestedCount = 0;
   let pulledCount = 0;
+  let updatedCount = 0;
+  let updatedTranslationCount = 0;
   let waitingCount = 0;
   const exportPendingCount = 0;
   let translationCount = 0;
@@ -134,6 +151,20 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   const authorityRefreshingCount = 0;
   let nextRetryAfterMs: number | undefined;
   let packsMayNeedPruning = false;
+  let publishedTotalCount = 0;
+  let publishedCheckedCount = 0;
+  const reportPublishedProgress = (): void => {
+    if (publishedTotalCount === 0) return;
+    try {
+      input.onPublishedProgress?.({
+        checkedCount: publishedCheckedCount,
+        totalCount: publishedTotalCount,
+        availableCount: pulledCount,
+      });
+    } catch (error) {
+      console.warn("[Trans-Hub] 译文同步进度界面暂未刷新：", error);
+    }
+  };
   const markPersisted = (): void => {
     packsMayNeedPruning = true;
     try {
@@ -143,8 +174,23 @@ export async function synchronizeConfiguredPluginTranslations(input: {
       console.warn("[Trans-Hub] 已保存译文，界面刷新将在本轮结束时重试：", error);
     }
   };
+  const iterations = orderedPluginSyncItems({
+    catalogs,
+    publishedCatalog,
+    sourceVersionIds: projectionRefresh.sourceVersionIds,
+    stalePluginIds,
+    input,
+    transport,
+    accessToken: bootstrap.intakeCredential.value,
+    authorityWorkspaceId,
+    onPlanned: (total) => {
+      publishedTotalCount = total;
+      reportPublishedProgress();
+    },
+  });
   try {
-  for (const catalog of catalogs) {
+  for await (const iteration of iterations) {
+    const { catalog } = iteration;
     if (stalePluginIds.has(catalog.pluginId)) {
       if (projectionRefresh.summary.waitingPluginIds?.includes(catalog.pluginId)) {
         waitingCount += 1;
@@ -161,15 +207,18 @@ export async function synchronizeConfiguredPluginTranslations(input: {
       const authoritativeSourceVersionId = projectionRefresh.sourceVersionIds.get(
         catalog.pluginId,
       );
-      const publishedResolution = publishedCatalog === undefined
-        ? undefined
-        : resolvePublishedPluginSourceFromCatalog(publishedCatalog, {
-            pluginId: catalog.pluginId,
-            pluginVersion: catalog.pluginVersion,
-            targetLocale: input.targetLocale,
-            localCatalogIdentity: catalog.catalogIdentity,
-            authoritativeSourceVersionId,
-          });
+      if (iteration.resolution?.kind === "failed") throw iteration.resolution.error;
+      const publishedResolution = iteration.resolution?.kind === "resolved"
+        ? iteration.resolution.value
+        : (publishedCatalog === undefined
+            ? undefined
+            : resolvePublishedPluginSourceFromCatalog(publishedCatalog, {
+                pluginId: catalog.pluginId,
+                pluginVersion: catalog.pluginVersion,
+                targetLocale: input.targetLocale,
+                localCatalogIdentity: catalog.catalogIdentity,
+                authoritativeSourceVersionId,
+              }));
       if (publishedResolution !== undefined && isPublishedPluginCoverageRefreshing(publishedResolution)) {
         // Freshness rebuilding makes aggregate totals intentionally unknown.
         // It is not permission loss or zero coverage, so leave any verified
@@ -226,7 +275,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           && activeBeforePull.entries.length > 0;
         let deliveryWaiting = false;
         try {
-          const count = await pullPluginTranslation({
+          const pulled = await pullPluginTranslation({
             input,
             transport,
             catalog,
@@ -235,9 +284,14 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             authorityWorkspaceId,
             upstreamNativeCount: published.upstreamNativeCount,
             onPersisted: markPersisted,
+            ...(iteration.preparation === undefined ? {} : { preparation: iteration.preparation }),
           });
           pulledCount += 1;
-          translationCount += count;
+          translationCount += pulled.entryCount;
+          if (pulled.updated) {
+            updatedCount += 1;
+            updatedTranslationCount += pulled.entryCount;
+          }
         } catch (error) {
           if (!isPublishedExportPending(error)) throw error;
           const exportWithdrawn = isPublishedExportWithdrawn(error);
@@ -356,6 +410,11 @@ export async function synchronizeConfiguredPluginTranslations(input: {
       if (isGlobalSynchronizationError(error)) throw error;
       failedPluginIds.push(catalog.pluginId);
       await saveSynchronizationError(input, catalog, bootstrap.installationId, error);
+    } finally {
+      if (iteration.preparation !== undefined) {
+        publishedCheckedCount += 1;
+        reportPublishedProgress();
+      }
     }
   }
   } finally {
@@ -365,9 +424,14 @@ export async function synchronizeConfiguredPluginTranslations(input: {
     if (packsMayNeedPruning) await pruneUnreferencedTranslationPacks(input, input.getState());
   }
   return {
+    checkSucceeded: staleStatus?.kind !== "stale"
+      && failedPluginIds.length === 0
+      && (publishedCatalog?.failedPluginIds?.length ?? 0) === 0,
     submittedCount,
     requestedCount,
     pulledCount,
+    updatedCount,
+    updatedTranslationCount,
     waitingCount,
     ...(exportPendingCount === 0 ? {} : { exportPendingCount }),
     translationCount,
@@ -415,7 +479,7 @@ function retryableFailedPluginIds(
 }
 
 
-async function pullPluginTranslation(input: {
+interface PluginPullInput {
   readonly input: Parameters<typeof synchronizeConfiguredPluginTranslations>[0];
   readonly transport: ObsidianHttpTransport;
   readonly catalog: PluginUiCatalog;
@@ -423,8 +487,164 @@ async function pullPluginTranslation(input: {
   readonly accessToken: string;
   readonly authorityWorkspaceId: string;
   readonly upstreamNativeCount?: number;
+}
+
+type PluginPullPreparation =
+  | { readonly kind: "ready"; readonly value: Awaited<ReturnType<typeof preparePluginTranslation>> }
+  | { readonly kind: "failed"; readonly error: unknown };
+
+interface PluginSyncItem {
+  readonly catalog: PluginUiCatalog;
+  readonly resolution?:
+    | { readonly kind: "resolved"; readonly value: ReturnType<typeof resolvePublishedPluginSourceFromCatalog> }
+    | { readonly kind: "failed"; readonly error: unknown };
+  readonly preparation?: PluginPullPreparation;
+}
+
+/** Only immutable pack preparation overlaps. Active dictionaries and saves
+ * remain in the single consumer's completion order. */
+async function* orderedPluginSyncItems(input: {
+  readonly catalogs: readonly PluginUiCatalog[];
+  readonly publishedCatalog: Awaited<ReturnType<typeof loadPublishedCatalogForSynchronization>>;
+  readonly sourceVersionIds: ReadonlyMap<string, string>;
+  readonly stalePluginIds: ReadonlySet<string>;
+  readonly input: Parameters<typeof synchronizeConfiguredPluginTranslations>[0];
+  readonly transport: ObsidianHttpTransport;
+  readonly accessToken: string;
+  readonly authorityWorkspaceId: string;
+  readonly onPlanned: (total: number) => void;
+}): AsyncGenerator<PluginSyncItem> {
+  const candidates: { readonly catalog: PluginUiCatalog; readonly published: PublishedPluginSource }[] = [];
+  const remaining: PluginSyncItem[] = [];
+  for (const catalog of input.catalogs) {
+    if (input.stalePluginIds.has(catalog.pluginId)
+      || input.publishedCatalog?.failedPluginIds?.includes(catalog.pluginId)) {
+      remaining.push({ catalog });
+      continue;
+    }
+    try {
+      const published = input.publishedCatalog === undefined ? undefined
+        : resolvePublishedPluginSourceFromCatalog(input.publishedCatalog, {
+            pluginId: catalog.pluginId,
+            pluginVersion: catalog.pluginVersion,
+            targetLocale: input.input.targetLocale,
+            localCatalogIdentity: catalog.catalogIdentity,
+            authoritativeSourceVersionId: input.sourceVersionIds.get(catalog.pluginId),
+          });
+      if (published !== undefined && !isPublishedPluginCoverageRefreshing(published)) {
+        candidates.push({ catalog, published });
+      } else {
+        remaining.push({ catalog, resolution: { kind: "resolved", value: published } });
+      }
+    } catch (error) {
+      // Preserve the existing per-plugin error path, including its persisted
+      // diagnostic, in the serial consumer below.
+      remaining.push({ catalog, resolution: { kind: "failed", error } });
+    }
+  }
+  input.onPlanned(candidates.length);
+  type Settled = { readonly candidate: typeof candidates[number]; readonly preparation: PluginPullPreparation };
+  const active: Promise<Settled>[] = [];
+  let next = 0;
+  const launch = (): void => {
+    while (active.length < 3 && next < candidates.length) {
+      const candidate = candidates[next++];
+      if (candidate === undefined) break;
+      void active.push(preparePluginTranslation({
+        input: input.input,
+        transport: input.transport,
+        catalog: candidate.catalog,
+        published: candidate.published,
+        accessToken: input.accessToken,
+        authorityWorkspaceId: input.authorityWorkspaceId,
+        upstreamNativeCount: candidate.published.upstreamNativeCount,
+      }).then(
+        (value): Settled => ({ candidate, preparation: { kind: "ready", value } }),
+        (error): Settled => ({ candidate, preparation: { kind: "failed", error } }),
+      ));
+    }
+  };
+  try {
+    launch();
+    while (active.length > 0) {
+      const settled = await Promise.race(active.map(async (promise, index) => ({
+        index, result: await promise,
+      })));
+      void active.splice(settled.index, 1);
+      yield {
+        catalog: settled.result.candidate.catalog,
+        resolution: { kind: "resolved", value: settled.result.candidate.published },
+        preparation: settled.result.preparation,
+      };
+      launch();
+    }
+    for (const item of remaining) yield item;
+  } finally {
+    // A fatal identity error or save failure must not let the round's GC race
+    // with a pack preparation that is still writing verified objects.
+    await Promise.all(active);
+  }
+}
+
+async function pullPluginTranslation(input: PluginPullInput & {
   readonly onPersisted: () => void;
-}): Promise<number> {
+  readonly preparation?: PluginPullPreparation;
+}): Promise<{ readonly entryCount: number; readonly updated: boolean }> {
+  if (input.preparation?.kind === "failed") throw input.preparation.error;
+  const { output, downloaded } = input.preparation?.kind === "ready"
+    ? input.preparation.value
+    : await preparePluginTranslation(input);
+  const state = input.input.getState();
+  const dictionary = mergePublishedPluginTranslation(
+    input.catalog,
+    downloaded,
+    getPluginTranslation(state, input.catalog.pluginId, input.input.targetLocale),
+  );
+  const exportStateKey = translationExportStateKey(input.published.sourceVersionId, input.input.targetLocale);
+  const previousExport = state.translationExportStates[exportStateKey];
+  const active = getPluginTranslation(state, input.catalog.pluginId, input.input.targetLocale);
+  if (output.status === "not_modified"
+    && previousExport?.etag === output.etag
+    && previousExport.manifest.manifestDigest === output.manifest.manifestDigest
+    && state.pluginSubmissions[input.catalog.pluginId] === undefined
+    && active !== undefined
+    && samePluginTranslationProjection(active, dictionary)) {
+    return { entryCount: dictionary.entries.length, updated: false };
+  }
+  const nextState = setPluginTranslation({
+    ...state,
+    pluginSubmissions: clearedPluginSubmissions(state, input.catalog.pluginId),
+    translationExportStates: {
+      ...state.translationExportStates,
+      [exportStateKey]: { etag: output.etag, manifest: output.manifest },
+    },
+  }, input.catalog.pluginId, input.input.targetLocale, dictionary);
+  input.input.replaceState(nextState);
+  try {
+    await input.input.save();
+  } catch (error) {
+    if (input.input.getState() === nextState) input.input.replaceState(state);
+    throw error;
+  }
+  input.onPersisted();
+  return { entryCount: dictionary.entries.length, updated: true };
+}
+
+function samePluginTranslationProjection(
+  previous: PluginTranslationState,
+  current: PluginTranslationState,
+): boolean {
+  const { pulledAt: previousPulledAt, ...previousProjection } = previous;
+  const { pulledAt: currentPulledAt, ...currentProjection } = current;
+  void previousPulledAt;
+  void currentPulledAt;
+  return JSON.stringify(previousProjection) === JSON.stringify(currentProjection);
+}
+
+async function preparePluginTranslation(input: PluginPullInput): Promise<{
+  readonly output: Awaited<ReturnType<typeof downloadPluginTranslations>>;
+  readonly downloaded: ReturnType<typeof validatePluginTranslations>;
+}> {
   const exportStateKey = translationExportStateKey(
     input.published.sourceVersionId,
     input.input.targetLocale,
@@ -460,29 +680,7 @@ async function pullPluginTranslation(input: {
     input.upstreamNativeCount,
     input.published,
   );
-  const state = input.input.getState();
-  const dictionary = mergePublishedPluginTranslation(
-    input.catalog,
-    downloaded,
-    getPluginTranslation(state, input.catalog.pluginId, input.input.targetLocale),
-  );
-  const nextState = setPluginTranslation({
-    ...state,
-    pluginSubmissions: clearedPluginSubmissions(state, input.catalog.pluginId),
-    translationExportStates: {
-      ...state.translationExportStates,
-      [exportStateKey]: { etag: output.etag, manifest: output.manifest },
-    },
-  }, input.catalog.pluginId, input.input.targetLocale, dictionary);
-  input.input.replaceState(nextState);
-  try {
-    await input.input.save();
-  } catch (error) {
-    if (input.input.getState() === nextState) input.input.replaceState(state);
-    throw error;
-  }
-  input.onPersisted();
-  return dictionary.entries.length;
+  return { output, downloaded };
 }
 
 async function saveNativeCoverage(
@@ -744,7 +942,7 @@ function isTemporaryPublishedCatalogError(error: unknown): boolean {
 
 function isGlobalSynchronizationError(error: unknown): boolean {
   if (!isDiagnosticError(error)) return false;
-  if (error.diagnostic.status === 401 || error.diagnostic.status === 403) return true;
+  if ([401, 403, 429].includes(error.diagnostic.status ?? 0)) return true;
   return [
     "PC_CONFIGURATION",
     "PC_CREDENTIAL_AUDIENCE",
@@ -814,10 +1012,6 @@ export function isPublishedExportPending(error: unknown): boolean {
 
 function isPublishedExportWithdrawn(error: unknown): boolean {
   return error instanceof Error && error.message === "translation_manifest_unavailable:410";
-}
-
-function translationExportStateKey(sourceVersionId: string, targetLocale: string): string {
-  return `${encodeURIComponent(sourceVersionId)}:${encodeURIComponent(targetLocale)}:default`;
 }
 
 function isLocalHttp(value: string): boolean {

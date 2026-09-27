@@ -66,9 +66,11 @@ export function describePluginSelectionProcessing(
   const failedCount = new Set(sync.failedPluginIds ?? []).size;
   const blockedCount = new Set(sync.blockedPluginIds ?? []).size;
   const exportPendingCount = sync.exportPendingCount ?? 0;
-  if (sync.pulledCount > 0) {
+  const updatedCount = sync.updatedCount ?? sync.pulledCount;
+  if (updatedCount > 0) {
     const parts = [translate("{scope}更新 {count} 个插件，本机安全应用 {translations} 条译文。", {
-      scope: processingScopeUpdateLabel(scope), count: sync.pulledCount, translations: sync.translationCount,
+      scope: processingScopeUpdateLabel(scope), count: updatedCount,
+      translations: sync.updatedTranslationCount ?? sync.translationCount,
     })];
     if (sync.waitingCount > 0) parts.push(translate("仍有 {count} 个插件等待后续译文更新。", { count: sync.waitingCount }));
     if (failedCount > 0) parts.push(translate("{count} 个插件同步失败，可单独重试。", { count: failedCount }));
@@ -90,10 +92,13 @@ export function describePluginSelectionProcessing(
       },
     );
     const withDetail = detail === "" ? summary : `${summary}（${detail}）`;
+    const withAvailability = sync.pulledCount > 0
+      ? `${withDetail}；${translate("本轮确认 {count} 个插件已有可用译文", { count: sync.pulledCount })}`
+      : withDetail;
     return failedCount === 0
-      ? `${withDetail}。`
+      ? `${withAvailability}。`
       : translate("{summary}；仍有 {failed} 个可恢复项，可点击“重试可恢复项”。", {
-          summary: withDetail,
+          summary: withAvailability,
           failed: failedCount,
         });
   }
@@ -116,6 +121,11 @@ export function describePluginSelectionProcessing(
       scope: processingScopeLabel(scope),
       count: scan.scannedCount,
       blocked: blockedCount,
+    });
+  }
+  if (sync.checkSucceeded === true && sync.updatedCount === 0) {
+    return translate("{scope} {count} 个插件，译文已是最新。", {
+      scope: processingScopeLabel(scope), count: scan.scannedCount,
     });
   }
   return translate("{scope} {count} 个插件，目前没有新译文。", {

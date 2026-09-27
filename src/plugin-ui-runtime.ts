@@ -205,6 +205,7 @@ export class PluginUiTranslationRuntime {
   private metadataPlan: RuntimeTranslationPlan = emptyPlan();
   private readmePlan: RuntimeTranslationPlan = emptyPlan();
   private readonly runtimePlansByPluginId = new Map<string, RuntimeTranslationPlan>();
+  private readonly metadataPlansByPluginId = new Map<string, RuntimeTranslationPlan>();
   private readonly settingsOwnerByLabel = new Map<string, string>();
   private readonly observers = new Map<HTMLElement, MutationObserver>();
   private readonly restoredText = new Map<Text, { original: string; translated: string }>();
@@ -220,6 +221,7 @@ export class PluginUiTranslationRuntime {
     this.metadataPlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "metadata"));
     this.readmePlan = buildRuntimeTranslationPlan(filterTranslationScope(translations, "readme"));
     this.runtimePlansByPluginId.clear();
+    this.metadataPlansByPluginId.clear();
     this.settingsOwnerByLabel.clear();
     const translationsByPluginId = new Map<string, PluginUiTranslation[]>();
     for (const translation of translations) {
@@ -232,6 +234,10 @@ export class PluginUiTranslationRuntime {
       this.runtimePlansByPluginId.set(
         pluginId,
         buildRuntimeTranslationPlan(filterTranslationScope(pluginTranslations, "runtime-ui")),
+      );
+      this.metadataPlansByPluginId.set(
+        pluginId,
+        buildRuntimeTranslationPlan(filterTranslationScope(pluginTranslations, "metadata")),
       );
       for (const translation of pluginTranslations) {
         if (!translation.scopes?.includes("metadata")) continue;
@@ -329,9 +335,7 @@ export class PluginUiTranslationRuntime {
     if (this.restoredText.get(node)?.translated === raw) return;
     // The host replaced our output: its latest value is now the restore source.
     this.restoredText.delete(node);
-    const plan = shouldUsePluginMetadataPlan(parent)
-      ? this.metadataPlan
-      : this.runtimePlanForElement(parent);
+    const plan = this.metadataPlanForElement(parent) ?? this.runtimePlanForElement(parent);
     if (plan === undefined) return;
     const translated = translatePluginUiValue(raw, plan);
     if (translated === undefined) return;
@@ -380,7 +384,7 @@ export class PluginUiTranslationRuntime {
 
   private translateAttributes(element: Element): void {
     if (!shouldTranslatePluginUiElement(element)) return;
-    const plan = this.runtimePlanForElement(element);
+    const plan = this.metadataPlanForElement(element) ?? this.runtimePlanForElement(element);
     if (plan === undefined) return;
     for (const attribute of TRANSLATABLE_ATTRIBUTES) {
       const raw = element.getAttribute(attribute);
@@ -398,14 +402,41 @@ export class PluginUiTranslationRuntime {
 
   private runtimePlanForElement(element: Element): RuntimeTranslationPlan | undefined {
     const settingsModal = element.closest(SETTINGS_MODAL_SELECTOR);
+    if (settingsModal === null) {
+      // Notebook Navigator's resize separator is plugin-owned chrome inside
+      // its exact view root. Do not scope the whole view: it renders vault file
+      // names and other user text alongside controls.
+      if (element.closest(".nn-shortcuts-resize-handle[role='separator']") === element
+        && element.closest(".view-content.notebook-navigator") !== null) {
+        return this.runtimePlansByPluginId.get("notebook-navigator");
+      }
+      // QuickAdd's choice builder opens a separate Obsidian modal outside the
+      // settings tab. Its own two-class container is an explicit owner marker;
+      // an unmarked modal still has no runtime translation plan.
+      const modal = element.closest(".modal");
+      return modal?.parentElement?.matches(".modal-container.quickAddModal.qa-choice-builder")
+        ? this.runtimePlansByPluginId.get("quickadd") : undefined;
+    }
     // A matching source string alone never proves which plugin rendered a
-    // normal workspace node.  The active settings tab has a host-provided
-    // owner identity; every other runtime surface fails closed until the
-    // adapter can supply equivalent ownership evidence.
-    if (settingsModal === null) return undefined;
+    // normal workspace node. The active settings tab supplies the owner here;
+    // other unmarked runtime surfaces still fail closed.
     if (element.closest(".vertical-tab-nav-item") !== null) return this.metadataPlan;
     const owner = this.settingsPluginOwner(settingsModal);
     return owner === undefined ? undefined : this.runtimePlansByPluginId.get(owner);
+  }
+
+  private metadataPlanForElement(element: Element): RuntimeTranslationPlan | undefined {
+    if (shouldUsePluginMetadataPlan(element)) return this.metadataPlan;
+    // Obsidian 1.13.7 places installed plugins directly in setting-item rows,
+    // outside the older installed-plugins-container. The exact row identity and
+    // active community-plugins tab jointly scope metadata to its owning plugin.
+    const row = element.closest<HTMLElement>(".setting-item.mod-toggle[data-plugin-id]");
+    const modal = row?.closest(SETTINGS_MODAL_SELECTOR);
+    const active = modal?.querySelector(SETTINGS_NAV_ITEM_SELECTOR);
+    if (active?.getAttribute("data-setting-id") !== "community-plugins") return undefined;
+    const pluginId = row?.getAttribute("data-plugin-id");
+    return pluginId === null || pluginId === undefined
+      ? undefined : this.metadataPlansByPluginId.get(pluginId);
   }
 
   private settingsPluginOwner(settingsModal: Element): string | undefined {

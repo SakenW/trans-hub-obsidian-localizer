@@ -10,13 +10,15 @@ Trans-Hub Localizer 是一款为 Obsidian 社区插件提供汉化、翻译与�
 
 [在 Obsidian 中安装](obsidian://show-plugin?id=trans-hub-plugin-localizer) · [查看本地化进展](https://trans-hub.net/ecosystems/obsidian) · [反馈与社区](https://github.com/SakenW/Trans-Hub/discussions)
 
+**注册需要邀请。** [加入用户社区，与开发者交流](https://trans-hub.net/zh-CN/ecosystems/obsidian/invite)：国际用户可在 Discord 讨论；中文用户可通过微信联系开发者，获取人工邀请并由开发者邀请入群。想先试用或不使用微信，也可在该页面申请邮件邀请，无需先加入社区。收到邀请并注册后，返回插件连接账号。
+
 <!-- section: getting-started -->
 ## 开始使用
 
 需要 **Obsidian 1.11.4 或更高版本**、语枢账号，以及用于授权和同步的网络连接。支持桌面与移动端；高级文件兼容补丁仅限桌面端。
 
 1. 在 **设置 → 第三方插件** 中安装并启用 **Trans-Hub Localizer**。
-2. 打开插件设置，连接语枢账号。无需配置 AI 模型、模型服务商账号或 API Key。
+2. [查看邀请方式](https://trans-hub.net/zh-CN/ecosystems/obsidian/invite)：通过微信联系开发者获取人工邀请，或申请邮件邀请。收到邀请并注册后，返回插件设置连接语枢账号。无需配置 AI 模型、模型服务商账号或 API Key。
 3. 确认译文语言。插件自动发现已启用的社区插件，你可以排除不需要本地化的插件。
 
 已有的已发布译文直接复用；缺失内容自动提交本地化需求，在后台处理并发布后同步。等待处理、发布或兼容性检查的内容可能暂时保留原文。

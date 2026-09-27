@@ -37,6 +37,17 @@ describe("buildConflictSafeDictionary", () => {
 });
 
 describe("dynamic UI template replacement", () => {
+  it("translates linked settings text and its link label as separate text nodes", () => {
+    const lead = "Collect a choice's inputs in one form before it runs, instead of one prompt at a time.";
+    const link = "Learn more about one-page inputs";
+    const plan = buildRuntimeTranslationPlan([
+      { pluginId: "sample", source: lead, target: "运行前在同一表单中收集选项输入，而不是逐项提问。" },
+      { pluginId: "sample", source: link, target: "了解单页输入" },
+    ]);
+    expect(translatePluginUiValue(`${lead} `, plan)).toBe("运行前在同一表单中收集选项输入，而不是逐项提问。 ");
+    expect(translatePluginUiValue(link, plan)).toBe("了解单页输入");
+  });
+
   it.each(["$&", "$$", "$`", "$'", "$1", "C:/notes/42"])("preserves literal runtime and exact target values: %s", (value) => {
     const dynamic = buildRuntimeTranslationPlan([{
       pluginId: "sample", source: "Count {{th:expr:0}}", target: "数量 {{th:expr:0}}",
@@ -272,6 +283,40 @@ describe("runtime DOM boundary", () => {
     expect(shouldUsePluginMetadataPlan(regularRuntimeSurface)).toBe(false);
   });
 
+  it("scopes flattened installed-plugin metadata by row identity and active host tab", () => {
+    const source = "Make plugin management more intuitive and efficient.";
+    const runtime = new PluginUiTranslationRuntime();
+    runtime.update([
+      { pluginId: "better-plugins-manager", source: "Better Manager", target: "更好的经理", scopes: ["metadata"] },
+      { pluginId: "better-plugins-manager", source, target: "使插件管理更直观、更高效。", scopes: ["metadata"] },
+      { pluginId: "other-plugin", source, target: "另一种译法。", scopes: ["metadata"] },
+    ]);
+    const element = (pluginId: string, activeTab: string, inModal = true): Element => {
+      const active = { getAttribute: (key: string) => key === "data-setting-id" ? activeTab : null } as Element;
+      const modal = { querySelector: () => active } as unknown as Element;
+      const row = {
+        getAttribute: (key: string) => key === "data-plugin-id" ? pluginId : null,
+        closest: (selector: string) => selector === ".modal.mod-settings" && inModal ? modal : null,
+      } as unknown as Element;
+      return {
+        closest: (selector: string) => selector === ".setting-item.mod-toggle[data-plugin-id]" ? row : null,
+      } as unknown as Element;
+    };
+    const planFor = (runtime as unknown as {
+      metadataPlanForElement(element: Element): ReturnType<typeof buildRuntimeTranslationPlan> | undefined;
+    }).metadataPlanForElement.bind(runtime);
+
+    expect(translatePluginUiValue(source, planFor(element("better-plugins-manager", "community-plugins"))!))
+      .toBe("使插件管理更直观、更高效。");
+    expect(translatePluginUiValue("Better Manager", planFor(element("better-plugins-manager", "community-plugins"))!))
+      .toBe("更好的经理");
+    expect(translatePluginUiValue(source, planFor(element("other-plugin", "community-plugins"))!))
+      .toBe("另一种译法。");
+    expect(planFor(element("better-plugins-manager", "better-plugins-manager"))).toBeUndefined();
+    expect(planFor(element("unknown-plugin", "community-plugins"))).toBeUndefined();
+    expect(planFor(element("better-plugins-manager", "community-plugins", false))).toBeUndefined();
+  });
+
   it("uses the active plugin tab to select a settings runtime plan and leaves an unowned modal untouched", () => {
     const runtime = new PluginUiTranslationRuntime();
     runtime.update([
@@ -302,6 +347,63 @@ describe("runtime DOM boundary", () => {
 
     expect(translatePluginUiValue("Indexing", unsafeRuntime.runtimePlanForElement(settingsBody)!)).toBe("索引");
     expect(unsafeRuntime.runtimePlanForElement(unownedBody)).toBeUndefined();
+  });
+
+  it("uses QuickAdd's verified choice-builder container without translating other modals", () => {
+    const runtime = new PluginUiTranslationRuntime();
+    runtime.update([
+      { pluginId: "quickadd", source: "Done", target: "完成", scopes: ["runtime-ui"] },
+      { pluginId: "other-plugin", source: "Done", target: "结束", scopes: ["runtime-ui"] },
+    ]);
+    const container = {
+      matches: (selector: string) => selector === ".modal-container.quickAddModal.qa-choice-builder",
+    } as unknown as Element;
+    const modal = { parentElement: container } as unknown as Element;
+    const element = {
+      closest: (selector: string) => selector === ".modal" ? modal : null,
+    } as unknown as Element;
+    const unsafeRuntime = runtime as unknown as {
+      runtimePlanForElement(element: Element): ReturnType<typeof buildRuntimeTranslationPlan> | undefined;
+    };
+
+    expect(translatePluginUiValue("Done", unsafeRuntime.runtimePlanForElement(element)!)).toBe("完成");
+    const unmarkedModal = { parentElement: { matches: () => false } } as unknown as Element;
+    const unmarkedElement = {
+      closest: (selector: string) => selector === ".modal" ? unmarkedModal : null,
+    } as unknown as Element;
+    expect(unsafeRuntime.runtimePlanForElement(unmarkedElement)).toBeUndefined();
+    expect(unsafeRuntime.runtimePlanForElement({ closest: () => null } as unknown as Element)).toBeUndefined();
+  });
+
+  it("scopes Notebook Navigator's resize label without touching file-list text", () => {
+    const runtime = new PluginUiTranslationRuntime();
+    runtime.update([
+      { pluginId: "notebook-navigator", source: "Resize pinned shortcuts", target: "调整固定快捷方式大小", scopes: ["runtime-ui"] },
+      { pluginId: "other-plugin", source: "Resize pinned shortcuts", target: "另一种译法", scopes: ["runtime-ui"] },
+    ]);
+    const view = {} as Element;
+    const separator = {
+      closest(selector: string): Element | null {
+        return selector === ".nn-shortcuts-resize-handle[role='separator']" ? this
+          : selector === ".view-content.notebook-navigator" ? view : null;
+      },
+    } as Element;
+    const fileName = {
+      closest: (selector: string): Element | null => selector === ".view-content.notebook-navigator" ? view : null,
+    } as unknown as Element;
+    const outside = {
+      closest(selector: string): Element | null {
+        return selector === ".nn-shortcuts-resize-handle[role='separator']" ? this : null;
+      },
+    } as Element;
+    const unsafeRuntime = runtime as unknown as {
+      runtimePlanForElement(element: Element): ReturnType<typeof buildRuntimeTranslationPlan> | undefined;
+    };
+
+    expect(translatePluginUiValue("Resize pinned shortcuts", unsafeRuntime.runtimePlanForElement(separator)!))
+      .toBe("调整固定快捷方式大小");
+    expect(unsafeRuntime.runtimePlanForElement(fileName)).toBeUndefined();
+    expect(unsafeRuntime.runtimePlanForElement(outside)).toBeUndefined();
   });
 
   it("does not use an unscoped global plan for a normal workspace node", () => {

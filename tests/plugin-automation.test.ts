@@ -213,14 +213,17 @@ describe("selectApplicablePluginTranslations", () => {
       pluginVersion: "1.0.0",
       artifactDigest: "a".repeat(64),
       scannerTargetLocale: "zh-CN",
-      patchEvidenceRevision: 14,
+      patchEvidenceRevision: 31,
       catalogIdentity: {},
     } as Parameters<typeof canReuseScannedPluginCatalog>[0];
 
     expect(canReuseScannedPluginCatalog(catalog, {
       name: "Large Plugin", version: "1.0.0",
     }, "a".repeat(64), "zh-CN")).toBe(true);
-    expect(canReuseScannedPluginCatalog({ ...catalog!, patchEvidenceRevision: 13 }, {
+    expect(canReuseScannedPluginCatalog({ ...catalog!, patchEvidenceRevision: 26 }, {
+      name: "Large Plugin", version: "1.0.0",
+    }, "a".repeat(64), "zh-CN")).toBe(false);
+    expect(canReuseScannedPluginCatalog({ ...catalog!, patchEvidenceRevision: 30 }, {
       name: "Large Plugin", version: "1.0.0",
     }, "a".repeat(64), "zh-CN")).toBe(false);
     expect(canReuseScannedPluginCatalog(catalog, {
@@ -622,6 +625,56 @@ describe("selectApplicablePluginTranslations", () => {
     controller.applyPluginDisplayNames();
     expect(manifests["obsidian-advanced-uri"]?.name).toBe("Advanced URI");
     expect(manifests["better-plugins-manager"]?.name).toBe("Better Manager");
+  });
+
+  it("keeps metadata names restored across periodic passes while master localization is off", () => {
+    const manifests = { "obsidian-advanced-uri": { name: "Advanced URI" } };
+    const item = new FakeNavItem("obsidian-advanced-uri", "Advanced URI");
+    const app = {
+      plugins: { manifests },
+      setting: { win: { document: settingsDocument([item]) } },
+    } as unknown as App;
+    const settings = { ...CONTROLLER_SETTINGS };
+    const controller = automationController(
+      app,
+      displayNameState("obsidian-advanced-uri", "Advanced URI", "高级 URI"),
+      settings,
+    );
+
+    controller.applyPluginDisplayNames();
+    controller.localizeSettingsWindowNavigation();
+    expect(manifests["obsidian-advanced-uri"].name).toBe("高级 URI");
+    expect(item.title.textContent).toBe("高级 URI");
+
+    settings.pluginTranslationEnabled = false;
+    for (let pass = 0; pass < 2; pass += 1) {
+      controller.applyPluginDisplayNames();
+      controller.localizeSettingsWindowNavigation();
+      expect(manifests["obsidian-advanced-uri"].name).toBe("Advanced URI");
+      expect(item.title.textContent).toBe("Advanced URI");
+    }
+
+    settings.pluginTranslationEnabled = true;
+    controller.applyPluginDisplayNames();
+    controller.localizeSettingsWindowNavigation();
+    expect(item.title.textContent).toBe("高级 URI");
+  });
+
+  it("does not activate an imported local dictionary while master localization is off", async () => {
+    const settings = { ...CONTROLLER_SETTINGS, pluginTranslationEnabled: false };
+    const controller = automationController({} as App, EMPTY_PLUGIN_STATE, settings);
+    const runtime = Reflect.get(controller, "runtime") as { update: (entries: unknown[]) => void };
+    const update = vi.spyOn(runtime, "update");
+
+    await controller.importTranslationDictionary(JSON.stringify({
+      version: 1,
+      pluginId: "obsidian-advanced-uri",
+      pluginVersion: "1.0.0",
+      targetLocale: "zh-CN",
+      entries: [{ source: "Advanced URI", target: "高级 URI" }],
+    }));
+
+    expect(update).toHaveBeenCalledExactlyOnceWith([]);
   });
 
   it("rewrites the 1.13 settings window nav titles by plugin id and restores them", () => {

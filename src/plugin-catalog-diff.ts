@@ -400,26 +400,43 @@ function findMetadataString(
   return candidates.find((item) => item.source === officialText) ?? candidates[0];
 }
 
+export type PluginCatalogMatchFailure =
+  | "ambiguous-source"
+  | "placeholder"
+  | "missing-compatibility"
+  | "semantic-role"
+  | "content-scopes"
+  | "format";
+
+export function pluginCatalogMatchFailure(
+  entry: PluginUiTranslation,
+  candidates: readonly PluginUiCatalog["strings"][number][] | undefined,
+  crossVersion: boolean,
+): PluginCatalogMatchFailure | null {
+  if (candidates?.length !== 1) return "ambiguous-source";
+  const source = candidates[0];
+  if (source === undefined
+    || placeholderSignature(entry.source) !== source.placeholderSignature
+    || placeholderSignature(entry.target) !== source.placeholderSignature) return "placeholder";
+  if (!crossVersion || entry.provenanceKind === "upstream-native") return null;
+  const compatibility = entry.sourceCompatibility;
+  if (compatibility === undefined) return "missing-compatibility";
+  const scopes = [...resolvePluginStringScopes(source.origins)].sort();
+  const semanticRole = source.semanticRole ?? resolvePluginStringSemanticRole(source.origins);
+  if (compatibility.semanticRole !== semanticRole) return "semantic-role";
+  if (compatibility.placeholderSignature !== source.placeholderSignature) return "placeholder";
+  if (compatibility.formatSignature !== "plain-text-v1") return "format";
+  if (compatibility.contentScopes.length !== scopes.length
+    || !compatibility.contentScopes.every((scope, index) => scope === scopes[index])) return "content-scopes";
+  return null;
+}
+
 function isCompatibleCatalogEntry(
   entry: PluginUiTranslation,
   candidates: readonly PluginUiCatalog["strings"][number][] | undefined,
   crossVersion: boolean,
 ): boolean {
-  if (candidates?.length !== 1) return false;
-  const source = candidates[0];
-  if (source === undefined
-    || placeholderSignature(entry.source) !== source.placeholderSignature
-    || placeholderSignature(entry.target) !== source.placeholderSignature) return false;
-  if (!crossVersion || entry.provenanceKind === "upstream-native") return true;
-  const compatibility = entry.sourceCompatibility;
-  const scopes = [...resolvePluginStringScopes(source.origins)].sort();
-  const semanticRole = source.semanticRole ?? resolvePluginStringSemanticRole(source.origins);
-  return compatibility !== undefined
-    && compatibility.semanticRole === semanticRole
-    && compatibility.placeholderSignature === source.placeholderSignature
-    && compatibility.formatSignature === "plain-text-v1"
-    && compatibility.contentScopes.length === scopes.length
-    && compatibility.contentScopes.every((scope, index) => scope === scopes[index]);
+  return pluginCatalogMatchFailure(entry, candidates, crossVersion) === null;
 }
 
 function groupCatalogStringsBySource(

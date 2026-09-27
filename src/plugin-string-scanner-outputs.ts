@@ -98,13 +98,23 @@ export function collectRegexFallbackMatches(
 }
 
 export function collectStructuredMatches(
+  bundle: string,
   tokens: readonly Token[],
   target: Map<string, CandidateAggregate>,
   sourceLocale: string,
+  onPhaseMeasured?: (phase: string, elapsedMs: number) => void,
 ): boolean {
+  let phaseStartedAt = performance.now();
+  const finishPhase = (phase: string): void => {
+    const finishedAt = performance.now();
+    onPhaseMeasured?.(phase, Math.round(finishedAt - phaseStartedAt));
+    phaseStartedAt = finishedAt;
+  };
   const matching = buildMatchingTokenIndexes(tokens);
   if (matching === null) return false;
+  finishPhase("matching-index");
   const uiContextPropertyIndices = findUiRegistrationContextPropertyIndices(tokens);
+  finishPhase("ui-context");
   const createElementEnds: number[] = [];
   for (let index = 0; index < tokens.length; index += 1) {
     while (createElementEnds.at(-1) !== undefined && (createElementEnds.at(-1) ?? -1) < index) {
@@ -118,6 +128,15 @@ export function collectStructuredMatches(
       if (call === null) return false;
       if (createElementEnds.length < MAX_NESTED_CREATE_ELEMENT_DEPTH) {
         collectReactCreateElement(call.arguments, token, target, sourceLocale);
+      }
+      createElementEnds.push(call.endIndex);
+      continue;
+    }
+    if (isBundledReactJsxCall(tokens, index)) {
+      const call = readCallArguments(tokens, index + 2, matching);
+      if (call === null) return false;
+      if (createElementEnds.length < MAX_NESTED_CREATE_ELEMENT_DEPTH) {
+        collectBundledReactJsx(call.arguments, token, target, sourceLocale);
       }
       createElementEnds.push(call.endIndex);
       continue;
@@ -179,6 +198,20 @@ export function collectStructuredMatches(
       );
       continue;
     }
+    if (token.raw === "setAttribute" && next?.raw === "("
+      && isMemberExpressionReceiver(tokens, index)) {
+      const call = readCallArguments(tokens, index + 1, matching);
+      if (call === null) return false;
+      const [attribute, value] = call.arguments;
+      if (attribute?.length === 1 && value?.length === 1 && value[0]?.kind === "literal"
+        && ["aria-label", "title", "placeholder"].includes(decodeJsLiteral(attribute[0]?.raw ?? "") ?? "")) {
+        const rendered = renderExpression(value, { value: 0 });
+        if (rendered !== null && !(sourceLocale === "en" && /[\u3400-\u9fff\u{20000}-\u{2fa1f}]/u.test(rendered.text))) {
+          addStructuredExpression(target, value, "ui-property", token, sourceLocale, true);
+        }
+      }
+      continue;
+    }
     if (
       createElementEnds.length === 0
       && UI_PROPERTY_NAMES.has(token.raw)
@@ -197,7 +230,9 @@ export function collectStructuredMatches(
       }
     }
   }
-  collectStructuralRuleMatches(tokens, matching, target, sourceLocale);
+  finishPhase("ui-sinks");
+  collectStructuralRuleMatches(bundle, tokens, matching, target, sourceLocale, onPhaseMeasured);
+  finishPhase("structural-rules");
   return true;
 }
 
@@ -318,6 +353,45 @@ function isSafeReactCreateElementCall(tokens: readonly Token[], index: number): 
   return tokens[index - 2]?.raw === "default"
     && tokens[index - 3]?.raw === "."
     && tokens[index - 4]?.kind === "identifier";
+}
+
+/** esbuild's `(0, runtime.jsx)("div", { ... })` retains a native DOM tag and props. */
+function isBundledReactJsxCall(tokens: readonly Token[], index: number): boolean {
+  return index >= 5
+    && (tokens[index]?.raw === "jsx" || tokens[index]?.raw === "jsxs")
+    && tokens[index - 1]?.raw === "."
+    && tokens[index - 2]?.kind === "identifier"
+    && tokens[index - 3]?.raw === ","
+    && tokens[index - 4]?.raw === "0"
+    && tokens[index - 5]?.raw === "("
+    && tokens[index + 1]?.raw === ")"
+    && tokens[index + 2]?.raw === "(";
+}
+
+function collectBundledReactJsx(
+  args: readonly (readonly Token[])[],
+  callToken: Token,
+  target: Map<string, CandidateAggregate>,
+  sourceLocale: string,
+): void {
+  const tagExpression = stripWrappingParentheses(args[0] ?? []);
+  const tagName = tagExpression.length === 1 && tagExpression[0]?.kind === "literal"
+    ? decodeJsLiteral(tagExpression[0].raw) : null;
+  if (tagName === null || !SAFE_NATIVE_DOM_TAG_NAMES.has(tagName)) return;
+  if (args[1] !== undefined) {
+    collectNativeDomVisibleProperties(args[1], callToken, target, sourceLocale, !isStaticAriaHidden(args[1]));
+  }
+}
+
+function isStaticAriaHidden(expression: readonly Token[]): boolean {
+  const properties = stripWrappingParentheses(expression);
+  if (properties[0]?.raw !== "{" || matchingTokenIndex(properties, 0) !== properties.length - 1) return false;
+  return splitTopLevelTokens(properties.slice(1, -1)).some((entry) => {
+    const colon = topLevelTokenIndex(entry, ":");
+    if (colon <= 0 || staticCatalogKey(entry.slice(0, colon)) !== "aria-hidden") return false;
+    const value = entry.slice(colon + 1).map((token) => token.raw).join("");
+    return value === "true" || value === "!0" || decodeJsLiteral(value) === "true";
+  });
 }
 
 function collectReactCreateElement(

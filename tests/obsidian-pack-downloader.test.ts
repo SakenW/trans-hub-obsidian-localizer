@@ -121,4 +121,47 @@ describe("ObsidianPackDownloader", () => {
       allowedOrigin: "https://cdn.example",
     })).rejects.toThrow("translation_pack_download_timeout");
   });
+
+  it("keeps the abort deadline active while a response body stream is stalled", async () => {
+    let aborted = false;
+    const request = vi.fn((_url: string, init: RequestInit) => {
+      let streamController!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) { streamController = controller; },
+      });
+      init.signal?.addEventListener("abort", () => {
+        aborted = true;
+        streamController.error(new DOMException("aborted", "AbortError"));
+      });
+      return Promise.resolve({
+        status: 200, redirected: false, url: "https://cdn.example/pack.json", body,
+      } as Response);
+    });
+    const downloader = new ObsidianPackDownloader({ request, timeoutMs: 1 });
+
+    await expect(downloader.download({
+      url: "https://cdn.example/pack.json",
+      objectVersion: "v1",
+      expectedBytes: 3,
+      allowedOrigin: "https://cdn.example",
+    })).rejects.toThrow("translation_pack_download_timeout");
+    expect(aborted).toBe(true);
+  });
+
+  it("keeps the abort deadline active for the non-streaming arrayBuffer fallback", async () => {
+    const request = vi.fn((_url: string, init: RequestInit) => Promise.resolve({
+      status: 200, redirected: false, url: "https://cdn.example/pack.json", body: null,
+      arrayBuffer: () => new Promise<ArrayBuffer>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }),
+    } as Response));
+    const downloader = new ObsidianPackDownloader({ request, timeoutMs: 1 });
+
+    await expect(downloader.download({
+      url: "https://cdn.example/pack.json",
+      objectVersion: "v1",
+      expectedBytes: 3,
+      allowedOrigin: "https://cdn.example",
+    })).rejects.toThrow("translation_pack_download_timeout");
+  });
 });

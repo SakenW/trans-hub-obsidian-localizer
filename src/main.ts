@@ -1,7 +1,7 @@
 import { getLanguage, Notice, Platform, Plugin } from "obsidian";
 
 import { ActivationStore } from "./activation";
-import { localizedClientName, setClientLocale, translate } from "./client-localization";
+import { clientLocale, localizedClientName, setClientLocale, translate } from "./client-localization";
 import { retireExpiredDerivedCache } from "./derived-cache-migration";
 import { errorMessage } from "./error-message";
 import { openSystemBrowser } from "./external-browser";
@@ -16,6 +16,7 @@ import type { PluginSourceSnapshot } from "./plugin-picker-source";
 import {
   refreshConfiguredPluginStatuses,
   synchronizeConfiguredPluginTranslations,
+  type PublishedPluginSyncProgress,
   type PluginSyncSummary,
 } from "./plugin-sync";
 import {
@@ -238,6 +239,11 @@ export default class TransHubObsidianPlugin extends Plugin {
     return openSystemBrowser(TRANS_HUB_REGISTRATION_URL);
   }
 
+  openInvitationGuide(): Promise<void> {
+    const locale = clientLocale() === "zh-CN" ? "zh-CN" : "en-US";
+    return openSystemBrowser(`${TRANS_HUB_WEB_BASE_URL}/${locale}/ecosystems/obsidian/invite`);
+  }
+
   async disconnect(): Promise<void> {
     const lifecycleRevision = this.advanceLifecycle();
     this.activation.clear();
@@ -310,10 +316,12 @@ export default class TransHubObsidianPlugin extends Plugin {
     const localeChanged = this.settings.targetLocale !== targetLocale;
     if (localeChanged) this.clearPendingTranslationRetry();
     const revision = ++this.targetLocaleRevision;
-    this.settings.targetLocale = targetLocale;
-    this.applyClientLocale(targetLocale);
     return this.pluginProcessingQueue.run(async () => {
       if (!this.isLifecycleCurrent(lifecycleRevision) || revision !== this.targetLocaleRevision) return null;
+      // Keep the active locale stable while an older scan/sync owns the queue.
+      // Otherwise that scan can read the new locale but submit its old scope.
+      this.settings.targetLocale = targetLocale;
+      this.applyClientLocale(targetLocale);
       await this.savePluginDataForLifecycle(lifecycleRevision);
       if (!this.isLifecycleCurrent(lifecycleRevision) || revision !== this.targetLocaleRevision) return null;
       if (localeChanged) await this.restoreThirdPartyPluginFiles();
@@ -363,10 +371,12 @@ export default class TransHubObsidianPlugin extends Plugin {
 
   processSelectedPlugins(
     resubmitRecoverableAuthorityObservations = false,
+    onProgress?: (progress: PublishedPluginSyncProgress) => void,
   ): Promise<PluginSelectionProcessingResult> {
     return this.processPlugins(
       undefined,
       resubmitRecoverableAuthorityObservations ? this.state.enabledPluginIds : undefined,
+      onProgress,
     );
   }
 
@@ -391,17 +401,24 @@ export default class TransHubObsidianPlugin extends Plugin {
   private async processPlugins(
     onlyPluginIds?: readonly string[],
     manualResubmitPluginIds?: readonly string[],
+    onProgress?: (progress: PublishedPluginSyncProgress) => void,
   ): Promise<PluginSelectionProcessingResult> {
     const lifecycleRevision = this.lifecycleRevision;
     const targetLocale = this.settings.targetLocale;
-    return this.pluginProcessingQueue.run(
-      () => this.processPluginsNow(
+    const targetLocaleRevision = this.targetLocaleRevision;
+    return this.pluginProcessingQueue.run(async () => {
+      const result = await this.processPluginsNow(
         onlyPluginIds,
         targetLocale,
         manualResubmitPluginIds,
         lifecycleRevision,
-      ),
-    );
+        onProgress === undefined ? undefined : (progress) => {
+          if (targetLocaleRevision === this.targetLocaleRevision) onProgress(progress);
+        },
+      );
+      if (targetLocaleRevision !== this.targetLocaleRevision) this.clearPendingTranslationRetry();
+      return result;
+    });
   }
 
   private async processPluginsNow(
@@ -409,6 +426,7 @@ export default class TransHubObsidianPlugin extends Plugin {
     targetLocale: TargetLocale,
     manualResubmitPluginIds: readonly string[] | undefined,
     lifecycleRevision: number,
+    onProgress?: (progress: PublishedPluginSyncProgress) => void,
   ): Promise<PluginSelectionProcessingResult> {
     if (!this.settings.pluginTranslationEnabled) {
       return { kind: "empty", scan: { discoveredCount: 0, scannedCount: 0, changedCount: 0, stringCount: 0, selectablePluginIds: [] } };
@@ -428,6 +446,7 @@ export default class TransHubObsidianPlugin extends Plugin {
         manualResubmitPluginIds,
         selectablePluginIds,
         lifecycleRevision,
+        onProgress,
       ),
       applyCached: () => { this.applyCachedPluginTranslations(); },
     });
@@ -482,6 +501,7 @@ export default class TransHubObsidianPlugin extends Plugin {
     manualResubmitPluginIds: readonly string[] | undefined,
     sourceSelectablePluginIds: readonly string[] = this.state.enabledPluginIds,
     lifecycleRevision = this.lifecycleRevision,
+    onProgress?: (progress: PublishedPluginSyncProgress) => void,
   ): Promise<PluginSyncSummary> {
     if (!this.settings.pluginTranslationEnabled || !this.isLifecycleCurrent(lifecycleRevision)) return emptyPluginSyncSummary();
     if (targetLocale === OBSIDIAN_SOURCE_LOCALE) {
@@ -507,6 +527,9 @@ export default class TransHubObsidianPlugin extends Plugin {
           this.scheduleProgressiveRuntimeRefresh(lifecycleRevision);
         }
       },
+      ...(onProgress === undefined ? {} : { onPublishedProgress: (progress: PublishedPluginSyncProgress) => {
+        if (this.isLifecycleCurrent(lifecycleRevision) && this.settings.targetLocale === targetLocale) onProgress(progress);
+      } }),
     });
     if (result.withdrawnExportPluginIds?.length) {
       if (!this.isLifecycleCurrent(lifecycleRevision)) return result;
@@ -533,7 +556,31 @@ export default class TransHubObsidianPlugin extends Plugin {
       this.clearProgressiveRuntimeRefresh();
       this.pluginAutomation.applyCachedTranslations();
     }
+    if (result.checkSucceeded === true && onlyPluginIds === undefined
+      && this.isLifecycleCurrent(lifecycleRevision) && this.settings.targetLocale === targetLocale) {
+      await this.recordSuccessfulPluginCheck(targetLocale, lifecycleRevision);
+    }
     return result;
+  }
+
+  private async recordSuccessfulPluginCheck(targetLocale: TargetLocale, lifecycleRevision: number): Promise<void> {
+    const previous = this.state;
+    const next = {
+      ...previous,
+      lastSuccessfulPluginCheckAt: {
+        ...previous.lastSuccessfulPluginCheckAt,
+        [targetLocale]: new Date().toISOString(),
+      },
+    };
+    this.state = next;
+    try {
+      await this.savePluginDataForLifecycle(lifecycleRevision);
+      if ((!this.isLifecycleCurrent(lifecycleRevision) || this.settings.targetLocale !== targetLocale)
+        && this.state === next) this.state = previous;
+    } catch (error) {
+      if (this.state === next) this.state = previous;
+      throw error;
+    }
   }
 
   private scheduleProgressiveRuntimeRefresh(lifecycleRevision: number): void {
@@ -584,9 +631,11 @@ export default class TransHubObsidianPlugin extends Plugin {
 
   private async runAutomaticPluginTranslationNow(announce: boolean): Promise<void> {
     const lifecycleRevision = this.lifecycleRevision;
+    const targetLocaleRevision = this.targetLocaleRevision;
     if (!this.settings.pluginTranslationEnabled) return;
     try {
       const result = await this.processSelectedPlugins();
+      if (!this.isLifecycleCurrent(lifecycleRevision) || targetLocaleRevision !== this.targetLocaleRevision) return;
       // Older receipts can keep an invalid registry binding together with a
       // stale in-flight projection. Recover only that exact legacy state once
       // with a fresh Stage A observation; regular automatic refreshes never
@@ -600,7 +649,7 @@ export default class TransHubObsidianPlugin extends Plugin {
       if (recoveryPluginIds.length > 0 && this.isLifecycleCurrent(lifecycleRevision)) {
         await this.processPlugins(recoveryPluginIds, recoveryPluginIds);
       }
-      if (!this.isLifecycleCurrent(lifecycleRevision)) return;
+      if (!this.isLifecycleCurrent(lifecycleRevision) || targetLocaleRevision !== this.targetLocaleRevision) return;
       if (announce) {
         this.settingTab.reportCommandStatus(describePluginSelectionProcessing(result), pluginSelectionNeedsAttention(result));
       } else {
@@ -613,7 +662,7 @@ export default class TransHubObsidianPlugin extends Plugin {
       }
     }
     catch (error) {
-      if (!this.isLifecycleCurrent(lifecycleRevision)) return;
+      if (!this.isLifecycleCurrent(lifecycleRevision) || targetLocaleRevision !== this.targetLocaleRevision) return;
       const message = errorMessage(error);
       console.warn("[Trans-Hub] 插件自动翻译暂未完成", error);
       if (announce) this.settingTab.reportCommandStatus(message, true);

@@ -10,13 +10,15 @@ Trans-Hub Localizer is an Obsidian plugin that translates and localizes communit
 
 [Install in Obsidian](obsidian://show-plugin?id=trans-hub-plugin-localizer) · [View localization progress](https://trans-hub.net/ecosystems/obsidian) · [Feedback and community](https://github.com/SakenW/Trans-Hub/discussions)
 
+**Registration is by invitation.** [Join the user community and talk with the developer](https://trans-hub.net/en-US/ecosystems/obsidian/invite): international users can discuss the plugin on Discord; Chinese-speaking users can contact the developer on WeChat for a manual invitation and group entry. To try the plugin or if you do not use WeChat, you can request an invitation by email on that page without joining a community first. Once invited, register and return to the plugin to connect your account.
+
 <!-- section: getting-started -->
 ## Getting started
 
 You need **Obsidian 1.11.4 or later**, a Trans-Hub account, and a network connection for authorization and synchronization. Desktop and mobile are supported; advanced file compatibility patches are desktop-only.
 
 1. Install and enable **Trans-Hub Localizer** in **Settings → Community plugins**.
-2. Open plugin settings and connect your Trans-Hub account. No AI model, model-provider account, or API key configuration is required.
+2. [See the invitation options](https://trans-hub.net/en-US/ecosystems/obsidian/invite): contact the developer on WeChat for a manual invitation, or request an invitation by email. Once invited, register, then return to plugin settings to connect your Trans-Hub account. No AI model, model-provider account, or API key configuration is required.
 3. Confirm the translation language. The plugin automatically discovers enabled community plugins; you can exclude plugins you do not need localized.
 
 Existing published translations are reused directly; missing content automatically submits a localization request and synchronizes after background processing and publication. Content awaiting processing, publication, or compatibility checks may temporarily remain in its original language.

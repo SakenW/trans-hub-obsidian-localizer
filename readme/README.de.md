@@ -10,13 +10,15 @@ Trans-Hub Localizer ist ein Obsidian-Plugin zur Übersetzung und Lokalisierung d
 
 [In Obsidian installieren](obsidian://show-plugin?id=trans-hub-plugin-localizer) · [Lokalisierungsfortschritt](https://trans-hub.net/ecosystems/obsidian) · [Feedback und Community](https://github.com/SakenW/Trans-Hub/discussions)
 
+**Für die Registrierung brauchst du eine Einladung.** [Tritt der Nutzer-Community bei und tausche dich mit dem Entwickler aus](https://trans-hub.net/en-US/ecosystems/obsidian/invite): Internationale Nutzer können auf Discord über das Plugin diskutieren. Chinesischsprachige Nutzer können den Entwickler über WeChat kontaktieren, eine persönliche Einladung erhalten und von ihm in die Gruppe eingeladen werden. Wenn du das Plugin ausprobieren oder WeChat nicht nutzen möchtest, kannst du auf derselben Seite eine Einladung per E-Mail anfordern, ohne zuvor einer Community beizutreten. Nach Erhalt der Einladung registrierst du dich und kehrst zum Plugin zurück, um dein Konto zu verbinden.
+
 <!-- section: getting-started -->
 ## Erste Schritte
 
 Erforderlich sind **Obsidian 1.11.4 oder neuer**, ein Trans-Hub-Konto und eine Netzwerkverbindung für Autorisierung und Synchronisierung. Desktop und Mobilgeräte werden unterstützt; erweiterte Datei-Kompatibilitätspatches sind nur auf dem Desktop verfügbar.
 
 1. Installiere und aktiviere **Trans-Hub Localizer** unter **Einstellungen → Community-Plugins**.
-2. Öffne die Plugin-Einstellungen und verbinde dein Trans-Hub-Konto. Du musst kein KI-Modell, Konto bei einem Modellanbieter oder API-Key konfigurieren.
+2. [Sieh dir die Einladungsmöglichkeiten an](https://trans-hub.net/en-US/ecosystems/obsidian/invite): Kontaktiere den Entwickler über WeChat für eine persönliche Einladung oder fordere eine Einladung per E-Mail an. Nach Erhalt der Einladung registrierst du dich und kehrst zu den Plugin-Einstellungen zurück, um dein Trans-Hub-Konto zu verbinden. Du musst kein KI-Modell, Konto bei einem Modellanbieter oder API-Key konfigurieren.
 3. Wähle die Zielsprache. Aktivierte Community-Plugins werden automatisch erkannt; du kannst einzelne Plugins von der Lokalisierung ausschließen.
 
 Bereits veröffentlichte Übersetzungen werden wiederverwendet. Fehlende Inhalte werden automatisch zur Lokalisierung angefordert und nach der Verarbeitung im Hintergrund und Veröffentlichung synchronisiert. Bis Verarbeitung, Veröffentlichung oder Kompatibilitätsprüfung abgeschlossen sind, kann der Originaltext sichtbar bleiben.
