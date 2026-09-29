@@ -3,12 +3,34 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   capturePluginListScrollTop,
+  pluginScrollContainer,
   restorePluginListScrollTop,
 } from "../src/plugin-picker-scroll";
 import { TransHubSettingTab } from "../src/settings";
 
 describe("plugin picker scroll state", () => {
-  it("preserves the nested plugin list position across a settings refresh", () => {
+  it("captures and restores the outer settings scroll instead of the flat list", () => {
+    const host = { scrollTop: 630, parentElement: null };
+    const document = { defaultView: { getComputedStyle: (element: unknown) => ({ overflowY: element === host ? "auto" : "visible" }) } };
+    const list = { scrollTop: 0, parentElement: host, ownerDocument: document } as unknown as HTMLElement;
+    const container = { querySelector: () => list } as unknown as HTMLElement;
+    expect(pluginScrollContainer(list)).toBe(host);
+    expect(capturePluginListScrollTop(container, 0)).toBe(630);
+    restorePluginListScrollTop(list, 420);
+    expect(host.scrollTop).toBe(420);
+    expect(list.scrollTop).toBe(0);
+  });
+
+  it("does not overwrite another section's page position while the plugin panel is hidden", () => {
+    const hiddenPanel = { hidden: true };
+    const list = { scrollTop: 15, closest: () => hiddenPanel } as unknown as HTMLElement;
+    const container = { querySelector: () => list } as unknown as HTMLElement;
+    expect(capturePluginListScrollTop(container, 510)).toBe(510);
+    restorePluginListScrollTop(list, 900);
+    expect(list.scrollTop).toBe(15);
+  });
+
+  it("preserves position in a host without a browser layout API", () => {
     const list = { scrollTop: 376 } as HTMLElement;
     const container = {
       querySelector: (selector: string) => selector === ".trans-hub-plugin-picker__list" ? list : null,

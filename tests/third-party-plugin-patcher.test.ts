@@ -77,6 +77,42 @@ class MemoryVault {
 }
 
 describe("third-party plugin file patching", () => {
+  it("patches proven React presentation props and mapped tab labels", async () => {
+    const bundle = [
+      'var ids=["basic","advanced"];',
+      'var tabNames={basic:"Basic",advanced:"Advanced"},tabs=ids.map(id=>({id:id,label:tabNames[id]}));',
+      'React.createElement(SettingRow,{label:"Agents",description:"Used when a new session starts."});',
+    ].join("\n");
+    const plugin: InstalledObsidianPlugin = {
+      id: "sample-plugin", name: "Sample Plugin", version: "1.0.0", description: "",
+      dir: "Saken/.obsidian/plugins/sample-plugin", enabled: true,
+    };
+    const catalog = await scanPluginUiStrings({ plugin, bundle, sourceLocale: "en" });
+    const targets: Readonly<Record<string, string>> = {
+      Basic: "基础", Advanced: "高级", Agents: "代理",
+      "Used when a new session starts.": "开始新会话时使用。",
+    };
+    const translation: PluginTranslationState = {
+      pluginId: plugin.id, pluginVersion: plugin.version, sourceVersionId: "test-source-version",
+      targetLocale: "zh-CN", artifactDigest: catalog.artifactDigest,
+      catalogIdentity: catalog.catalogIdentity, pulledAt: new Date().toISOString(),
+      entries: Object.entries(targets).map(([source, target]) => ({
+        pluginId: plugin.id, source, target, scopes: ["runtime-ui"] as const,
+        provenanceKind: "th-automatic" as const,
+      })),
+    };
+    const preview = await previewPublishedPluginFilePatch({ plugin, catalog, translation, original: bundle });
+    expect(preview).toEqual(expect.objectContaining({ kind: "candidate", patchCount: 4 }));
+    const vault = new MemoryVault();
+    vault.files.set(`${plugin.dir}/main.js`, bundle);
+    expect((await applyPublishedPluginFilePatch({ vault: vault as unknown as Vault, plugin, catalog, translation })).applied)
+      .toBe(4);
+    const patched = vault.files.get(`${plugin.dir}/main.js`) ?? "";
+    for (const target of Object.values(targets)) expect(patched).toContain(target);
+    expect(await restorePublishedPluginFilePatch(vault as unknown as Vault, plugin)).toBe("restored");
+    expect(vault.files.get(`${plugin.dir}/main.js`)).toBe(bundle);
+  });
+
   it("applies, exposes the logical bundle, and restores the real Copilot bundle", async () => {
     const bundle = readCopilotTestBundle();
     const plugin: InstalledObsidianPlugin = {

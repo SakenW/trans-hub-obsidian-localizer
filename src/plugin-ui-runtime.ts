@@ -1,3 +1,5 @@
+import { MenuItem } from "obsidian";
+
 export type PluginTranslationProvenanceKind =
   | "upstream-native"
   | "th-reviewed-fill"
@@ -46,6 +48,7 @@ const METADATA_TEXT_SELECTOR = [
 const SETTINGS_MODAL_SELECTOR = ".modal.mod-settings";
 const SETTINGS_NAV_ITEM_SELECTOR = ".vertical-tab-nav-item.is-active, .vertical-tab-nav-item[aria-selected='true'], [role='tab'][aria-selected='true']";
 const SETTINGS_PLUGIN_ID_ATTRIBUTES = ["data-plugin-id", "data-id", "data-setting-id"] as const;
+const QUICKADD_CHOICE_MENU_TRIGGER_SELECTOR = "button.qaNewChoiceBtn[aria-haspopup='menu']";
 const README_CONTAINER_SELECTOR = ".community-modal-readme.markdown-rendered";
 const README_BLOCK_SELECTOR = "h1, h2, h3, h4, h5, h6, p, li, blockquote, th, td";
 const README_PROTECTED_SELECTOR = "a, code, kbd, samp, var";
@@ -208,6 +211,11 @@ export class PluginUiTranslationRuntime {
   private readonly metadataPlansByPluginId = new Map<string, RuntimeTranslationPlan>();
   private readonly settingsOwnerByLabel = new Map<string, string>();
   private readonly observers = new Map<HTMLElement, MutationObserver>();
+  private readonly menuListeners = new Map<HTMLElement, EventListener>();
+  private readonly menuIntentByDocument = new WeakMap<Document, object>();
+  private readonly menuOwnerByElement = new WeakMap<Element, string>();
+  private activeNativeMenuIntent: { readonly document: Document; readonly token: object } | null = null;
+  private nativeMenuTitleHook: { readonly original: typeof MenuItem.prototype.setTitle; readonly wrapper: typeof MenuItem.prototype.setTitle } | null = null;
   private readonly restoredText = new Map<Text, { original: string; translated: string }>();
   private readonly restoredAttributes = new Map<Element, Map<string, { original: string; translated: string }>>();
   private readonly restoredReadmeBlocks = new Map<Element, {
@@ -258,7 +266,11 @@ export class PluginUiTranslationRuntime {
 
   start(root: HTMLElement = document.body): void {
     if (this.observers.has(root)) return;
+    this.installNativeMenuTitleHook();
     this.translateTree(root);
+    const menuListener: EventListener = (event) => this.rememberMenuTrigger(event, root.ownerDocument);
+    root.addEventListener?.("click", menuListener, true);
+    this.menuListeners.set(root, menuListener);
     const Observer = root.ownerDocument.defaultView?.MutationObserver ?? MutationObserver;
     const observer = new Observer((mutations) => {
       for (const mutation of mutations) {
@@ -272,8 +284,14 @@ export class PluginUiTranslationRuntime {
         if (mutation.type === "attributes" && isElementNode(mutation.target)) {
           this.translateAttributes(mutation.target);
         }
-        for (const node of Array.from(mutation.removedNodes)) this.restoreDetachedTree(node);
-        for (const node of Array.from(mutation.addedNodes)) this.translateTree(node);
+        for (const node of Array.from(mutation.removedNodes)) {
+          this.forgetMenuOwner(node);
+          this.restoreDetachedTree(node);
+        }
+        for (const node of Array.from(mutation.addedNodes)) {
+          this.claimTriggeredMenu(node);
+          this.translateTree(node);
+        }
       }
     });
     observer.observe(root, {
@@ -287,12 +305,24 @@ export class PluginUiTranslationRuntime {
   }
 
   stop(): void {
+    this.activeNativeMenuIntent = null;
+    if (this.nativeMenuTitleHook !== null) {
+      if (MenuItem.prototype.setTitle === this.nativeMenuTitleHook.wrapper) {
+        MenuItem.prototype.setTitle = this.nativeMenuTitleHook.original;
+      }
+      this.nativeMenuTitleHook = null;
+    }
+    for (const [root, listener] of this.menuListeners) root.removeEventListener?.("click", listener, true);
+    this.menuListeners.clear();
     for (const observer of this.observers.values()) observer.disconnect();
     this.observers.clear();
     this.restore();
   }
 
   stopRoot(root: HTMLElement): void {
+    const listener = this.menuListeners.get(root);
+    if (listener !== undefined) root.removeEventListener?.("click", listener, true);
+    this.menuListeners.delete(root);
     this.observers.get(root)?.disconnect();
     this.observers.delete(root);
     this.restoreWhere((node) => root.contains(node));
@@ -403,6 +433,10 @@ export class PluginUiTranslationRuntime {
   private runtimePlanForElement(element: Element): RuntimeTranslationPlan | undefined {
     const settingsModal = element.closest(SETTINGS_MODAL_SELECTOR);
     if (settingsModal === null) {
+      const menu = element.closest(".menu");
+      if (menu !== null && this.menuOwnerByElement.get(menu) === "quickadd") {
+        return this.runtimePlansByPluginId.get("quickadd");
+      }
       // Notebook Navigator's resize separator is plugin-owned chrome inside
       // its exact view root. Do not scope the whole view: it renders vault file
       // names and other user text alongside controls.
@@ -423,6 +457,65 @@ export class PluginUiTranslationRuntime {
     if (element.closest(".vertical-tab-nav-item") !== null) return this.metadataPlan;
     const owner = this.settingsPluginOwner(settingsModal);
     return owner === undefined ? undefined : this.runtimePlansByPluginId.get(owner);
+  }
+
+  private rememberMenuTrigger(event: Event, document: Document): void {
+    const target = event.target;
+    if (target === null || !isElementNode(target as Node)) return;
+    const trigger = target as Element;
+    if (trigger.closest(QUICKADD_CHOICE_MENU_TRIGGER_SELECTOR) === null) return;
+    const modal = trigger.closest(SETTINGS_MODAL_SELECTOR);
+    if (modal === null || this.settingsPluginOwner(modal) !== "quickadd") return;
+    const intent = {};
+    this.menuIntentByDocument.set(document, intent);
+    this.activeNativeMenuIntent = { document, token: intent };
+    // The menu is normally mounted in the same click task. A later unrelated
+    // popup must not inherit this plugin's translation plan.
+    const ownerWindow = document.defaultView;
+    if (ownerWindow === null) {
+      this.menuIntentByDocument.delete(document);
+      if (this.activeNativeMenuIntent?.token === intent) this.activeNativeMenuIntent = null;
+      return;
+    }
+    ownerWindow.setTimeout(() => {
+      if (this.menuIntentByDocument.get(document) === intent) this.menuIntentByDocument.delete(document);
+      if (this.activeNativeMenuIntent?.token === intent) this.activeNativeMenuIntent = null;
+    }, 0);
+  }
+
+  private installNativeMenuTitleHook(): void {
+    if (this.nativeMenuTitleHook !== null) return;
+    const prototype = MenuItem.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "setTitle");
+    if (descriptor?.writable !== true) return;
+    const original = Reflect.get(prototype, "setTitle");
+    const translateTitle = (title: string | DocumentFragment): string | DocumentFragment => {
+      const intent = this.activeNativeMenuIntent;
+      const plan = intent !== null && this.menuIntentByDocument.get(intent.document) === intent.token
+        ? this.runtimePlansByPluginId.get("quickadd") : undefined;
+      return typeof title === "string" && plan !== undefined
+        ? translatePluginUiValue(title, plan) ?? title : title;
+    };
+    const wrapper: typeof MenuItem.prototype.setTitle = function (this: MenuItem, title) {
+      return original.call(this, translateTitle(title));
+    };
+    try { prototype.setTitle = wrapper; }
+    catch { return; }
+    this.nativeMenuTitleHook = { original, wrapper };
+  }
+
+  private claimTriggeredMenu(node: Node): void {
+    if (!isElementNode(node)) return;
+    if (this.menuIntentByDocument.get(node.ownerDocument) === undefined) return;
+    const menus = node.matches(".menu") ? [node] : Array.from(node.querySelectorAll(".menu"));
+    for (const menu of menus) this.menuOwnerByElement.set(menu, "quickadd");
+    if (menus.length > 0) this.menuIntentByDocument.delete(node.ownerDocument);
+  }
+
+  private forgetMenuOwner(node: Node): void {
+    if (!isElementNode(node)) return;
+    const menus = node.matches(".menu") ? [node] : Array.from(node.querySelectorAll(".menu"));
+    for (const menu of menus) this.menuOwnerByElement.delete(menu);
   }
 
   private metadataPlanForElement(element: Element): RuntimeTranslationPlan | undefined {

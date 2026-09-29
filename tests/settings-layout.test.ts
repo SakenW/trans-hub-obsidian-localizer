@@ -23,7 +23,7 @@ describe("Obsidian settings page layout", () => {
     expect(styles).toMatch(/\.trans-hub-settings__connection\s*\{[^}]*display:\s*grid;/su);
     expect(styles).toMatch(/\.trans-hub-settings__connection\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/su);
     expect(styles).toMatch(/\.trans-hub-settings__connection\s+\.trans-hub-settings__feedback\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;/su);
-    expect(styles).toMatch(/@media\s*\(max-width:\s*520px\)\s*\{[\s\S]*\.trans-hub-settings__connection\s*\{[^}]*display:\s*block;/u);
+    expect(styles).toMatch(/@media\s*\(max-width:\s*760px\)\s*\{[\s\S]*\.trans-hub-settings__connection\s*\{[^}]*display:\s*block;/u);
   });
 
   it("aligns the plugin manager connection row with its summary", () => {
@@ -33,15 +33,16 @@ describe("Obsidian settings page layout", () => {
     expect(styles).toMatch(/@media\s*\(max-width:\s*520px\)\s*\{[\s\S]*\.trans-hub-plugin-picker__context\s*\{[^}]*display:\s*block;/u);
   });
 
-  it("keeps primary controls ahead of folded advanced settings", () => {
-    expect(settingsSource.indexOf("this.renderConnection(containerEl)")).toBeLessThan(settingsSource.indexOf('translate("译文语言")', settingsSource.indexOf("private renderSettings")));
-    expect(settingsSource.indexOf('translate("打开插件管理器")')).toBeLessThan(settingsSource.indexOf('translate("高级选项")'));
-    expect(settingsSource).toContain('createEl("details", { cls: "trans-hub-settings__advanced" })');
+  it("groups settings into explicit sections instead of hiding compatibility", () => {
+    expect(settingsSource).toContain("createSettingsSections(containerEl");
+    expect(settingsSource).toContain("const advanced = panels.compatibility");
+    expect(settingsSource).not.toContain('translate("高级选项")');
+    expect(settingsSource).not.toContain("hasReactStaticSettingsText");
   });
 
   it("states default file safety and the verifiable community source boundary", () => {
     expect(settingsSource).toContain("默认不修改插件文件，始终不修改笔记正文");
-    expect(settingsSource).toContain("仅支持官方社区目录中来源可验证的插件");
+    expect(readFileSync(new URL("../src/settings-sections.ts", import.meta.url), "utf8")).toContain("仅支持官方社区目录中来源可验证的插件");
   });
 
   it("keeps recovery actions inside the plugin manager instead of the settings page", () => {
@@ -53,9 +54,9 @@ describe("Obsidian settings page layout", () => {
     expect(settingsSource).not.toContain("processSelectedPlugins(true)");
   });
 
-  it("keeps file recovery visible outside the folded compatibility switch", () => {
-    expect(settingsSource.indexOf("this.renderFileRecovery(containerEl)")).toBeLessThan(settingsSource.indexOf('translate("高级选项")'));
+  it("keeps file recovery visible outside the settings sections", () => {
+    expect(settingsSource).toContain("this.renderFileRecovery(containerEl)");
     expect(settingsSource).toContain('translate("恢复所有兼容补丁")');
-    expect(settingsSource).toContain("renderPluginPatchControls(row");
+    expect(settingsSource).toContain("this.plugin.checkThirdPartyPluginFilePatch(plugin.id)");
   });
 });

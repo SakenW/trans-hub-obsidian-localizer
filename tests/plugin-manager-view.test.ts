@@ -1,38 +1,41 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("obsidian", async () => import("./settings-host-mock"));
+import { createSettingsSections } from "../src/settings-sections";
+import TransHubObsidianPlugin from "../src/main";
+import { TestElement, renderedSettings } from "./settings-host-mock";
+import { setClientLocale } from "../src/client-localization";
 
-const viewSource = readFileSync(new URL("../src/plugin-manager-view.ts", import.meta.url), "utf8");
-const settingsSource = readFileSync(new URL("../src/settings.ts", import.meta.url), "utf8");
-const mainSource = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
-const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
-
-describe("plugin localization manager view", () => {
-  it("uses a dedicated workspace ItemView instead of embedding the list in settings", () => {
-    expect(viewSource).toContain("extends ItemView");
-    expect(viewSource).toContain('PLUGIN_MANAGER_VIEW_TYPE = "trans-hub-plugin-manager"');
-    expect(viewSource).toContain("override async setState");
-    expect(viewSource).toContain("this.settingsTab.mountPluginManager(this.contentEl)");
-    expect(viewSource).toContain('override getIcon(): IconName { return "languages"; }');
-    expect(settingsSource).toContain("mountPluginManager(containerEl: HTMLElement)");
-    expect(settingsSource).toContain('setButtonText(translate("打开插件管理器"))');
-    expect(settingsSource).not.toContain("void this.renderPluginPicker(pluginPicker");
+beforeEach(() => { renderedSettings.length = 0; setClientLocale("zh-CN"); });
+describe("unified plugin settings", () => {
+  it("switches four sections in place without losing the plugin list DOM or scroll", () => {
+    const root = new TestElement();
+    const onChange = vi.fn();
+    const sections = createSettingsSections(root as unknown as HTMLElement, "plugins", onChange);
+    const list = new TestElement({ text: "search and expanded plugin content" });
+    (sections.plugins as unknown as TestElement).children.push(list);
+    sections.plugins.scrollTop = 325;
+    expect(sections.plugins.hidden).toBe(false);
+    expect(sections.basic.hidden).toBe(true);
+    sections.select("compatibility");
+    expect(sections.plugins.hidden).toBe(true);
+    expect(sections.compatibility.hidden).toBe(false);
+    sections.select("plugins");
+    expect(sections.plugins.scrollTop).toBe(325);
+    expect((sections.plugins as unknown as TestElement).children[0]).toBe(list);
+    expect(onChange.mock.calls).toEqual([["compatibility"], ["plugins"]]);
+    expect(renderedSettings.flatMap((row) => row.controls).map((button) => button.text)).toEqual(["插件管理", "基本设置", "兼容与恢复", "使用帮助"]);
   });
 
-  it("opens the reusable view in a resizable window and keeps a safe workspace fallback", () => {
-    expect(mainSource).toContain("this.registerView(");
-    expect(mainSource).toContain("open-plugin-localization-manager");
-    expect(mainSource).toContain("getLeavesOfType(PLUGIN_MANAGER_VIEW_TYPE)");
-    expect(mainSource).toContain("openPopoutLeaf");
-    expect(mainSource).toContain("size: { width: 960, height: 760 }");
-    expect(mainSource).toContain('getLeaf("tab")');
-  });
-
-  it("lets the workspace pane own the list height instead of a fixed settings viewport", () => {
-    expect(settingsSource).toContain('"trans-hub-plugin-picker__overview"');
-    expect(settingsSource).toContain('status.setAttr("aria-live", "polite")');
-    expect(styles).toMatch(/\.trans-hub-plugin-picker__overview\s*\{[^}]*display:\s*flex;/su);
-    expect(styles).toMatch(/\.trans-hub-plugin-manager__content\s*\{[^}]*height:\s*100%;/su);
-    expect(styles).toMatch(/\.trans-hub-plugin-manager__content\s+\.trans-hub-plugin-picker__list\s*\{[^}]*flex:\s*1\s+1\s+auto;/su);
-    expect(styles).toMatch(/\.trans-hub-plugin-manager__content\s+\.trans-hub-plugin-picker__list\s*\{[^}]*max-height:\s*none;/su);
+  it("routes the command to the existing settings host without closing it or opening a workspace window", async () => {
+    const plugin = new TransHubObsidianPlugin({} as never, {} as never);
+    const selectSection = vi.fn(); const open = vi.fn(); const openTabById = vi.fn(); const close = vi.fn();
+    const openPopoutLeaf = vi.fn();
+    Object.assign(plugin, { app: { setting: { open, openTabById, close }, workspace: { openPopoutLeaf } }, manifest: { id: "trans-hub-plugin-localizer" }, settingTab: { selectSection } });
+    await plugin.openPluginManager();
+    expect(selectSection).toHaveBeenCalledWith("plugins");
+    expect(open).toHaveBeenCalledOnce();
+    expect(openTabById).toHaveBeenCalledWith("trans-hub-plugin-localizer");
+    expect(close).not.toHaveBeenCalled();
+    expect(openPopoutLeaf).not.toHaveBeenCalled();
   });
 });

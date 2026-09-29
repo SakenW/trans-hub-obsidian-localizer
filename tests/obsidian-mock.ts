@@ -24,6 +24,12 @@ export class PluginSettingTab {
 }
 
 export class Setting {}
+export class Modal {}
+
+export class MenuItem {
+  title: string | DocumentFragment = "";
+  setTitle(title: string | DocumentFragment): this { this.title = title; return this; }
+}
 
 let requestUrlHandler: RequestUrlHandler = () =>
   Promise.reject(new Error("requestUrl is not available in unit tests"));

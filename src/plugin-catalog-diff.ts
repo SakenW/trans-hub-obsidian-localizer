@@ -224,7 +224,7 @@ export function calculatePluginTranslationCoverage(
       totalCount: scopeTotal,
       translatedCount: translated,
       missingCount: Math.max(scopeTotal - translated, 0),
-      percent: Math.round((translated / scopeTotal) * 100),
+      percent: translated < scopeTotal ? Math.min(99, Math.round((translated / scopeTotal) * 100)) : 100,
     }];
   });
   return {
@@ -232,7 +232,7 @@ export function calculatePluginTranslationCoverage(
     translatedCount,
     missingCount: Math.max(totalCount - translatedCount, 0),
     staleCount,
-    percent: totalCount === 0 ? 100 : Math.round((translatedCount / totalCount) * 100),
+    percent: totalCount === 0 || translatedCount >= totalCount ? 100 : Math.min(99, Math.round((translatedCount / totalCount) * 100)),
     exactPluginVersion: authorityPluginVersion(effectiveTranslation) === catalog.pluginVersion,
     scopes,
     unattributedNativeCount,

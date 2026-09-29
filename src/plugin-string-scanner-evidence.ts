@@ -19,9 +19,9 @@ export type PluginStringOrigin =
 export type PluginStringExtractionStrategy = "manifest" | "registry" | "markdown" | "structured" | "regex-fallback";
 export type PluginStringSemanticRole = "official-name" | "description" | "readme" | "runtime-ui";
 
-export const PLUGIN_STRING_SCANNER_REVISION = 31 as const;
+export const PLUGIN_STRING_SCANNER_REVISION = 34 as const;
 export const SUPPORTED_PLUGIN_STRING_SCANNER_REVISIONS: ReadonlySet<number> = new Set([
-  1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+  1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
   PLUGIN_STRING_SCANNER_REVISION,
 ]);
 
@@ -77,7 +77,7 @@ export interface PluginUiCatalog {
   /** Active target locale when this catalog's embedded native targets were scanned. */
   readonly scannerTargetLocale?: string;
   /** Bumped when persisted catalogs gain patch-safe literal evidence. */
-  readonly patchEvidenceRevision?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31;
+  readonly patchEvidenceRevision?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33 | 34;
   /** Missing only on catalogs persisted before identity revision 1. */
   readonly catalogIdentity?: SourceCatalogIdentity;
   readonly strings: readonly PluginUiString[];

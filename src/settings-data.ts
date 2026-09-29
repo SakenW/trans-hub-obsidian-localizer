@@ -28,10 +28,8 @@ export function loadSettings(
       data.pluginMetadataTranslationEnabled,
       DEFAULT_SETTINGS.pluginMetadataTranslationEnabled,
     ),
-    thirdPartyFilePatchingEnabled: booleanOr(
-      data.thirdPartyFilePatchingEnabled,
-      DEFAULT_SETTINGS.thirdPartyFilePatchingEnabled,
-    ),
+    // Legacy opt-in never grants future writes; each patch requires a fresh preview.
+    thirdPartyFilePatchingEnabled: false,
     excludedPluginIds: stringArrayOr(data.excludedPluginIds, DEFAULT_SETTINGS.excludedPluginIds),
   };
 }

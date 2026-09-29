@@ -32,6 +32,7 @@ function fixture() {
       return Promise.resolve({ kind: "login-required", scan: { scannedCount: 0 } });
     }),
     connect: vi.fn(async () => {}),
+    openRegistration: vi.fn(async () => {}),
     openPluginManager: vi.fn(async () => {}),
   };
   const tab = new TransHubSettingTab(new App() as never, plugin as unknown as TransHubObsidianPlugin);
@@ -39,10 +40,12 @@ function fixture() {
     renderPluginPickerContents: (el: HTMLElement, plugins: readonly InstalledPluginWithSource[]) => void;
     renderSettings: (el: HTMLElement) => void;
     refreshSettings: () => void;
+    mountPluginManager: (container: HTMLElement) => void;
     refreshPluginPatchStates: () => Promise<void>;
     refreshObsidianPluginNavigationNames: () => Promise<void>;
     selectionProcessing: Promise<void> | null;
   };
+  internal.mountPluginManager = vi.fn();
   internal.refreshPluginPatchStates = vi.fn(async () => {});
   internal.refreshObsidianPluginNavigationNames = vi.fn(async () => {});
   internal.refreshSettings = vi.fn();
@@ -57,6 +60,51 @@ function control(text: string): TestControl {
 
 beforeEach(() => { renderedSettings.length = 0; setClientLocale("zh-CN"); });
 describe("settings user interactions", () => {
+  it("普通界面且匹配完整的插件不推荐兼容模式", () => {
+    const { plugin, internal, container } = fixture();
+    plugin.settings.excludedPluginIds = [];
+    const state = plugin.getPluginState();
+    Object.assign(state.pluginCatalogs, { dataview: { pluginId: "dataview", pluginName: "Dataview", pluginVersion: "1.0.0", sourceLocale: "en", digest: "catalog", artifactDigest: "a", scannedAt: "now", strings: [{ key: "name", source: "Settings", origins: ["ui-call"], placeholderSignature: "" }] } });
+    Object.assign(state.pluginTranslations, { dataview: { "zh-CN": { pluginId: "dataview", pluginVersion: "1.0.0", sourceVersionId: "source", targetLocale: "zh-CN", pulledAt: "now", entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }] } } });
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, [plugins[0]]);
+    const text = container.allText();
+    expect(text).toContain("已获取 1/1 条匹配界面译文");
+    expect(text).not.toContain("不代表全部界面都已替换");
+    const controls = renderedSettings.flatMap((row) => row.controls);
+    expect(controls.some((item) => item.text === "检查兼容方式")).toBe(false);
+    expect(controls.some((item) => item.text === "界面仍有原文？")).toBe(false);
+    expect(renderedSettings.some((row) => row.name === "兼容模式（可选）")).toBe(false);
+  });
+
+  it("部分译文插件展开详情后只读检查，并在原位显示禁用原因", async () => {
+    const { plugin, internal, container } = fixture();
+    plugin.settings.excludedPluginIds = [];
+    const state = plugin.getPluginState();
+    Object.assign(state.pluginCatalogs, { dataview: { pluginId: "dataview", pluginName: "Dataview", pluginVersion: "1.0.0", sourceLocale: "en", digest: "catalog", artifactDigest: "a", scannedAt: "now", strings: ["Settings", "Second setting"].map((source, key) => ({ key: String(key), source, origins: ["ui-call"], placeholderSignature: "" })) } });
+    Object.assign(state.pluginTranslations, { dataview: { "zh-CN": { pluginId: "dataview", pluginVersion: "1.0.0", sourceVersionId: "source", targetLocale: "zh-CN", pulledAt: "now", entries: [{ pluginId: "dataview", source: "Settings", target: "设置" }] } } });
+    const check = vi.fn(() => Promise.resolve({ kind: "checked", preview: { kind: "skipped", reason: "cross-version", patchCount: 0 } }));
+    Object.assign(plugin, { checkThirdPartyPluginFilePatch: check });
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, [plugins[0]]);
+    expect(check).not.toHaveBeenCalled();
+    const details = container.descendants().find((item) => item.attrs.get("tag") === "details" && item.children.some((child) => child.text === "译文详情"))!;
+    details.open = true; details.listeners.get("toggle")?.();
+    await Promise.resolve();
+    expect(check).toHaveBeenCalledExactlyOnceWith("dataview");
+    const compatibility = renderedSettings.find((row) => row.name === "兼容模式（可选）")!;
+    expect(compatibility.controls[0].disabled).toBe(true);
+    expect(compatibility.descEl.text).toContain("插件与译文版本不一致");
+  });
+  it("未连接时仅提供连接和网站注册入口", async () => {
+    const { plugin, internal, container } = fixture();
+    plugin.hasUserSession = () => false;
+    internal.renderSettings(container as unknown as HTMLElement);
+    const connection = renderedSettings.find((setting) => setting.name === "连接语枢");
+    expect(connection?.descEl.text).toContain("系统默认浏览器");
+    expect(connection?.descEl.text).not.toContain("邀请码");
+    expect(connection?.controls.map((item) => item.text)).toEqual(["在浏览器中连接", "注册"]);
+    await control("注册").click();
+    expect(plugin.openRegistration).toHaveBeenCalledOnce();
+  });
   it("其他语言需要明确应用，且无效输入不改变当前语言", async () => {
     const { plugin, internal, container } = fixture();
     internal.renderSettings(container as unknown as HTMLElement);
@@ -200,6 +248,45 @@ describe("settings user interactions", () => {
     expect(container.allText()).not.toContain("数据展示");
   });
 
+  it("更新插件后先隐藏旧目录覆盖率，并只自动重扫变化的插件", async () => {
+    const { plugin, internal, container } = fixture();
+    plugin.settings.excludedPluginIds = [];
+    Object.assign(plugin.getPluginState().pluginCatalogs, { dataview: {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "1.0.0",
+      sourceLocale: "en", digest: "old", artifactDigest: "a".repeat(64), scannedAt: "now",
+      strings: [{ key: "old", source: "Old setting", origins: ["ui-call"], placeholderSignature: "" }],
+    } });
+    const updated = [{ ...plugins[0], version: "2.0.0" }];
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, updated);
+    expect(container.allText()).toContain("检测到插件版本变化，正在重新检查译文");
+    expect(container.allText()).not.toContain("Old setting");
+    expect(plugin.processPluginIds).toHaveBeenCalledExactlyOnceWith(["dataview"]);
+    container.empty();
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, updated);
+    expect(plugin.processPluginIds).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+  });
+
+  it("更新后的自动检查失败时保留可手动重试的状态，不恢复旧覆盖率", async () => {
+    const { plugin, internal, container } = fixture();
+    plugin.settings.excludedPluginIds = [];
+    Object.assign(plugin.getPluginState().pluginCatalogs, { dataview: {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "1.0.0",
+      sourceLocale: "en", digest: "old", artifactDigest: "a".repeat(64), scannedAt: "now",
+      strings: [],
+    } });
+    plugin.processPluginIds.mockRejectedValueOnce(new Error("fixture scan failed"));
+    const updated = [{ ...plugins[0], version: "2.0.0" }];
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, updated);
+    await Promise.resolve();
+    await Promise.resolve();
+    container.empty();
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, updated);
+    expect(container.allText()).toContain("插件更新后检查失败；点击“同步译文”重试");
+    expect(container.allText()).not.toContain("1.0.0 的本地化译文");
+    expect(plugin.processPluginIds).toHaveBeenCalledTimes(1);
+  });
+
   it("批量重试只提交已选择且可恢复的插件", async () => {
     const { plugin, internal, container } = fixture();
     plugin.settings.excludedPluginIds = ["tables"];
@@ -263,24 +350,27 @@ describe("settings user interactions", () => {
     await first;
   });
 
-  it("打开管理器前先关闭设置窗口", async () => {
+  it("仅通过Tab切换插件管理，不保留重复入口", async () => {
     const { plugin, tab, internal, container } = fixture();
-    const events: string[] = [];
-    Object.assign(tab.app, { setting: { close: () => events.push("close-settings") } });
-    plugin.openPluginManager.mockImplementation(() => { events.push("open-manager"); return Promise.resolve(); });
+    const close = vi.fn();
+    Object.assign(tab.app, { setting: { close } });
     internal.renderSettings(container as unknown as HTMLElement);
-    await control("打开插件管理器").click();
-    expect(events).toEqual(["close-settings", "open-manager"]);
-    expect(control("打开插件管理器").disabled).toBe(false);
+    await control("基本设置").click();
+    expect(renderedSettings.flatMap((row) => row.controls).some((item) => item.text === "查看插件")).toBe(false);
+    await control("插件管理").click();
+    expect(close).not.toHaveBeenCalled();
+    expect(plugin.openPluginManager).not.toHaveBeenCalled();
+    expect(internal.mountPluginManager).toHaveBeenCalled();
   });
 
-  it("主操作在高级选项之前，恢复冲突在设置页可见且可处理", () => {
+  it("主操作在基本设置中，恢复冲突在设置页可见且可处理", () => {
     const { internal, container, setRestoreResult } = fixture();
     setRestoreResult({ ...emptyRestore, conflicts: 1, conflictPluginIds: ["dataview"] });
     internal.renderSettings(container as unknown as HTMLElement);
     const text = container.allText();
     expect(text.indexOf("连接")).toBeLessThan(text.indexOf("译文语言"));
-    expect(text.indexOf("管理已安装插件")).toBeLessThan(text.indexOf("高级选项"));
+    expect(text).not.toContain("高级选项");
+    expect(control("兼容与恢复")).toBeDefined();
     expect(text).toContain("1 个需处理");
     expect(control("处理补丁冲突")).toBeDefined();
   });

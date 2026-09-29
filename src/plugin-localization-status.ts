@@ -571,6 +571,7 @@ function describeDiscoveryBlock(reason: string | undefined): string {
     case "source_validation_rejected": return translate("插件来源验证未通过，需要服务端核查后才能继续。");
     case "validator_not_approved": return translate("插件来源与当前验证规则不匹配，需要服务端核查。");
     case "registry_binding_changed": return translate("插件来源绑定已变化，等待服务端确认。");
+    case "license_review_required": return translate("暂无法公开发布：当前来源的许可证需要人工确认");
     default: return translate("当前权威版本暂无法公开发布");
   }
 }
@@ -774,8 +775,9 @@ function safeIntersectionStatus(
   const authorityPluginVersion = translation.authorityPluginVersion ?? translation.pluginVersion;
   const versionNotice = authorityPluginVersion === catalog.pluginVersion
     ? undefined
-    : translate("当前使用 {version} 的本地化译文；插件可继续使用，建议升级至 {version} 以获得最佳匹配", {
-        version: authorityPluginVersion,
+    : translate("本机插件 {installed}，译文来源 {source}；仅应用可匹配的文案，更新插件后会重新匹配", {
+        installed: catalog.pluginVersion,
+        source: authorityPluginVersion,
       });
   const safeIntersectionWithVersion = appendSourceSummary(
     safeIntersection,

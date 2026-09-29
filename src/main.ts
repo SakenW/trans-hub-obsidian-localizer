@@ -1,11 +1,11 @@
-import { getLanguage, Notice, Platform, Plugin } from "obsidian";
+import type { PluginCompatibilityCheck, PluginPatchApproval } from "./plugin-compatibility";
+import { getLanguage, Notice, Plugin } from "obsidian";
 
 import { ActivationStore } from "./activation";
-import { clientLocale, localizedClientName, setClientLocale, translate } from "./client-localization";
+import { localizedClientName, setClientLocale, translate } from "./client-localization";
 import { retireExpiredDerivedCache } from "./derived-cache-migration";
 import { errorMessage } from "./error-message";
 import { openSystemBrowser } from "./external-browser";
-import { PluginManagerView, PLUGIN_MANAGER_VIEW_TYPE } from "./plugin-manager-view";
 import { registerPluginTranslationCommands } from "./plugin-actions";
 import {
   PluginAutomationController,
@@ -147,14 +147,10 @@ export default class TransHubObsidianPlugin extends Plugin {
     });
     this.settingTab = new TransHubSettingTab(this.app, this);
     this.addSettingTab(this.settingTab);
-    this.registerView(
-      PLUGIN_MANAGER_VIEW_TYPE,
-      (leaf) => new PluginManagerView(leaf, this.settingTab),
-    );
     this.addCommand({
       id: "open-plugin-localization-manager",
       name: translate("打开插件本地化管理器"),
-      callback: () => { void this.openPluginManager(); },
+      callback: () => { void this.openPluginManager().catch((error: unknown) => new Notice(errorMessage(error), 10_000)); },
     });
     this.register(() => this.pluginAutomation.stop());
     this.register(() => this.clearPendingTranslationRetry());
@@ -186,6 +182,7 @@ export default class TransHubObsidianPlugin extends Plugin {
       this.pluginAutomation.applyPluginDisplayNames();
       this.pluginAutomation.localizeSettingsWindowNavigation();
       this.pluginAutomation.observeSettingsWindow();
+      void this.settingTab.checkVisiblePluginVersions();
     }, 2_000));
     this.registerInterval(window.setInterval(() => { void this.runAutomaticPluginTranslation(); }, AUTOMATION_INTERVAL_MS));
     registerPluginTranslationCommands(this, {
@@ -239,11 +236,6 @@ export default class TransHubObsidianPlugin extends Plugin {
     return openSystemBrowser(TRANS_HUB_REGISTRATION_URL);
   }
 
-  openInvitationGuide(): Promise<void> {
-    const locale = clientLocale() === "zh-CN" ? "zh-CN" : "en-US";
-    return openSystemBrowser(`${TRANS_HUB_WEB_BASE_URL}/${locale}/ecosystems/obsidian/invite`);
-  }
-
   async disconnect(): Promise<void> {
     const lifecycleRevision = this.advanceLifecycle();
     this.activation.clear();
@@ -257,7 +249,7 @@ export default class TransHubObsidianPlugin extends Plugin {
     catch (error) { failures.push(errorMessage(error)); }
     try { await this.savePluginDataForLifecycle(lifecycleRevision); }
     catch (error) { failures.push(errorMessage(error)); }
-    if (failures.length > 0) throw new Error(translate("已断开授权；本机清理未全部完成：{message}。请使用高级选项中的恢复操作检查文件。", {
+    if (failures.length > 0) throw new Error(translate("已断开授权；本机清理未全部完成：{message}。请使用兼容与恢复中的操作检查文件。", {
       message: failures.join("；"),
     }));
   }
@@ -266,34 +258,13 @@ export default class TransHubObsidianPlugin extends Plugin {
   getPluginState(): PluginState { return this.state; }
   getPluginSourceSnapshot(): PluginSourceSnapshot { return this.pluginAutomation.getSourceSnapshot(); }
 
-  async openPluginManager(): Promise<void> {
-    const existingLeaf = this.app.workspace.getLeavesOfType(PLUGIN_MANAGER_VIEW_TYPE)[0];
-    if (existingLeaf !== undefined) {
-      await this.app.workspace.revealLeaf(existingLeaf);
-      if (Platform.isDesktopApp) existingLeaf.getContainer().win.focus();
-      return;
-    }
-    if (!Platform.isDesktopApp) {
-      const leaf = this.app.workspace.getLeaf("tab");
-      await leaf.setViewState({ type: PLUGIN_MANAGER_VIEW_TYPE, active: true });
-      await this.app.workspace.revealLeaf(leaf);
-      return;
-    }
-    try {
-      const leaf = this.app.workspace.openPopoutLeaf({
-        size: { width: 960, height: 760 },
-      });
-      await leaf.setViewState({ type: PLUGIN_MANAGER_VIEW_TYPE, active: true });
-      await this.app.workspace.revealLeaf(leaf);
-      leaf.getContainer().win.focus();
-    } catch (error) {
-      const leaf = this.app.workspace.getLeaf("tab");
-      await leaf.setViewState({ type: PLUGIN_MANAGER_VIEW_TYPE, active: true });
-      await this.app.workspace.revealLeaf(leaf);
-      leaf.getContainer().win.focus();
-      console.warn("[Trans-Hub] failed to open the plugin manager in a separate window", error);
-      new Notice(translate("此设备无法打开独立窗口，已在工作区中打开插件管理器。"), 10_000);
-    }
+  openPluginManager(): Promise<void> {
+    const host = this.app as typeof this.app & { setting?: { open: () => void; openTabById: (id: string) => void } };
+    if (host.setting === undefined) return Promise.reject(new Error(translate("请在 Obsidian 设置中打开语枢的插件管理页面。")));
+    this.settingTab.selectSection("plugins");
+    host.setting.open();
+    host.setting.openTabById(this.manifest.id);
+    return Promise.resolve();
   }
 
   refreshPluginManager(): void { this.settingTab.refreshPluginManager(); }
@@ -345,8 +316,11 @@ export default class TransHubObsidianPlugin extends Plugin {
     return this.pluginAutomation.scanInstalledPlugins(onlyPluginIds);
   }
   applyCachedPluginTranslations(): void { this.pluginAutomation.applyCachedTranslations(); }
-  applyThirdPartyPluginFileTranslations(pluginIds: readonly string[]): Promise<{ readonly applied: number; readonly skipped: number; readonly conflicts: number }> {
-    return this.pluginFileQueue.run(() => this.pluginAutomation.applyThirdPartyFilePatches(pluginIds));
+  checkThirdPartyPluginFilePatch(pluginId: string): Promise<PluginCompatibilityCheck> {
+    return this.pluginFileQueue.run(() => this.pluginAutomation.checkThirdPartyFilePatch(pluginId));
+  }
+  applyThirdPartyPluginFileTranslations(pluginIds: readonly string[], approval?: PluginPatchApproval): Promise<{ readonly applied: number; readonly skipped: number; readonly conflicts: number }> {
+    return this.pluginFileQueue.run(() => this.pluginAutomation.applyThirdPartyFilePatches(pluginIds, approval));
   }
   async restoreThirdPartyPluginFiles(pluginIds?: readonly string[], force = false): Promise<PluginFileRestoreSummary> {
     const result = await this.pluginFileQueue.run(() => this.pluginAutomation.restoreThirdPartyFilePatches(pluginIds, force));

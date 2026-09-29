@@ -452,7 +452,8 @@ export type PublicDiscoveryBlockedReasonCode =
   | "adapter_validation_rejected"
   | "result_materialization_rejected"
   | "legacy_blocked_reason_unavailable"
-  | "executor_authority_superseded";
+  | "executor_authority_superseded"
+  | "license_review_required";
 
 /** Server-authored acknowledgement of a signed public-directory demand.
  * It deliberately contains no locator, source bytes, executor, or adapter. */

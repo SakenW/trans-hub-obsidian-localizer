@@ -1,3 +1,5 @@
+import { renderCompatibilityToggle } from "./plugin-compatibility-toggle";
+import type { PluginCompatibilityCheck, PluginPatchApproval } from "./plugin-compatibility";
 import { type App, Modal, Notice, Setting } from "obsidian";
 import { translate } from "./client-localization";
 import { errorMessage } from "./error-message";
@@ -5,6 +7,7 @@ import type { PluginFileRestoreSummary } from "./plugin-automation";
 import type { FilePatchResult, PluginFilePatchState } from "./third-party-plugin-patcher";
 
 export function describeFileRestore(result: PluginFileRestoreSummary): string {
+  if (result.restored === 0 && result.conflicts === 0) return translate("没有需要恢复的兼容补丁。");
   const summary = translate("已恢复 {restored} 个插件文件；{conflicts} 个需处理。重新加载目标插件后生效。", {
     restored: result.restored, conflicts: result.conflicts,
   });
@@ -16,49 +19,38 @@ export function renderPluginPatchControls(row: Setting, input: {
   readonly pluginName: string;
   readonly state: PluginFilePatchState;
   readonly canApply: boolean;
-  readonly apply: () => Promise<FilePatchResult>;
+  readonly check?: () => Promise<PluginCompatibilityCheck>;
+  readonly apply: (approval?: PluginPatchApproval) => Promise<FilePatchResult>;
   readonly restore: (force?: boolean) => Promise<PluginFileRestoreSummary>;
   readonly onComplete: (message: string, failed: boolean) => void;
 }): void {
-  const restore = input.state !== "none";
-  if (!restore && !input.canApply) return;
+  if (input.state !== "conflict") {
+    if (input.state === "active" || input.check !== undefined) renderCompatibilityToggle(row, {
+      active: input.state === "active", label: input.check === undefined ? input.pluginName : undefined, check: input.check, apply: input.apply,
+      restore: () => input.restore(), onComplete: input.onComplete,
+    });
+    return;
+  }
+  row.setDesc(translate("恢复遇到文件冲突，已保留当前文件。请使用“处理补丁冲突”查看处理方式。"));
   row.addButton((button) => {
-    button.setButtonText(restore
-      ? translate(input.state === "conflict" ? "处理补丁冲突" : "取消兼容补丁")
-      : translate("使用兼容补丁"));
-    button.setTooltip(restore
-      ? translate("恢复此插件的原始文件；如有外部修改，将先保留文件并提示。")
-      : translate("写入与当前版本匹配的静态译文并保存备份，需要重新加载此插件。"));
+    button.setButtonText(translate("处理补丁冲突"));
     button.onClick(async () => {
-      button.setDisabled(true).setButtonText(translate(restore ? "正在取消…" : "正在应用…"));
+      button.setDisabled(true);
       let message: string;
       let failed = false;
       try {
-        if (restore) {
-          let result = await input.restore();
-          if (result.conflicts > 0 && result.restored === 0) {
-            if (await confirmForceRestore(input.app, input.pluginName)) result = await input.restore(true);
-          }
-          message = describeFileRestore(result);
-          failed = result.conflicts > 0;
-        } else {
-          const result = await input.apply();
-          if (result.applied > 0) {
-            message = translate("已写入 {applied} 条静态译文。重新加载目标插件后生效。", { applied: result.applied });
-            failed = result.conflicts > 0;
-          } else {
-            message = result.conflicts > 0
-              ? translate("插件文件已变化，未写入补丁。请检查此插件的安装状态。")
-              : translate("当前没有可写入的匹配译文。请稍后检查进度。");
-            failed = true;
-          }
-        }
+        let result = await input.restore();
+        if (result.conflicts > 0 && result.restored === 0
+          && await confirmForceRestore(input.app, input.pluginName)) result = await input.restore(true);
+        message = describeFileRestore(result);
+        failed = result.conflicts > 0;
       } catch (error) {
         message = translate("处理失败：{message}", { message: errorMessage(error) });
         failed = true;
       }
       new Notice(message, failed ? 10_000 : 0);
       input.onComplete(message, failed);
+      button.setDisabled(false);
     });
   });
 }

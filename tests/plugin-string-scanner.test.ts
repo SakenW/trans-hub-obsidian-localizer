@@ -293,7 +293,7 @@ describe("scanPluginUiStrings", () => {
       sourceLocale: "en",
       bundle: 'el.textContent = "Fresh sink";',
     });
-    expect(catalog.patchEvidenceRevision).toBe(31);
+    expect(catalog.patchEvidenceRevision).toBe(34);
   });
 
   it("collects indexed warning copy only when a local helper renders it as DOM text", async () => {
@@ -598,14 +598,16 @@ describe("scanPluginUiStrings", () => {
       plugin,
       sourceLocale: "en",
       bundle: [
+        'function link(parent,url,label){let a=parent.createEl("a");a.textContent=label;a.href=url;parent.append(a);return a}',
+        'function renamedLinked(lead,url,label="Learn more"){let fragment=createFragment();return fragment.append(document.createTextNode(lead)),link(fragment,url,label),fragment}',
         'var packageIntro="Bundle or import QuickAdd automations as reusable packages.";',
         'const group={type:"group",heading:"Choices & packages",items:[{name:"Packages",desc:packageIntro,render:x=>x}]};',
-        'function packageDesc(empty){return this.descWithDocsLink(empty?`${packageIntro} Export becomes available once you have a choice. `:`${packageIntro} `,docs,"Learn more about packages")}',
+        'function packageDesc(empty){return renamedLinked(empty?`${packageIntro} Export becomes available once you have a choice. `:`${packageIntro} `,docs,"Learn more about packages")}',
         'var internal="Internal connection setting";',
-        'function notVisible(empty){return this.descWithDocsLink(empty?`${internal} enabled`:`${internal} disabled`,docs)}',
+        'function notVisible(empty){return renamedLinked(empty?`${internal} enabled`:`${internal} disabled`,docs)}',
         'var mutable="Mutable description";mutable="Changed description";',
         'const other={type:"group",heading:"Other",items:[{name:"Mutable",desc:mutable,render:x=>x}]};',
-        'function changed(empty){return this.descWithDocsLink(empty?`${mutable} first`:`${mutable} second`,docs)}',
+        'function changed(empty){return renamedLinked(empty?`${mutable} first`:`${mutable} second`,docs)}',
       ].join("\n"),
     });
     const sources = catalog.strings.map((item) => item.source);
@@ -1034,6 +1036,49 @@ describe("scanPluginUiStrings", () => {
     }));
     expect(settingsSpan.literalStart).toBeGreaterThan(1_048_577);
     expect(settingsSpan.literalEnd).toBe((settingsSpan.literalStart ?? 0) + "Copilot Settings".length + 2);
+  });
+
+  it("collects presentation props on React components without treating native DOM data as copy", async () => {
+    const bundle = [
+      'React.createElement(SettingsGroup,{label:"Agents"},React.createElement(SettingRow,{title:"Default backend",description:"Used when a new session starts."}));',
+      'React.createElement("div",{description:"Internal model description",label:"Internal object label"});',
+      'config.createElement(SettingRow,{description:"Unproven factory description"});',
+    ].join("\n");
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toEqual(expect.arrayContaining([
+      "Agents", "Default backend", "Used when a new session starts.",
+    ]));
+    for (const rejected of [
+      "Internal model description", "Internal object label", "Unproven factory description",
+    ]) expect(sources).not.toContain(rejected);
+    const evidence = catalog.strings.find((item) => item.source === "Used when a new session starts.")?.evidence?.[0];
+    expect(evidence).toEqual(expect.objectContaining({
+      origin: "ui-property", strategy: "structured", symbol: "description",
+      literalStart: bundle.indexOf('"Used when a new session starts."'),
+    }));
+  });
+
+  it("collects immutable labels mapped into tab descriptors but rejects escaped dictionaries", async () => {
+    const bundle = [
+      'var ids=["basic","advanced"];',
+      'var tabNames={basic:"Basic",advanced:"Advanced"},tabs=ids.map(id=>({id:id,label:tabNames[id]}));',
+      'var configNames={basic:"Private mode",advanced:"Private channel"};configNames.basic;',
+      'var escapedNames={basic:"Hidden setting",advanced:"Hidden option"};ids.map(id=>({label:escapedNames[id]}));escapedNames.other="changed";',
+      'var subset=["basic"],unusedNames={basic:"First internal label",advanced:"Unused internal label"};subset.map(id=>({label:unusedNames[id]}));',
+    ].join("\n");
+    const catalog = await scanPluginUiStrings({ plugin, sourceLocale: "en", bundle });
+    const sources = catalog.strings.map((item) => item.source);
+    expect(sources).toEqual(expect.arrayContaining(["Basic", "Advanced"]));
+    for (const rejected of [
+      "Private mode", "Private channel", "Hidden setting", "Hidden option",
+      "First internal label", "Unused internal label",
+    ])
+      expect(sources).not.toContain(rejected);
+    expect(catalog.strings.find((item) => item.source === "Basic")?.evidence?.[0])
+      .toEqual(expect.objectContaining({
+        symbol: "mappedLabel", literalStart: bundle.indexOf('"Basic"'),
+      }));
   });
 
   it("collects visible attributes from bundled JSX runtime native elements only", async () => {

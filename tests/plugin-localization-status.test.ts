@@ -36,6 +36,7 @@ describe("describePluginLocalizationStatus", () => {
     ["executor_retry_exhausted", "自动处理多次失败"],
     ["source_validation_rejected", "插件来源验证未通过"],
     ["validator_not_approved", "插件来源与当前验证规则不匹配"],
+    ["license_review_required", "许可证需要人工确认"],
   ])("explains server block %s without suggesting a client retry", (blockedReasonCode, explanation) => {
     const result = describePluginLocalizationStatus({ targetLocale: "zh-CN", publicDiscovery: {
       discoveryId: "discovery", installationId: "installation", submittedAt: "2026-09-07T00:00:00Z",
@@ -107,7 +108,7 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     });
     expect(result.kind).toBe("localized");
-    expect(result.label).toContain("本地化译文");
+    expect(result.label).toContain("本机插件 0.5.68，译文来源 0.5.70");
     expect(result.coverage?.headline).toContain("1/1");
     expect(result.coverage?.complete).toBe(true);
   });
@@ -746,7 +747,7 @@ describe("describePluginLocalizationStatus", () => {
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "已获取 1/2 条匹配界面译文，1 条保留原文；当前使用 0.5.70 的本地化译文；插件可继续使用，建议升级至 0.5.70 以获得最佳匹配",
+        headline: "已获取 1/2 条匹配界面译文，1 条保留原文；本机插件 0.5.69，译文来源 0.5.70；仅应用可匹配的文案，更新插件后会重新匹配",
         complete: false,
       },
     });
@@ -778,7 +779,7 @@ describe("describePluginLocalizationStatus", () => {
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "已获取 1/1 条匹配界面译文；当前使用 0.5.70 的本地化译文；插件可继续使用，建议升级至 0.5.70 以获得最佳匹配",
+        headline: "已获取 1/1 条匹配界面译文；本机插件 0.5.69，译文来源 0.5.70；仅应用可匹配的文案，更新插件后会重新匹配",
         complete: true,
       },
     });

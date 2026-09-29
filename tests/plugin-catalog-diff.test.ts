@@ -46,6 +46,14 @@ const previous = {
 } as const;
 
 describe("plugin catalog version carry-over", () => {
+  it("never rounds an incomplete catalog or scope to 100 percent", () => {
+    const strings = Array.from({ length: 713 }, (_, index) => ({ key: String(index), source: `Text ${index}`, origins: ["ui-call" as const], placeholderSignature: "" }));
+    const translation = { ...previous, pluginVersion: catalog.pluginVersion, entries: strings.slice(0, 710).map((item) => ({ pluginId: "sample", source: item.source, target: `译文 ${item.key}` })) };
+    const result = calculatePluginTranslationCoverage({ ...catalog, strings }, translation, "zh-CN");
+    expect(result).toMatchObject({ translatedCount: 710, totalCount: 713, missingCount: 3, percent: 99 });
+    expect(result?.scopes.find((item) => item.scope === "runtime-ui")?.percent).toBe(99);
+  });
+
   it("界面覆盖排除README-only，同时对跨范围原文去重", () => {
     const uiCatalog = { ...catalog, strings: [
       { key: "ui", source: "Settings", origins: ["ui-call" as const, "readme" as const, "manifest.name" as const], placeholderSignature: "" },

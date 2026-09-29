@@ -7,6 +7,10 @@ export class TestElement {
   text = "";
   isConnected = true;
   scrollTop = 0;
+  hidden = false;
+  open = false;
+  readonly listeners = new Map<string, () => void>();
+  addEventListener(name: string, callback: () => void): void { const previous = this.listeners.get(name); this.listeners.set(name, () => { previous?.(); callback(); }); }
   constructor(options: Options = {}) { this.text = options.text ?? ""; this.addClass(...(typeof options.cls === "string" ? options.cls.split(" ") : options.cls ?? [])); }
   createDiv(options: Options = {}): TestElement { const child = new TestElement(options); this.children.push(child); return child; }
   createSpan(options: Options = {}): TestElement { return this.createDiv(options); }
@@ -40,11 +44,18 @@ export class PluginSettingTab {
   display(): void {}
   getSettingDefinitions(): unknown[] { return []; }
 }
+export const openedModals: Modal[] = [];
 export class Modal {
   contentEl = new TestElement();
   constructor(_app: App) {}
-  open(): void {}
-  close(): void {}
+  onOpen(): void {}
+  onClose(): void {}
+  open(): void { openedModals.push(this); this.onOpen(); }
+  close(): void { this.onClose(); }
+}
+export class MenuItem {
+  title: string | DocumentFragment = "";
+  setTitle(title: string | DocumentFragment): this { this.title = title; return this; }
 }
 export const notices: string[] = [];
 export class Notice { constructor(message: string, _timeout?: number) { notices.push(message); } }

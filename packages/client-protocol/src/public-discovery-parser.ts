@@ -163,7 +163,7 @@ export function parsePublicDiscoveryStatus(
       "registry_projection_changed", "source_validation_rejected",
       "adapter_validation_rejected", "result_materialization_rejected",
       "legacy_blocked_reason_unavailable",
-      "executor_authority_superseded",
+      "executor_authority_superseded", "license_review_required",
     ] as const);
   const retryAllowed = record.retryAllowed;
   if (typeof retryAllowed !== "boolean") {

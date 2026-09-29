@@ -213,7 +213,7 @@ describe("selectApplicablePluginTranslations", () => {
       pluginVersion: "1.0.0",
       artifactDigest: "a".repeat(64),
       scannerTargetLocale: "zh-CN",
-      patchEvidenceRevision: 31,
+      patchEvidenceRevision: 34,
       catalogIdentity: {},
     } as Parameters<typeof canReuseScannedPluginCatalog>[0];
 
@@ -223,7 +223,10 @@ describe("selectApplicablePluginTranslations", () => {
     expect(canReuseScannedPluginCatalog({ ...catalog!, patchEvidenceRevision: 26 }, {
       name: "Large Plugin", version: "1.0.0",
     }, "a".repeat(64), "zh-CN")).toBe(false);
-    expect(canReuseScannedPluginCatalog({ ...catalog!, patchEvidenceRevision: 30 }, {
+    expect(canReuseScannedPluginCatalog({ ...catalog!, patchEvidenceRevision: 32 }, {
+      name: "Large Plugin", version: "1.0.0",
+    }, "a".repeat(64), "zh-CN")).toBe(false);
+    expect(canReuseScannedPluginCatalog({ ...catalog!, patchEvidenceRevision: 33 }, {
       name: "Large Plugin", version: "1.0.0",
     }, "a".repeat(64), "zh-CN")).toBe(false);
     expect(canReuseScannedPluginCatalog(catalog, {

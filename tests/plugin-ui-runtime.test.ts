@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MenuItem } from "obsidian";
 
 import {
   buildConflictSafeDictionary,
@@ -373,6 +374,132 @@ describe("runtime DOM boundary", () => {
     } as unknown as Element;
     expect(unsafeRuntime.runtimePlanForElement(unmarkedElement)).toBeUndefined();
     expect(unsafeRuntime.runtimePlanForElement({ closest: () => null } as unknown as Element)).toBeUndefined();
+  });
+
+  it("claims only a menu opened from the active QuickAdd settings tab", () => {
+    const runtime = new PluginUiTranslationRuntime();
+    const source = "Template — Create a note from a template file.";
+    runtime.update([
+      { pluginId: "quickadd", source: "QuickAdd", target: "QuickAdd", scopes: ["metadata"] },
+      { pluginId: "quickadd", source, target: "模板——从模板文件创建笔记。", scopes: ["runtime-ui"] },
+      { pluginId: "other-plugin", source, target: "错误的归属", scopes: ["runtime-ui"] },
+    ]);
+    const document = { defaultView: { setTimeout } } as unknown as Document;
+    const active = { getAttribute: (key: string) => key === "data-setting-id" ? "quickadd" : null };
+    const modal = { querySelector: () => active } as unknown as Element;
+    const button = {} as Element;
+    const trigger = {
+      nodeType: 1,
+      closest: (selector: string) => selector === "button.qaNewChoiceBtn[aria-haspopup='menu']" ? button
+        : selector === ".modal.mod-settings" ? modal : null,
+    } as unknown as Element;
+    const menu = {
+      nodeType: 1, ownerDocument: document,
+      matches: (selector: string) => selector === ".menu",
+    } as unknown as Element;
+    const item = {
+      closest: (selector: string) => selector === ".menu" ? menu : null,
+    } as unknown as Element;
+    const internals = runtime as unknown as {
+      rememberMenuTrigger(event: Event, document: Document): void;
+      claimTriggeredMenu(node: Node): void;
+      runtimePlanForElement(element: Element): ReturnType<typeof buildRuntimeTranslationPlan> | undefined;
+    };
+    expect(internals.runtimePlanForElement(item)).toBeUndefined();
+    internals.rememberMenuTrigger({ target: trigger } as unknown as Event, document);
+    internals.claimTriggeredMenu(menu);
+    expect(translatePluginUiValue(source, internals.runtimePlanForElement(item)!))
+      .toBe("模板——从模板文件创建笔记。");
+    const unrelated = { ...trigger, closest: () => null } as unknown as Element;
+    const otherDocument = { defaultView: { setTimeout } } as unknown as Document;
+    internals.rememberMenuTrigger({ target: unrelated } as unknown as Event, otherDocument);
+    const otherMenu = { ...menu, ownerDocument: otherDocument } as unknown as Element;
+    internals.claimTriggeredMenu(otherMenu);
+    const otherItem = { closest: (selector: string) => selector === ".menu" ? otherMenu : null } as unknown as Element;
+    expect(internals.runtimePlanForElement(otherItem)).toBeUndefined();
+  });
+
+  it("translates a newly mounted QuickAdd menu and ignores a later unowned menu", async () => {
+    let observerCallback: MutationCallback | undefined;
+    class MockMutationObserver {
+      constructor(callback: MutationCallback) { observerCallback = callback; }
+      observe(): void {}
+      disconnect(): void {}
+    }
+    let clickListener: EventListener | undefined;
+    let visited: Node | null = null;
+    const document = {
+      defaultView: { MutationObserver: MockMutationObserver, setTimeout },
+      createTreeWalker: () => ({ nextNode: () => {
+        const result = visited;
+        visited = null;
+        return result;
+      } }),
+    } as unknown as Document;
+    const root = {
+      nodeType: 1, ownerDocument: document, childNodes: [],
+      closest: () => null, matches: () => false, getAttribute: () => null,
+      addEventListener: (_event: string, listener: EventListener) => { clickListener = listener; },
+      removeEventListener: () => {},
+    } as unknown as HTMLElement;
+    const active = { getAttribute: (key: string) => key === "data-setting-id" ? "quickadd" : null };
+    const modal = { querySelector: () => active } as unknown as Element;
+    const trigger = {
+      nodeType: 1,
+      closest: (selector: string) => selector === "button.qaNewChoiceBtn[aria-haspopup='menu']" ? trigger
+        : selector === ".modal.mod-settings" ? modal : null,
+    } as unknown as Element;
+    const menu = () => {
+      const item = { closest: (selector: string) => selector === ".menu" ? element : null } as unknown as Element;
+      const text = { nodeType: 3, data: "Template — Create a note from a template file.", parentElement: item } as unknown as Text;
+      const element = {
+        nodeType: 1, ownerDocument: document,
+        matches: (selector: string) => selector === ".menu",
+        closest: (selector: string) => selector === ".menu" ? element : null,
+        getAttribute: () => null,
+        contains: (candidate: Node) => candidate === text,
+      } as unknown as Element;
+      return { element, text };
+    };
+    const runtime = new PluginUiTranslationRuntime();
+    const originalSetTitle = Reflect.get(MenuItem.prototype, "setTitle");
+    const menuSource = "Template — Create a note from a template file.";
+    const makeMenuItem = (): MenuItem & { title: string | DocumentFragment } =>
+      Object.create(MenuItem.prototype) as MenuItem & { title: string | DocumentFragment };
+    runtime.update([
+      { pluginId: "quickadd", source: "QuickAdd", target: "QuickAdd", scopes: ["metadata"] },
+      { pluginId: "quickadd", source: "Template — Create a note from a template file.",
+        target: "模板——从模板文件创建笔记。", scopes: ["runtime-ui"] },
+    ]);
+    vi.stubGlobal("NodeFilter", { SHOW_TEXT: 4, SHOW_ELEMENT: 1 });
+    try {
+      runtime.start(root);
+      expect(makeMenuItem().setTitle(menuSource).title).toBe(menuSource);
+      clickListener?.({ target: trigger } as unknown as Event);
+      expect(makeMenuItem().setTitle(menuSource).title).toBe("模板——从模板文件创建笔记。");
+      expect(makeMenuItem().setTitle("Other plugin action").title).toBe("Other plugin action");
+      const fragment = { nodeType: 11 } as DocumentFragment;
+      expect(makeMenuItem().setTitle(fragment).title).toBe(fragment);
+      const opened = menu();
+      visited = opened.text;
+      observerCallback?.([{ type: "childList", target: root, addedNodes: [opened.element], removedNodes: [] } as unknown as MutationRecord], {} as MutationObserver);
+      expect(opened.text.data).toBe("模板——从模板文件创建笔记。");
+      observerCallback?.([{ type: "childList", target: root, addedNodes: [], removedNodes: [opened.element] } as unknown as MutationRecord], {} as MutationObserver);
+      expect(opened.text.data).toBe("Template — Create a note from a template file.");
+      visited = opened.text;
+      observerCallback?.([{ type: "childList", target: root, addedNodes: [opened.element], removedNodes: [] } as unknown as MutationRecord], {} as MutationObserver);
+      expect(opened.text.data).toBe("Template — Create a note from a template file.");
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(makeMenuItem().setTitle(menuSource).title).toBe(menuSource);
+      const unrelated = menu();
+      visited = unrelated.text;
+      observerCallback?.([{ type: "childList", target: root, addedNodes: [unrelated.element], removedNodes: [] } as unknown as MutationRecord], {} as MutationObserver);
+      expect(unrelated.text.data).toBe("Template — Create a note from a template file.");
+    } finally {
+      runtime.stop();
+      vi.unstubAllGlobals();
+    }
+    expect(Reflect.get(MenuItem.prototype, "setTitle")).toBe(originalSetTitle);
   });
 
   it("scopes Notebook Navigator's resize label without touching file-list text", () => {

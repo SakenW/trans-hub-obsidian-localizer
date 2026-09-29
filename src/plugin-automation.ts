@@ -1,4 +1,4 @@
-import { Platform, type App, type EventRef } from "obsidian";
+import { Platform, normalizePath, type App, type EventRef } from "obsidian";
 
 import {
   localizedPluginDisplayName,
@@ -34,6 +34,7 @@ import {
 import { PluginUiTranslationRuntime, type PluginUiTranslation } from "./plugin-ui-runtime";
 import {
   applyPublishedPluginFilePatch,
+  previewPublishedPluginFilePatch,
   inspectPluginFilePatch,
   type PluginFilePatchState,
   logicalPluginBundle,
@@ -41,6 +42,10 @@ import {
 } from "./third-party-plugin-patcher";
 import type { PluginSyncSummary } from "./plugin-sync";
 import { OBSIDIAN_SOURCE_LOCALE, parseTargetLocale, type TargetLocale } from "./product-config";
+
+import { sha256Hex } from "./identity";
+import { translate } from "./client-localization";
+import type { PluginCompatibilityCheck, PluginPatchApproval } from "./plugin-compatibility";
 
 export interface PluginAutomationSettings {
   readonly targetLocale: TargetLocale;
@@ -76,6 +81,7 @@ export interface PluginScanResult {
 const SETTINGS_NAV_ORIGINAL_ATTRIBUTE = "data-th-nav-original";
 
 export class PluginAutomationController {
+  private readonly patchApprovals = new Map<string, PluginPatchApproval>();
   private readonly runtime = new PluginUiTranslationRuntime();
   private windowOpenEvent: EventRef | null = null;
   private windowCloseEvent: EventRef | null = null;
@@ -406,23 +412,48 @@ export class PluginAutomationController {
     return (win as { readonly document?: Document }).document;
   }
 
-  async applyThirdPartyFilePatches(pluginIds: readonly string[]): Promise<{ readonly applied: number; readonly skipped: number; readonly conflicts: number }> {
-    if (!Platform.isDesktopApp || !this.input.settings().thirdPartyFilePatchingEnabled) {
-      return { applied: 0, skipped: pluginIds.length, conflicts: 0 };
+  async checkThirdPartyFilePatch(pluginId: string): Promise<PluginCompatibilityCheck> {
+    this.patchApprovals.delete(pluginId);
+    const unavailable = (message: string): PluginCompatibilityCheck => ({ kind: "unavailable", message });
+    if (!Platform.isDesktopApp) return unavailable(translate("移动端仅支持普通本地化，文件兼容处理需要桌面端。"));
+    if (!this.input.settings().pluginTranslationEnabled || this.input.settings().excludedPluginIds.includes(pluginId)) {
+      return unavailable(translate("请先开启此插件的本地化，再检查兼容方式。"));
     }
-    const plugins = await discoverInstalledPlugins(this.input.app, this.input.ownPluginId);
-    const selectedIds = new Set(pluginIds);
-    let applied = 0; let skipped = 0; let conflicts = 0;
-    for (const plugin of plugins.filter((item) => selectedIds.has(item.id) && item.enabled && !this.input.settings().excludedPluginIds.includes(item.id))) {
-      const result = await applyPublishedPluginFilePatch({
-        vault: this.input.app.vault,
-        plugin,
-        catalog: this.input.state().pluginCatalogs[plugin.id],
-        translation: getPluginTranslation(this.input.state(), plugin.id, this.input.settings().targetLocale),
-      });
-      applied += result.applied; skipped += result.skipped; conflicts += result.conflicts;
-    }
-    return { applied, skipped, conflicts };
+    const plugin = (await discoverInstalledPlugins(this.input.app, this.input.ownPluginId)).find((item) => item.id === pluginId && item.enabled);
+    if (plugin === undefined) return unavailable(translate("插件未启用或已移除，请重新检查插件列表。"));
+    const patchState = await inspectPluginFilePatch(this.input.app.vault, plugin);
+    if (patchState === "active" || patchState === "conflict") return unavailable(translate("此插件已有补丁或恢复冲突，请先检查并恢复原始文件。"));
+    const catalog = this.input.state().pluginCatalogs[pluginId];
+    const locale = this.input.settings().targetLocale;
+    const translation = getPluginTranslation(this.input.state(), pluginId, locale);
+    const original = await this.input.app.vault.adapter.read(normalizePath(`${plugin.dir}/main.js`));
+    const preview = await previewPublishedPluginFilePatch({ plugin, catalog, translation, original });
+    if (preview.kind !== "candidate") return { kind: "checked", preview };
+    const approval = { pluginId, pluginVersion: plugin.version, targetLocale: locale,
+      fingerprint: await sha256Hex(JSON.stringify({ catalog, translation })) };
+    this.patchApprovals.set(pluginId, approval);
+    return { kind: "checked", preview, approval };
+  }
+
+  async applyThirdPartyFilePatches(pluginIds: readonly string[], approval?: PluginPatchApproval): Promise<{ readonly applied: number; readonly skipped: number; readonly conflicts: number }> {
+    const skipped = { applied: 0, skipped: pluginIds.length, conflicts: 0 };
+    // The legacy global switch grants nothing. Every application consumes the
+    // exact preview the user confirmed, including version, language and pack.
+    if (!Platform.isDesktopApp || approval === undefined || pluginIds.length !== 1
+      || pluginIds[0] !== approval.pluginId || this.patchApprovals.get(approval.pluginId) !== approval) return skipped;
+    this.patchApprovals.delete(approval.pluginId);
+    const settings = this.input.settings();
+    if (!settings.pluginTranslationEnabled || settings.excludedPluginIds.includes(approval.pluginId)
+      || settings.targetLocale !== approval.targetLocale) return skipped;
+    const plugin = (await discoverInstalledPlugins(this.input.app, this.input.ownPluginId))
+      .find((item) => item.id === approval.pluginId && item.enabled && item.version === approval.pluginVersion);
+    if (plugin === undefined) return skipped;
+    const catalog = this.input.state().pluginCatalogs[plugin.id];
+    const translation = getPluginTranslation(this.input.state(), plugin.id, settings.targetLocale);
+    if (await sha256Hex(JSON.stringify({ catalog, translation })) !== approval.fingerprint) return skipped;
+    if (!this.input.settings().pluginTranslationEnabled || this.input.settings().excludedPluginIds.includes(plugin.id)
+      || this.input.settings().targetLocale !== approval.targetLocale) return skipped;
+    return applyPublishedPluginFilePatch({ vault: this.input.app.vault, plugin, catalog, translation });
   }
 
   async restoreThirdPartyFilePatches(

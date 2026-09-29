@@ -23,6 +23,11 @@ import {
 } from "./plugin-string-scanner-evidence";
 import { collectStructuralRuleMatches } from "./plugin-string-scanner-structural-rules";
 
+import {
+  collectForwardedMethodLabels, collectMapOptionLabels, collectMappedLabelDictionaries,
+} from "./plugin-string-scanner-indirect";
+import { collectComposedMenuTitles } from "./plugin-string-scanner-composed-menu";
+
 const DYNAMIC_PLACEHOLDER_PREFIX = "th:expr:";
 const UI_CALL_NAMES = new Set([
   "Notice", "setText", "setButtonText", "setName", "setDesc", "setPlaceholder",
@@ -57,6 +62,11 @@ const SAFE_NATIVE_DOM_TAG_NAMES = new Set([
 ]);
 const SAFE_NATIVE_DOM_VISIBLE_PROPERTIES = new Set([
   "aria-label", "ariaLabel", "placeholder", "title",
+]);
+// A React component receives these as presentation copy. Native DOM elements
+// do not have the same contract (`description` may be arbitrary data there).
+const COMPONENT_VISIBLE_PROPERTIES = new Set([
+  ...SAFE_NATIVE_DOM_VISIBLE_PROPERTIES, "label", "description", "caption", "subtitle",
 ]);
 const MAX_NESTED_CREATE_ELEMENT_DEPTH = 8;
 const QUOTED = String.raw`("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`;
@@ -231,6 +241,11 @@ export function collectStructuredMatches(
     }
   }
   finishPhase("ui-sinks");
+  collectForwardedMethodLabels(tokens, matching, UI_CALL_NAMES, target, sourceLocale);
+  collectMapOptionLabels(tokens, matching, target, sourceLocale);
+  collectMappedLabelDictionaries(tokens, matching, target, sourceLocale);
+  collectComposedMenuTitles(tokens, matching, target, sourceLocale);
+  finishPhase("indirect-ui-sinks");
   collectStructuralRuleMatches(bundle, tokens, matching, target, sourceLocale, onPhaseMeasured);
   finishPhase("structural-rules");
   return true;
@@ -410,7 +425,10 @@ function collectReactCreateElement(
 
   const properties = args[1];
   if (properties !== undefined) {
-    collectNativeDomVisibleProperties(properties, callToken, target, sourceLocale, nativeTag || componentTag);
+    collectNativeDomVisibleProperties(
+      properties, callToken, target, sourceLocale, nativeTag || componentTag,
+      componentTag ? COMPONENT_VISIBLE_PROPERTIES : SAFE_NATIVE_DOM_VISIBLE_PROPERTIES,
+    );
   }
   for (const child of args.slice(2)) {
     addSafeNativeDomExpression(target, child, "ui-call", callToken, "createElement", sourceLocale);
@@ -423,6 +441,7 @@ function collectNativeDomVisibleProperties(
   target: Map<string, CandidateAggregate>,
   sourceLocale: string,
   acceptsChildren: boolean,
+  visibleProperties: ReadonlySet<string> = SAFE_NATIVE_DOM_VISIBLE_PROPERTIES,
 ): void {
   const properties = stripWrappingParentheses(expression);
   if (properties[0]?.raw !== "{" || matchingTokenIndex(properties, 0) !== properties.length - 1) return;
@@ -436,7 +455,7 @@ function collectNativeDomVisibleProperties(
       );
       continue;
     }
-    if (key === null || !SAFE_NATIVE_DOM_VISIBLE_PROPERTIES.has(key)) continue;
+    if (key === null || !visibleProperties.has(key)) continue;
     const keyToken = entry[0] ?? callToken;
     addSafeNativeDomExpression(
       target, entry.slice(colon + 1), "ui-property", keyToken, key, sourceLocale, true,

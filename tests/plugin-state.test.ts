@@ -16,15 +16,17 @@ describe("parsePluginState", () => {
       pluginId: "quickadd", pluginName: "QuickAdd", pluginVersion: "2.25.0",
       sourceLocale: "en", digest: "catalog", artifactDigest: "a".repeat(64),
       scannerTargetLocale: "zh-CN", scannedAt: "2026-09-24T00:00:00.000Z", strings: [],
-      patchEvidenceRevision: 31,
+      patchEvidenceRevision: 34,
     };
     expect(parsePluginState({ pluginCatalogs: { quickadd: catalog } }).pluginCatalogs.quickadd?.patchEvidenceRevision)
-      .toBe(31);
+      .toBe(34);
+    expect(parsePluginState({ pluginCatalogs: { quickadd: { ...catalog, patchEvidenceRevision: 33 } } })
+      .pluginCatalogs.quickadd?.patchEvidenceRevision).toBe(33);
     expect(parsePluginState({ pluginCatalogs: { quickadd: { ...catalog, patchEvidenceRevision: 30 } } })
       .pluginCatalogs.quickadd?.patchEvidenceRevision).toBe(30);
     expect(parsePluginState({ pluginCatalogs: { quickadd: { ...catalog, patchEvidenceRevision: 26 } } })
       .pluginCatalogs.quickadd?.patchEvidenceRevision).toBe(26);
-    expect(parsePluginState({ pluginCatalogs: { quickadd: { ...catalog, patchEvidenceRevision: 32 } } })
+    expect(parsePluginState({ pluginCatalogs: { quickadd: { ...catalog, patchEvidenceRevision: 35 } } })
       .pluginCatalogs.quickadd).toBeUndefined();
   });
 
@@ -34,7 +36,7 @@ describe("parsePluginState", () => {
       plugin, bundle: 'new Setting(el).setName("Visible setting");', sourceLocale: "en", targetLocale: "zh-CN",
     });
     const restored = parsePluginState({ pluginCatalogs: { quickadd: catalog } }).pluginCatalogs.quickadd;
-    expect(restored?.patchEvidenceRevision).toBe(31);
+    expect(restored?.patchEvidenceRevision).toBe(34);
     expect(canReuseScannedPluginCatalog(restored, plugin, catalog.artifactDigest, "zh-CN")).toBe(true);
   });
   it("retains only valid locale-scoped successful check times and clears them with retired derived state", () => {

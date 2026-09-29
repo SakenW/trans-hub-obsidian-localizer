@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { loadSettings } from "../src/settings-data";
 
 describe("loadSettings", () => {
+  it("does not migrate the old global switch into write authorization", () => {
+    expect(loadSettings({ thirdPartyFilePatchingEnabled: true }).thirdPartyFilePatchingEnabled).toBe(false);
+  });
   it("keeps only user-selectable behavior and target language", () => {
     const settings = loadSettings({
       apiBaseUrl: "https://wrong.example.com",

@@ -25,7 +25,9 @@ export function describeMissingTranslations(catalog: PluginUiCatalog, translatio
     const entry = entries.get(source);
     let reason: string;
     if (/^zh(?:-|$)/u.test(translation.targetLocale) && /\p{Script=Han}/u.test(source) && !/[A-Za-z]/u.test(source)) reason = translate("原文含中文，保留原文");
-    else if (entry === undefined) reason = translate("当前译文包无此文案；来源与发布状态待核验");
+    else if (entry === undefined) reason = translate(crossVersion
+      ? "跨版本匹配未找到可用译文，保留本机原文"
+      : "当前译文包无此文案；来源与发布状态待核验");
     else {
       const failure = pluginCatalogMatchFailure(entry, candidates.get(source), crossVersion);
       reason = translate(failure === null ? "未通过安全匹配，保留原文" : MATCH_FAILURE_LABELS[failure]);

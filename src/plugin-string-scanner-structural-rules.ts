@@ -16,6 +16,7 @@ import {
   stripWrappingParentheses,
   type CandidateAggregate,
 } from "./plugin-string-scanner-evidence";
+import { addIndirectText, hasUnsafeTemplateReference, identifierUses, staticDescriptionBindings } from "./plugin-string-scanner-indirect";
 import { staticSvelteTemplateTextNodes } from "./plugin-svelte-template-text";
 
 const SETTINGS_SCHEMA_MIN_ENTRIES = 3;
@@ -56,7 +57,7 @@ export function collectStructuralRuleMatches(
   const linkedDescriptionHelpers = findLinkedDescriptionHelpers(tokens, matching);
   const groupDescriptions = collectSettingsGroupDescriptors(tokens, matching, target, sourceLocale, linkedDescriptionHelpers);
   finishPhase("settings-groups");
-  collectComposedSettingsDescriptions(tokens, matching, groupDescriptions, target, sourceLocale);
+  collectComposedSettingsDescriptions(tokens, matching, groupDescriptions, linkedDescriptionHelpers, target, sourceLocale);
   finishPhase("settings-composed-docs");
   collectSvelteFormDescriptors(tokens, matching, target, sourceLocale);
   finishPhase("svelte-forms");
@@ -490,8 +491,8 @@ function collectSettingsGroupDescriptors(
   target: Map<string, CandidateAggregate>,
   sourceLocale: string,
   linkedDescriptionHelpers: ReadonlySet<string>,
-): ReadonlySet<string> {
-  const descriptionNames = new Set<string>();
+): ReadonlySet<Token> {
+  const descriptionNames = new Set<Token>();
   for (let index = 0; index < tokens.length; index += 1) {
     if (tokens[index]?.raw !== "{") continue;
     const end = matching[index];
@@ -506,9 +507,11 @@ function collectSettingsGroupDescriptors(
     const descriptorKey = tokens[index + 1] ?? tokens[index] ?? headingValue[0];
     addSettingsSchemaValue(target, headingValue, descriptorKey, sourceLocale);
     for (const item of items) {
-      const descriptionReference = staticObjectProperty(item, "desc");
-      if (descriptionReference?.length === 1 && descriptionReference[0]?.kind === "identifier") {
-        descriptionNames.add(descriptionReference[0].raw);
+      for (const property of ["desc", "description"]) {
+        const descriptionReference = staticObjectProperty(item, property);
+        if (descriptionReference?.length === 1 && descriptionReference[0]?.kind === "identifier") {
+          descriptionNames.add(descriptionReference[0]);
+        }
       }
       for (const property of ["name", "desc", "description"]) {
         const expression = staticObjectStringProperty(item, property);
@@ -549,6 +552,25 @@ function findLinkedDescriptionHelpers(tokens: readonly Token[], matching: Matchi
       .map((part) => part[0]?.kind === "identifier" ? part[0].raw : "");
     declarations.set(name, { params, start: open + 1, end });
   }
+  // A minified helper name is evidence only while it denotes one declaration.
+  // Assignments, parameter shadowing, aliases and out-of-scope calls reject it.
+  const unambiguousHelper = (name: string): boolean => {
+    const uses = identifierUses(tokens, name);
+    const definitions = uses.filter((index) => tokens[index - 1]?.raw === "function");
+    if (definitions.length !== 1 || hasUnsafeTemplateReference(tokens, name)) return false;
+    const definition = definitions[0];
+    let scopeStart = 0;
+    let scopeEnd = tokens.length;
+    for (let cursor = definition - 1; cursor >= 0; cursor -= 1) {
+      if (tokens[cursor]?.raw === "{" && (matching[cursor] ?? -1) > definition) {
+        scopeStart = cursor;
+        scopeEnd = matching[cursor];
+        break;
+      }
+    }
+    return !uses.some((index) => index !== definition && (tokens[index + 1]?.raw !== "("
+      || index < scopeStart || index >= scopeEnd));
+  };
   const linkHelpers = new Set<string>();
   for (const [name, declaration] of declarations) {
     if (duplicates.has(name) || declaration.params.length < 3) continue;
@@ -557,7 +579,8 @@ function findLinkedDescriptionHelpers(tokens: readonly Token[], matching: Matchi
     if (parent !== undefined && url !== undefined && label !== undefined
       && hasTokenSequence(body, ["textContent", "=", label])
       && hasTokenSequence(body, ["href", "=", url])
-      && hasTokenSequence(body, [parent, ".", "append", "("])) linkHelpers.add(name);
+      && hasTokenSequence(body, [parent, ".", "append", "("])
+      && unambiguousHelper(name)) linkHelpers.add(name);
   }
   const wrappers = new Set<string>();
   for (const [name, declaration] of declarations) {
@@ -568,11 +591,17 @@ function findLinkedDescriptionHelpers(tokens: readonly Token[], matching: Matchi
       || !hasTokenSequence(body, ["createFragment", "("])
       || !hasTokenSequence(body, ["document", ".", "createTextNode", "(", lead, ")"])
       || !hasTokenSequence(body, ["return"])) continue;
+    const leadUses = identifierUses(body, lead);
+    if (hasUnsafeTemplateReference(body, lead) || leadUses.some((index) =>
+      body[index - 4]?.raw !== "document" || body[index - 3]?.raw !== "."
+      || body[index - 2]?.raw !== "createTextNode" || body[index - 1]?.raw !== "("
+      || body[index + 1]?.raw !== ")")) continue;
     for (let index = declaration.start; index + 1 < declaration.end; index += 1) {
       if (!linkHelpers.has(tokens[index]?.raw ?? "") || tokens[index + 1]?.raw !== "(") continue;
       const args = readCallArguments(tokens, index + 1, matching)?.arguments;
       if (args?.length === 3 && args[1]?.length === 1 && args[1][0]?.raw === url
-        && args[2]?.length === 1 && args[2][0]?.raw === label) wrappers.add(name);
+        && args[2]?.length === 1 && args[2][0]?.raw === label
+        && unambiguousHelper(name)) wrappers.add(name);
     }
   }
   return wrappers;
@@ -599,24 +628,27 @@ function linkedDescriptionLiterals(
 function collectComposedSettingsDescriptions(
   tokens: readonly Token[],
   matching: MatchingTokenIndexes,
-  descriptionNames: ReadonlySet<string>,
+  descriptorReferences: ReadonlySet<Token>,
+  helpers: ReadonlySet<string>,
   target: Map<string, CandidateAggregate>,
   sourceLocale: string,
 ): void {
-  if (descriptionNames.size === 0) return;
-  const assignments = new Map<string, number>();
-  const constants = new Map<string, string>();
-  for (let index = 1; index + 2 < tokens.length; index += 1) {
-    const name = tokens[index];
-    if (name?.kind !== "identifier" || !descriptionNames.has(name.raw) || tokens[index + 1]?.raw !== "=") continue;
-    assignments.set(name.raw, (assignments.get(name.raw) ?? 0) + 1);
-    if (!["var", "let", "const"].includes(tokens[index - 1]?.raw ?? "") || tokens[index + 2]?.kind !== "literal") continue;
-    const value = decodeJsLiteral(tokens[index + 2].raw);
-    if (value !== null) constants.set(name.raw, value);
+  const references = new Set(descriptorReferences);
+  for (let index = 0; index + 3 < tokens.length; index += 1) {
+    if (tokens[index]?.raw === "setDesc" && tokens[index - 1]?.raw === "." && tokens[index + 1]?.raw === "("
+      && tokens[index + 2]?.kind === "identifier" && tokens[index + 3]?.raw === ")") {
+      references.add(tokens[index + 2]);
+    }
+  }
+  const constants = staticDescriptionBindings(tokens, matching, references);
+  for (const reference of references) {
+    const binding = constants.get(reference.raw);
+    if (binding !== undefined) addIndirectText(target, binding.text, reference, "settingsDescriptionReference", sourceLocale);
   }
   for (let index = 0; index + 1 < tokens.length; index += 1) {
     const call = tokens[index];
-    if (call?.raw !== "descWithDocsLink" || tokens[index + 1]?.raw !== "(") continue;
+    if (call === undefined || !helpers.has(call.raw) || tokens[index - 1]?.raw === "."
+      || tokens[index + 1]?.raw !== "(") continue;
     const args = readCallArguments(tokens, index + 1, matching)?.arguments;
     const expression = args?.[0];
     if (expression === undefined) continue;
@@ -627,8 +659,8 @@ function collectComposedSettingsDescriptions(
     const variants = [expression[question + 1], expression[colon + 1]];
     for (const variant of variants) {
       if (variant?.kind !== "literal" || !variant.raw.startsWith("`")) continue;
-      for (const [name, value] of constants) {
-        if (assignments.get(name) !== 1) continue;
+      for (const [name, binding] of constants) {
+        if (index <= binding.start || index >= binding.end) continue;
         const marker = `\${${name}}`;
         const body = variant.raw.slice(1, -1);
         const at = body.indexOf(marker);
@@ -636,11 +668,7 @@ function collectComposedSettingsDescriptions(
         const prefix = decodeJsLiteral(`\`${body.slice(0, at)}\``);
         const suffix = decodeJsLiteral(`\`${body.slice(at + marker.length)}\``);
         if (prefix === null || suffix === null) continue;
-        const text = prefix + value + suffix;
-        addCandidate(target, text, "ui-property", sourceLocale, {
-          origin: "ui-property", strategy: "structured", symbol: "settingsComposedDocumentation",
-          offset: variant.start, line: variant.line, column: variant.column,
-        }, text, true);
+        addIndirectText(target, prefix + binding.text + suffix, variant, "settingsComposedDocumentation", sourceLocale);
       }
     }
   }

@@ -27,7 +27,7 @@ describe("unmatched interface text", () => {
   });
   it("does not infer a server backlog from an absent cross-version pack entry", () => {
     expect(describeMissingTranslations(catalog, { ...translation, authorityPluginVersion: "2.0" })
-      .find((entry) => entry.source === "Missing text")?.reason).toBe("当前译文包无此文案；来源与发布状态待核验");
+      .find((entry) => entry.source === "Missing text")?.reason).toBe("跨版本匹配未找到可用译文，保留本机原文");
   });
   it("uses the runtime matcher to explain rejected cross-version entries", () => {
     const compatible = {

@@ -1,3 +1,4 @@
+import { createSettingsSections, renderSettingsHelp, type SettingsSection } from "./settings-sections";
 import {
   App,
   type ButtonComponent,
@@ -34,11 +35,13 @@ import {
 } from "./plugin-selection-processing";
 import {
   capturePluginListScrollTop,
+  pluginScrollContainer,
   restorePluginListScrollTop,
 } from "./plugin-picker-scroll";
 import {
   describePluginLocalizationStatus,
   visiblePluginManualRetryKind,
+  type PluginLocalizationStatus,
   type PluginManualRetryKind,
 } from "./plugin-localization-status";
 import {
@@ -61,6 +64,10 @@ import type { PluginFilePatchState } from "./third-party-plugin-patcher";
 const ORIGINAL_PLUGIN_NAME_ATTRIBUTE = "data-trans-hub-official-plugin-name";
 
 export class TransHubSettingTab extends PluginSettingTab {
+  private settingsSection: SettingsSection = "plugins";
+  private readonly sectionScrollPositions = new Map<SettingsSection, number>();
+  private sectionSelect: ((section: SettingsSection) => void) | null = null;
+  private readonly openPluginDetails = new Set<string>();
   private renderVersion = 0;
   private selectionRevision = 0;
   private selectionProcessing: Promise<void> | null = null;
@@ -79,12 +86,20 @@ export class TransHubSettingTab extends PluginSettingTab {
   private managerActionPending = false;
   private localeChangesInFlight = 0;
   private readonly stalePluginIds = new Set<string>();
+  private readonly queuedVersionRefreshes = new Map<string, string>();
+  private versionCheckInFlight = false;
+  private nextVersionCheckAt = 0;
   private renderedContainerEl: HTMLElement | null = null;
   private managerContainerEl: HTMLElement | null = null;
   private managerStatusEl: HTMLElement | null = null;
 
   constructor(app: App, private readonly plugin: TransHubObsidianPlugin) {
     super(app, plugin);
+  }
+
+  selectSection(section: SettingsSection): void {
+    if (this.renderedContainerEl?.isConnected && this.sectionSelect !== null) this.sectionSelect(section);
+    else this.settingsSection = section;
   }
 
   reportCommandStatus(message: string, failed: boolean): void {
@@ -128,11 +143,27 @@ export class TransHubSettingTab extends PluginSettingTab {
 
   mountPluginManager(containerEl: HTMLElement): void {
     this.managerContainerEl = containerEl;
+    this.nextVersionCheckAt = 0;
     this.refreshPluginManager();
   }
 
-  unmountPluginManager(containerEl: HTMLElement): void {
-    if (this.managerContainerEl === containerEl) this.managerContainerEl = null;
+  async checkVisiblePluginVersions(): Promise<void> {
+    if (this.managerContainerEl?.isConnected !== true || !this.plugin.settings.pluginTranslationEnabled
+      || this.versionCheckInFlight || Date.now() < this.nextVersionCheckAt) return;
+    this.nextVersionCheckAt = Date.now() + 10_000;
+    this.versionCheckInFlight = true;
+    try {
+      const installed = await discoverInstalledPlugins(this.app, this.plugin.manifest.id);
+      const catalogs = this.plugin.getPluginState().pluginCatalogs;
+      if (installed.some((item) => item.enabled && catalogs[item.id] !== undefined
+        && catalogs[item.id].pluginVersion !== item.version
+        && !this.plugin.settings.excludedPluginIds.includes(item.id)
+        && this.queuedVersionRefreshes.get(item.id) !== item.version)) this.refreshPluginManager();
+    } catch (error) {
+      console.warn("[Trans-Hub] failed to check installed plugin versions", error);
+    } finally {
+      this.versionCheckInFlight = false;
+    }
   }
 
   refreshPluginManager(): void {
@@ -206,35 +237,33 @@ export class TransHubSettingTab extends PluginSettingTab {
     const header = containerEl.createEl("header", { cls: "trans-hub-settings__header" });
     const title = header.createDiv({ text: localizedClientName(), cls: "trans-hub-settings__title" });
     title.setAttrs({ role: "heading", "aria-level": "2" });
-    header.createEl("p", {
-      text: translate("为已启用的社区插件显示译文。默认不修改插件文件，始终不修改笔记正文。"),
-      cls: "trans-hub-settings__summary",
+    header.createEl("p", { text: translate("选择插件，自动获取可用译文。"), cls: "trans-hub-settings__summary" });
+    header.createSpan({ text: this.plugin.hasUserSession() ? translate("已连接") : translate("需要连接"), cls: "trans-hub-settings__connection-badge" });
+    const panels = createSettingsSections(containerEl, this.settingsSection, (section) => {
+      this.settingsSection = section;
+      if (section === "compatibility") void this.renderCompatibilityInventory(inventory);
+      const scrollTop = this.sectionScrollPositions.get(section) ?? 0;
+      if (section === "plugins") {
+        this.pluginListScrollTop = scrollTop;
+        if (this.managerContainerEl !== panels.plugins) this.mountPluginManager(panels.plugins);
+        else restorePluginListScrollTop(panels.plugins, scrollTop);
+      } else pluginScrollContainer(containerEl).scrollTop = scrollTop;
+    }, () => {
+      const scrollTop = pluginScrollContainer(containerEl).scrollTop;
+      this.sectionScrollPositions.set(this.settingsSection, scrollTop);
+      if (this.settingsSection === "plugins") this.pluginListScrollTop = scrollTop;
     });
-    const facts = header.createDiv({ cls: "trans-hub-settings__facts" });
-    facts.createSpan({ text: translate("插件自带译文优先") });
-    facts.createSpan({ text: translate("仅处理已选插件") });
-    facts.createSpan({ text: translate("译文按版本匹配") });
-    const scope = header.createEl("details", { cls: "trans-hub-settings__scope" });
-    scope.createEl("summary", {
-      text: translate("仅支持官方社区插件"),
-      cls: "trans-hub-settings__scope-label",
-    });
-    scope.createEl("p", {
-      text: translate("仅处理官方社区目录中来源可验证的插件；未收录或来源暂时无法确认时，会保留原文并显示原因。"),
-      cls: "trans-hub-settings__scope-description",
-    });
-    header.createEl("p", {
-      text: translate("当前多数译文由机器翻译生成，未经人工校对；插件管理器会标明译文来源。"),
-      cls: "trans-hub-settings__notice",
-    });
-    this.renderConnection(containerEl);
-    const preferencesHeading = new Setting(containerEl).setName(translate("本地化设置")).setHeading();
+    this.sectionSelect = panels.select;
+    const basic = panels.basic;
+    if (!this.plugin.hasUserSession()) this.renderConnection(basic);
+    else this.renderConnection(panels.help);
+    const preferencesHeading = new Setting(basic).setName(translate("本地化设置")).setHeading();
     preferencesHeading.settingEl.addClass("trans-hub-settings__section-heading");
-    const preferences = containerEl.createDiv({ cls: "trans-hub-settings__group" });
+    const preferences = basic.createDiv({ cls: "trans-hub-settings__group" });
     addToggleSetting(
       preferences,
       translate("启用插件本地化"),
-      translate("关闭后立即恢复被运行时替换的原文；重新开启后继续应用所选插件的已发布译文。"),
+      translate("关闭后恢复普通方式替换的原文，并尝试恢复兼容补丁；文件恢复后需重新加载目标插件，冲突会单独提示。"),
       this.plugin.settings.pluginTranslationEnabled,
       async (value) => {
         this.plugin.settings.pluginTranslationEnabled = value;
@@ -315,33 +344,11 @@ export class TransHubSettingTab extends PluginSettingTab {
     }
     localeSetting.settingEl.toggleClass("is-disabled", !this.plugin.settings.pluginTranslationEnabled);
 
-    const pluginHeading = new Setting(containerEl).setName(translate("插件管理")).setHeading();
-    pluginHeading.settingEl.addClass("trans-hub-settings__section-heading");
-    new Setting(containerEl)
-      .setName(translate("管理已安装插件"))
-      .setDesc(translate("勾选后自动获取译文，首次收录需要一些时间。"))
-      .addButton((button) => button
-        .setButtonText(translate("打开插件管理器"))
-        .setCta()
-        .onClick(async () => {
-          button.setDisabled(true);
-          try {
-            // Obsidian's settings host can stay above workspace popouts.
-            // Close it before revealing the manager, including an existing one.
-            const host = this.app as typeof this.app & { setting?: { close?: () => void } };
-            host.setting?.close?.();
-            await this.plugin.openPluginManager();
-          } catch (error) {
-            new Notice(errorMessage(error), 10_000);
-          } finally { button.setDisabled(false); }
-        }));
-
+    basic.createEl("p", { text: translate("默认不修改插件文件，始终不修改笔记正文。"), cls: "trans-hub-settings__notice" });
     this.renderFileRecovery(containerEl);
-    const advancedDetails = containerEl.createEl("details", { cls: "trans-hub-settings__advanced" });
-    advancedDetails.createEl("summary", { text: translate("高级选项") });
-    const advanced = advancedDetails.createDiv({ cls: "trans-hub-settings__group" });
+    const advanced = panels.compatibility;
     addToggleSetting(
-      advanced,
+      preferences,
       translate("翻译插件名称和说明"),
       translate("默认开启。开启时显示译名和译文说明；关闭时显示官方名称和原始说明。尚无名称译文的插件会保留官方名称。"),
       this.plugin.settings.pluginMetadataTranslationEnabled,
@@ -355,35 +362,22 @@ export class TransHubSettingTab extends PluginSettingTab {
       },
     );
 
+    const introduction = advanced.createDiv({ cls: "trans-hub-settings__compatibility-intro" });
+    new Setting(introduction).setName(translate("兼容处理，按插件使用")).setHeading().settingEl.addClass("trans-hub-settings__section-title");
+    introduction.createEl("p", { text: translate("适用插件的译文详情会显示“兼容模式”开关和检查结果。可用时开启以备份并应用，关闭以恢复；不可用时直接说明原因。") });
+    const patchCard = advanced.createDiv({ cls: "trans-hub-settings__surface" });
+    new Setting(patchCard).setName(translate("已应用的兼容补丁")).setHeading().settingEl.addClass("trans-hub-settings__section-title");
+    const inventory = patchCard.createDiv({ cls: "trans-hub-settings__patch-inventory" });
     if (Platform.isDesktopApp) {
-      addToggleSetting(
-        advanced,
-        translate("高级兼容模式（会修改插件文件）"),
-        translate("仅在普通本地化无法覆盖时使用。允许为单个插件写入匹配的静态译文，并先备份；应用或恢复后需重新加载该插件。"),
-        this.plugin.settings.thirdPartyFilePatchingEnabled,
-        async (value) => {
-          this.plugin.settings.thirdPartyFilePatchingEnabled = value;
-          await this.plugin.savePluginData();
-          if (!value) {
-            const result = await this.plugin.restoreThirdPartyPluginFiles();
-            this.selectionStatus = describeFileRestore(result);
-            this.selectionStatusFailed = result.conflicts > 0;
-          } else {
-            this.selectionStatus = translate("已允许兼容补丁，请在插件管理器中为单个插件应用。");
-            this.selectionStatusFailed = false;
-          }
-          this.selectionStatusAt = new Date();
-          this.refreshSettings();
-        },
-      );
-
-      new Setting(advanced)
+      const recovery = advanced.createDiv({ cls: "trans-hub-settings__surface" });
+      new Setting(recovery)
         .setName(translate("恢复所有兼容补丁"))
         .setDesc(translate("也会检查未启用的插件；遇到外部改动时保留文件并列出需处理项。"))
         .addButton((button) => button.setButtonText(translate("恢复原始文件")).onClick(async () => {
           button.setDisabled(true);
           try {
             const result = await this.plugin.restoreThirdPartyPluginFiles();
+            new Notice(describeFileRestore(result), result.conflicts > 0 ? 10_000 : 5_000);
             this.reportCommandStatus(describeFileRestore(result), result.conflicts > 0);
           } catch (error) { this.reportCommandStatus(errorMessage(error), true); }
           finally { button.setDisabled(false); }
@@ -395,11 +389,41 @@ export class TransHubSettingTab extends PluginSettingTab {
       });
     }
     advanced.createEl("p", {
-      text: translate("仅支持官方社区目录中来源可验证的插件。离线时可继续使用已缓存的译文。"),
-      cls: "setting-item-description",
+      text: translate("应用或恢复后需重新加载目标插件。若文件已被外部修改，会保留当前文件并提示冲突。"),
+      cls: "trans-hub-settings__notice",
     });
-    this.renderBrand(containerEl);
+    if (this.settingsSection === "compatibility") void this.renderCompatibilityInventory(inventory);
+    renderSettingsHelp(panels.help);
+    this.renderBrand(panels.help);
+    if (this.settingsSection === "plugins") this.mountPluginManager(panels.plugins);
     void this.refreshObsidianPluginNavigationNames();
+  }
+
+  private async renderCompatibilityInventory(container: HTMLElement): Promise<void> {
+    container.empty();
+    if (!Platform.isDesktopApp) return;
+    const loading = container.createEl("p", { text: translate("正在检查已应用的兼容补丁…") });
+    try {
+      const plugins = await discoverInstalledPlugins(this.app, this.plugin.manifest.id);
+      const states = await this.plugin.pluginFilePatchStates(plugins.map((plugin) => plugin.id));
+      if (!container.isConnected || this.settingsSection !== "compatibility") return;
+      container.empty();
+      let count = 0;
+      for (const plugin of plugins) {
+        const state = states.get(plugin.id);
+        if (state !== "active" && state !== "conflict") continue;
+        count += 1;
+        const row = new Setting(container).setName(plugin.name).setDesc(state === "conflict"
+          ? translate("兼容补丁存在文件冲突，请检查恢复。")
+          : translate("兼容补丁已写入；若尚未重新加载，请先重新加载目标插件并检查界面。"));
+        renderPluginPatchControls(row, { app: this.app, pluginName: plugin.name, state, canApply: false,
+          apply: () => this.plugin.applyThirdPartyPluginFileTranslations([plugin.id]),
+          restore: (force) => this.plugin.restoreThirdPartyPluginFiles([plugin.id], force),
+          onComplete: (message, failed) => this.reportCommandStatus(message, failed),
+        });
+      }
+      if (count === 0) container.createEl("p", { text: translate("没有已应用的兼容补丁。"), cls: "setting-item-description" });
+    } catch (error) { loading.setText(errorMessage(error)); }
   }
 
   private async refreshObsidianPluginNavigationNames(): Promise<void> {
@@ -443,16 +467,13 @@ export class TransHubSettingTab extends PluginSettingTab {
         ? translate("语枢已连接")
         : reconnectRequired ? translate("需要重新连接语枢") : translate("连接语枢"))
       .setDesc(connected
-        ? translate("重启后自动连接；离线时使用已缓存译文。断开连接会清除本机同步记录，之后需要重新连接并同步。")
+        ? translate("重启后自动连接，离线时继续使用缓存译文。断开后须重新连接并同步。")
         : reconnectRequired
-          ? translate("此设备的授权已过期或被撤销。重新连接后会继续同步；已缓存译文仍可离线使用。")
-          : translate("将在系统默认浏览器中登录并授权此设备；Obsidian 内置浏览器无法完成回调。新用户可加入社群交流，通过微信人工领取或邮件申请邀请码；插件不会接触或保存账号密码。"));
+          ? translate("授权已过期或被撤销。重新连接后继续同步，离线时仍可使用缓存译文。")
+          : translate("在系统默认浏览器中登录并授权此设备。插件不会接触或保存账号密码。"));
     connection.settingEl.addClass("trans-hub-settings__card", "trans-hub-settings__connection");
-    if (this.selectionStatusAt !== null) {
-      const feedback = connection.settingEl.createDiv({
-        text: this.describeLastAction(),
-        cls: "trans-hub-settings__feedback",
-      });
+    if (!connected && this.selectionStatusAt !== null) {
+      const feedback = connection.settingEl.createDiv({ text: this.describeLastAction(), cls: "trans-hub-settings__feedback" });
       feedback.setAttrs({ role: "status", "aria-live": "polite" });
       feedback.toggleClass("mod-warning", this.selectionStatusFailed);
     }
@@ -491,20 +512,8 @@ export class TransHubSettingTab extends PluginSettingTab {
       }))
       .addButton((button) => {
         button
-          .setButtonText(translate("获取邀请码"))
-          .setTooltip(translate("查看社群与邮件领码方式"))
-          .onClick(async () => {
-            try {
-              await this.plugin.openInvitationGuide();
-            } catch (error) {
-              new Notice(errorMessage(error), 10_000);
-            }
-          });
-      })
-      .addButton((button) => {
-        button
           .setButtonText(translate("注册"))
-          .setTooltip(translate("打开邀请制注册页面"))
+          .setTooltip(translate("在语枢网站注册账号"))
           .onClick(async () => {
             try {
               await this.plugin.openRegistration();
@@ -636,57 +645,39 @@ export class TransHubSettingTab extends PluginSettingTab {
     let resyncButton: ButtonComponent;
     let batchRetryButton: ButtonComponent;
 
-    // Obsidian 1.13 compresses ItemView header descendants into an empty
-    // visual strip. Keep the manager's live summary in a normal content row
-    // so the check/processing status remains visible in both tabs and popouts.
-    const context = new Setting(container)
-      .setName(translate("{language} · {connection}", {
-        language: TARGET_LOCALE_OPTIONS.find((option) => option.value === this.plugin.settings.targetLocale)?.label ?? this.plugin.settings.targetLocale,
-        connection: this.plugin.hasUserSession() ? translate("已连接") : translate("需要连接"),
-      }))
-      .setDesc(this.plugin.settings.pluginTranslationEnabled
-        ? this.stalePluginIds.size > 0
-          ? translate("暂时无法更新进度，当前显示上次结果。请稍后检查进度。")
-          : translate("自动检查插件变化并同步译文，也可点击“同步译文”立即更新。")
-        : translate("本地化已暂停。请在设置中开启后继续。"));
-    context.settingEl.addClass("trans-hub-plugin-picker__context");
-    if (!this.plugin.hasUserSession()) context.addButton((button) => button
-      .setButtonText(translate("连接语枢")).setCta().onClick(async () => {
-        if (this.connectionPending) return;
-        this.connectionPending = true;
-        button.setDisabled(true);
-        try {
-          await this.plugin.connect();
-          this.reportCommandStatus(translate("请在浏览器中完成登录和设备授权。"), false);
-        } catch (error) { this.reportCommandStatus(errorMessage(error), true); }
-        finally { this.connectionPending = false; button.setDisabled(false); }
-      }));
-    if (plugins.some((plugin) => plugin.source.kind === "pending")) context.addButton((button) => button
-      .setButtonText(translate("重新读取来源")).onClick(() => this.refreshPluginManager()));
+    if (!this.plugin.hasUserSession() || !this.plugin.settings.pluginTranslationEnabled
+      || this.stalePluginIds.size > 0 || plugins.some((plugin) => plugin.source.kind === "pending")) {
+      const context = new Setting(container)
+        .setName(translate("{language} · {connection}", {
+          language: TARGET_LOCALE_OPTIONS.find((option) => option.value === this.plugin.settings.targetLocale)?.label ?? this.plugin.settings.targetLocale,
+          connection: this.plugin.hasUserSession() ? translate("已连接") : translate("需要连接"),
+        }))
+        .setDesc(this.plugin.settings.pluginTranslationEnabled
+          ? this.stalePluginIds.size > 0
+            ? translate("暂时无法更新进度，当前显示上次结果。请稍后检查进度。")
+            : translate("自动检查插件变化并同步译文，也可点击“同步译文”立即更新。")
+          : translate("本地化已暂停。请在设置中开启后继续。"));
+      context.settingEl.addClass("trans-hub-plugin-picker__context");
+      if (!this.plugin.hasUserSession()) context.addButton((button) => button
+        .setButtonText(translate("连接语枢")).setCta().onClick(async () => {
+          if (this.connectionPending) return;
+          this.connectionPending = true;
+          button.setDisabled(true);
+          try {
+            await this.plugin.connect();
+            this.reportCommandStatus(translate("请在浏览器中完成登录和设备授权。"), false);
+          } catch (error) { this.reportCommandStatus(errorMessage(error), true); }
+          finally { this.connectionPending = false; button.setDisabled(false); }
+        }));
+      if (plugins.some((plugin) => plugin.source.kind === "pending")) context.addButton((button) => button
+        .setButtonText(translate("重新读取来源")).onClick(() => this.refreshPluginManager()));
+    }
     this.renderFileRecovery(container);
     const overview = container.createDiv({ cls: "trans-hub-plugin-picker__overview" });
     const summary = overview.createDiv({ cls: "trans-hub-plugin-picker__summary" });
+    summary.createSpan({ text: TARGET_LOCALE_OPTIONS.find((option) => option.value === this.plugin.settings.targetLocale)?.label ?? this.plugin.settings.targetLocale, cls: "trans-hub-plugin-picker__language" });
     const summaryText = summary.createSpan();
     const summaryTotal = summary.createSpan({ cls: "trans-hub-plugin-picker__total" });
-    const status = overview.createDiv({
-      text: this.describeLastAction(),
-      cls: [
-        "trans-hub-plugin-picker__status",
-        ...(this.selectionStatusFailed ? ["mod-warning"] : []),
-      ],
-    });
-    this.managerStatusEl = status;
-    status.setAttr("role", "status");
-    status.setAttr("aria-live", "polite");
-    const lastSuccessfulCheck = this.plugin.getPluginState().lastSuccessfulPluginCheckAt?.[this.plugin.settings.targetLocale];
-    const lastSuccessfulEpoch = lastSuccessfulCheck === undefined ? NaN : Date.parse(lastSuccessfulCheck);
-    overview.createDiv({
-      text: !Number.isFinite(lastSuccessfulEpoch)
-        ? translate("尚无成功的整轮检查记录")
-        : translate("最近成功检查：{time}", { time: new Date(lastSuccessfulEpoch).toLocaleString() }),
-      cls: "trans-hub-plugin-picker__metadata",
-    });
-
     const controls = container.createDiv({ cls: "trans-hub-plugin-picker__controls" });
     const searchSetting = new Setting(controls)
       .addText((text) => {
@@ -729,18 +720,42 @@ export class TransHubSettingTab extends PluginSettingTab {
             await this.retryRecoverablePlugins(list, this.selectedRecoverablePluginIds(plugins));
           });
       })
-      .addButton((button) => {
-        selectAllButton = button.setButtonText(translate("全部开启")).onClick(async () => {
+      ;
+    const utilities = container.createDiv({ cls: "trans-hub-plugin-picker__utilities" });
+    const activity = utilities.createDiv({ cls: "trans-hub-plugin-picker__activity" });
+    const status = activity.createDiv({
+      text: this.describeLastAction(),
+      cls: [
+        "trans-hub-plugin-picker__status",
+        ...(this.selectionStatusFailed ? ["mod-warning"] : []),
+      ],
+    });
+    this.managerStatusEl = status;
+    status.setAttr("role", "status");
+    status.setAttr("aria-live", "polite");
+    const lastSuccessfulCheck = this.plugin.getPluginState().lastSuccessfulPluginCheckAt?.[this.plugin.settings.targetLocale];
+    const lastSuccessfulEpoch = lastSuccessfulCheck === undefined ? NaN : Date.parse(lastSuccessfulCheck);
+    activity.createDiv({
+      text: !Number.isFinite(lastSuccessfulEpoch)
+        ? translate("尚无成功的整轮检查记录")
+        : translate("最近成功检查：{time}", { time: new Date(lastSuccessfulEpoch).toLocaleString() }),
+      cls: "trans-hub-plugin-picker__metadata",
+    });
+
+    const bulk = utilities.createDiv({ cls: "trans-hub-plugin-picker__bulk" });
+    new Setting(bulk).addButton((button) => {
+        selectAllButton = button.setButtonText(translate("全部开启")).setTooltip(translate("作用于全部可本地化插件，不受搜索和筛选限制。")).onClick(async () => {
           await persistSelection(setAllPluginsSelected(this.plugin.settings.excludedPluginIds, eligiblePluginIds, true));
           renderRows();
         });
       })
       .addButton((button) => {
-        clearButton = button.setButtonText(translate("全部关闭")).onClick(async () => {
+        clearButton = button.setButtonText(translate("全部关闭")).setTooltip(translate("作用于全部可本地化插件，不受搜索和筛选限制。")).onClick(async () => {
           await persistSelection(setAllPluginsSelected(this.plugin.settings.excludedPluginIds, eligiblePluginIds, false));
           renderRows();
         });
       });
+    bulk.createEl("p", { text: translate("应用于全部可本地化插件"), cls: "setting-item-description" });
     actionsSetting.settingEl.addClass("trans-hub-plugin-picker__actions");
 
     const list = container.createDiv({ cls: "trans-hub-plugin-picker__list" });
@@ -787,12 +802,18 @@ export class TransHubSettingTab extends PluginSettingTab {
       const excluded = new Set(this.plugin.settings.excludedPluginIds);
       const rows = plugins.map((plugin) => {
         const translation = getPluginTranslation(pluginState, plugin.id, this.plugin.settings.targetLocale);
-        const localizationStatus = describePluginLocalizationStatus({
+        const catalog = pluginState.pluginCatalogs[plugin.id];
+        const versionChanged = catalog !== undefined && catalog.pluginVersion !== plugin.version;
+        const localizationStatus: PluginLocalizationStatus = versionChanged
+          ? this.stalePluginIds.has(plugin.id)
+            ? { kind: "failed" as const, label: translate("插件更新后检查失败；点击“同步译文”重试。") }
+            : { kind: "waiting" as const, label: translate("检测到插件版本变化，正在重新检查译文…") }
+          : describePluginLocalizationStatus({
           submission: getPluginSubmissionForLocale(pluginState, plugin.id, this.plugin.settings.targetLocale),
           publicDiscovery: pluginState.publicPluginDiscoveries[plugin.id],
-          translation, catalog: pluginState.pluginCatalogs[plugin.id],
+          translation, catalog,
           targetLocale: this.plugin.settings.targetLocale, hasSession, requiresReconnect,
-        });
+          });
         const displayName = this.plugin.settings.pluginTranslationEnabled
           && this.plugin.settings.pluginMetadataTranslationEnabled
           ? localizedPluginDisplayName(plugin.name, pluginState.pluginCatalogs[plugin.id], translation, this.plugin.settings.targetLocale)
@@ -812,7 +833,7 @@ export class TransHubSettingTab extends PluginSettingTab {
         if (["attention", "login-required", "source-pending"].includes(row.presentation.kind)) counts.attention += 1;
         return counts;
       }, { complete: 0, partial: 0, processing: 0, attention: 0, restricted: 0 });
-      summaryTotal.setText(translate("完整 {complete} · 部分 {partial} · 准备中 {processing} · 需处理 {attention} · 服务端受限 {restricted}", currentCounts));
+      summaryTotal.setText(translate("目录已匹配 {complete} · 部分可用 {partial} · 准备中 {processing} · 需处理 {attention} · 服务受限 {restricted}", currentCounts));
       const visiblePlugins = filterSelectablePlugins(rows, query)
         .filter((plugin) => statusFilter === "all" || plugin.presentation.kind === statusFilter);
       if (visiblePlugins.length === 0) {
@@ -848,15 +869,15 @@ export class TransHubSettingTab extends PluginSettingTab {
           .setName(displayName)
           .setDesc("");
         const descriptionEl = row.descEl;
-        if (displayDescription !== "") {
-          descriptionEl.createDiv({ text: displayDescription, cls: "trans-hub-plugin-picker__description" });
-        }
-        descriptionEl.createDiv({
-          text: `${plugin.id} · v${plugin.version}`,
-          cls: "trans-hub-plugin-picker__metadata",
-        });
+        descriptionEl.createDiv({ text: `${displayName !== plugin.name ? plugin.name + " · " : ""}v${plugin.version}`, cls: "trans-hub-plugin-picker__metadata" });
         descriptionEl.createDiv({ text: statusLabel, cls: "trans-hub-plugin-picker__provenance" });
-        if (localizationStatus.kind === "blocked" && localizationStatus.coverage !== undefined) {
+        const visiblePatchState = this.patchStateByPluginId.get(plugin.id);
+        if (visiblePatchState === "active" || visiblePatchState === "conflict") descriptionEl.createDiv({
+          text: visiblePatchState === "conflict" ? translate("兼容补丁存在文件冲突，请检查恢复。")
+            : translate("兼容补丁已写入；若尚未重新加载，请先重新加载目标插件并检查界面。"),
+          cls: "mod-warning",
+        });
+        if ((localizationStatus.kind === "blocked" || localizationStatus.kind === "failed") && localizationStatus.coverage === undefined) {
           descriptionEl.createDiv({ text: localizationStatus.label, cls: "mod-warning" });
         }
         if (statusStale) descriptionEl.createDiv({ text: translate("进度可能已过期，请检查进度。"), cls: "mod-warning" });
@@ -866,7 +887,6 @@ export class TransHubSettingTab extends PluginSettingTab {
             cls: "trans-hub-plugin-picker__description",
           });
         }
-        if (displayName !== plugin.name) descriptionEl.createDiv({ text: plugin.name, cls: "trans-hub-plugin-picker__metadata" });
         if (localizationStatus.coverage !== undefined) descriptionEl.createDiv({
           text: localizationStatus.coverage.headline, cls: "trans-hub-plugin-picker__catalog-applied",
         });
@@ -880,15 +900,16 @@ export class TransHubSettingTab extends PluginSettingTab {
           && plugin.translation !== undefined
           ? describeMissingTranslations(catalog, plugin.translation)
           : [];
-        const shouldRenderDetails = renderCoverageDetails
-          || localizationStatus.catalogMismatch !== undefined
-          || detailStatus !== statusLabel
-          || showInitialPreparationNote
-          || plugin.translation !== undefined
-          || missing.length > 0;
-        if (shouldRenderDetails) {
+        {
           const details = descriptionEl.createEl("details", { cls: "trans-hub-plugin-picker__details" });
-          details.createEl("summary", { text: translate("进度与版本详情") });
+          details.open = this.openPluginDetails.has(plugin.id);
+          details.addEventListener("toggle", () => {
+            if (details.open) this.openPluginDetails.add(plugin.id);
+            else this.openPluginDetails.delete(plugin.id);
+          });
+          details.createEl("summary", { text: translate("译文详情") });
+          if (displayDescription !== "") details.createEl("p", { text: displayDescription });
+          details.createDiv({ text: plugin.id, cls: "trans-hub-plugin-picker__metadata" });
           if (!renderCoverageDetails && detailStatus !== statusLabel) {
             details.createDiv({ text: detailStatus });
           }
@@ -957,6 +978,32 @@ export class TransHubSettingTab extends PluginSettingTab {
             }
             if (missing.length > 20) missingDetails.createDiv({ text: translate("仅展示前 20 条未匹配文案。") });
           }
+          if (Platform.isDesktopApp) {
+            const patchState = this.patchStateByPluginId.get(plugin.id) ?? "none";
+            const hasPatch = patchState === "active" || patchState === "conflict";
+            const hasStaticCustomUi = catalog?.strings.some((item) => item.evidence?.some((evidence) =>
+              evidence.symbol === "createElement" && evidence.literalStart !== undefined && evidence.literalEnd !== undefined)) === true;
+            const canInspect = selected && this.plugin.settings.pluginTranslationEnabled && plugin.translation !== undefined && sourceStatus === null
+              && (localizationStatus.coverage?.complete === false || hasStaticCustomUi);
+            if (hasPatch || canInspect) {
+              const compatibility = details.createDiv();
+              let initialized = false;
+              const initialize = (): void => {
+                if (!details.open || initialized) return;
+                initialized = true;
+                compatibility.empty();
+                renderPluginPatchControls(new Setting(compatibility), {
+                  app: this.app, pluginName: displayName, state: patchState, canApply: selected,
+                  check: () => this.plugin.checkThirdPartyPluginFilePatch(plugin.id),
+                  apply: (approval) => this.plugin.applyThirdPartyPluginFileTranslations([plugin.id], approval),
+                  restore: (force) => this.plugin.restoreThirdPartyPluginFiles([plugin.id], force),
+                  onComplete: (message, failed) => this.reportCommandStatus(message, failed),
+                });
+              };
+              details.addEventListener("toggle", () => { if (details.open) initialize(); else initialized = false; });
+              initialize();
+            }
+          }
         }
         row.settingEl.addClass(`trans-hub-plugin-picker__item--${presentation.kind}`);
         if (!selectable || !selected || !this.plugin.settings.pluginTranslationEnabled) row.settingEl.addClass("is-disabled");
@@ -985,21 +1032,6 @@ export class TransHubSettingTab extends PluginSettingTab {
             });
           });
         }
-        const hasReactStaticSettingsText = pluginState.pluginCatalogs[plugin.id]?.strings.some((item) =>
-          item.evidence?.some((evidence) => evidence.symbol === "createElement"
-            && evidence.literalStart !== undefined && evidence.literalEnd !== undefined
-            && (evidence.strategy === "structured" || evidence.strategy === "regex-fallback"))) === true;
-        if (Platform.isDesktopApp) {
-          renderPluginPatchControls(row, {
-            app: this.app, pluginName: displayName,
-            state: this.patchStateByPluginId.get(plugin.id) ?? "none",
-            canApply: this.plugin.settings.pluginTranslationEnabled && this.plugin.settings.thirdPartyFilePatchingEnabled
-              && selected && sourceStatus === null && hasReactStaticSettingsText,
-            apply: () => this.plugin.applyThirdPartyPluginFileTranslations([plugin.id]),
-            restore: (force) => this.plugin.restoreThirdPartyPluginFiles([plugin.id], force),
-            onComplete: (message, failed) => this.reportCommandStatus(message, failed),
-          });
-        }
         // The enable toggle is appended last so it is the rightmost control
         // in every layout (desktop and mobile), keeping row switches aligned
         // with the settings-page toggles on the right edge.
@@ -1025,6 +1057,25 @@ export class TransHubSettingTab extends PluginSettingTab {
     updateSummary();
     renderRows();
     restorePluginListScrollTop(list, this.pluginListScrollTop);
+    const currentCatalogs = this.plugin.getPluginState().pluginCatalogs;
+    const excludedIds = new Set(this.plugin.settings.excludedPluginIds);
+    const changed = plugins.filter((plugin) => plugin.enabled
+      && isPluginSourceSelectable(plugin.source)
+      && !excludedIds.has(plugin.id)
+      && currentCatalogs[plugin.id] !== undefined
+      && currentCatalogs[plugin.id].pluginVersion !== plugin.version
+      && this.queuedVersionRefreshes.get(plugin.id) !== plugin.version);
+    for (const plugin of changed) this.queuedVersionRefreshes.set(plugin.id, plugin.version);
+    if (changed.length > 0) {
+      void this.plugin.processPluginIds(changed.map((plugin) => plugin.id)).then((result) => {
+        if (result.kind === "synchronized") this.updateStalePluginStatus(result.sync.statusRead, result.sync.statusReadPluginIds ?? []);
+        this.refreshPluginManager();
+      }).catch((error: unknown) => {
+        for (const plugin of changed) this.stalePluginIds.add(plugin.id);
+        console.warn("[Trans-Hub] plugin update refresh failed", error);
+        this.refreshPluginManager();
+      });
+    }
   }
 
   private async retrySinglePlugin(
@@ -1138,7 +1189,7 @@ export class TransHubSettingTab extends PluginSettingTab {
   }
 
   private async refreshPluginPatchStates(pluginIds: readonly string[]): Promise<void> {
-    if (!Platform.isDesktopApp || !this.plugin.settings.thirdPartyFilePatchingEnabled || pluginIds.length === 0) return;
+    if (!Platform.isDesktopApp || pluginIds.length === 0) return;
     try {
       const states = await this.plugin.pluginFilePatchStates(pluginIds);
       const unchanged = states.size === this.patchStateByPluginId.size
@@ -1196,9 +1247,9 @@ export class TransHubSettingTab extends PluginSettingTab {
   }
 
   private refreshSettings(scrollSource?: HTMLElement): void {
-    if (scrollSource?.isConnected) {
-      this.pluginListScrollTop = scrollSource.scrollTop;
-    } else {
+    if (scrollSource?.isConnected && this.settingsSection === "plugins") {
+      this.pluginListScrollTop = pluginScrollContainer(scrollSource).scrollTop;
+    } else if (this.settingsSection === "plugins") {
       this.pluginListScrollTop = capturePluginListScrollTop(
         this.renderedContainerEl ?? this.containerEl,
         this.pluginListScrollTop,

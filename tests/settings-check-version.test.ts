@@ -7,6 +7,15 @@ import { EMPTY_PLUGIN_STATE } from "../src/plugin-state";
 import { App, TestElement } from "./settings-host-mock";
 
 describe("manager check and active version facts", () => {
+  it("reads patch receipts even when the legacy global switch is off", async () => {
+    const read = vi.fn(() => Promise.resolve(new Map([["demo", "active"]])));
+    const tab = new TransHubSettingTab(new App() as never, { settings: { thirdPartyFilePatchingEnabled: false }, pluginFilePatchStates: read } as never);
+    const internal = tab as unknown as { refreshPluginPatchStates: (ids: string[]) => Promise<void>; refreshSettings: () => void; patchStateByPluginId: Map<string, string> };
+    internal.refreshSettings = vi.fn();
+    await internal.refreshPluginPatchStates(["demo"]);
+    expect(read).toHaveBeenCalledWith(["demo"]);
+    expect(internal.patchStateByPluginId.get("demo")).toBe("active");
+  });
   it("shows the saved successful-check time separately from an active pack generation", () => {
     const state = {
       ...EMPTY_PLUGIN_STATE,
@@ -30,6 +39,7 @@ describe("manager check and active version facts", () => {
       settings: { targetLocale: "zh-CN", pluginTranslationEnabled: true,
         pluginMetadataTranslationEnabled: false, thirdPartyFilePatchingEnabled: false,
         excludedPluginIds: [] },
+      pluginFilePatchStates: () => Promise.resolve(new Map()),
       getPluginState: () => state,
       getFileRestoreResult: () => undefined,
       hasUserSession: () => true,
