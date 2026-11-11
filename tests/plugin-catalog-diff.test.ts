@@ -59,7 +59,7 @@ describe("plugin catalog version carry-over", () => {
       { key: "ui", source: "Settings", origins: ["ui-call" as const, "readme" as const, "manifest.name" as const], placeholderSignature: "" },
       { key: "doc", source: "Read our documentation.", origins: ["readme" as const], placeholderSignature: "" },
     ] };
-    const translation = { ...previous, pluginVersion: uiCatalog.pluginVersion, entries: [{ pluginId: "sample", source: "Settings", target: "设置" }] };
+    const translation = { ...previous, pluginVersion: uiCatalog.pluginVersion, entries: [{ pluginId: "sample", source: "Settings", target: "设置", provenanceKind: "th-reviewed-fill" as const }] };
     const coverage = calculatePluginTranslationCoverage(uiCatalog, translation, "zh-CN");
     expect(coverage).toMatchObject({ totalCount: 1, translatedCount: 1, missingCount: 0, percent: 100 });
     expect(coverage?.scopes.map((item) => item.scope)).toEqual(["runtime-ui", "metadata"]);
@@ -359,7 +359,7 @@ describe("plugin catalog version carry-over", () => {
         scopes: [{ scope: "metadata", unitCount: 2, digest: "metadata" }],
       },
       entries: [
-        { pluginId: "sample", source: "Sample", target: "示例" },
+        { pluginId: "sample", source: "Sample", target: "示例", provenanceKind: "th-reviewed-fill" as const },
         { pluginId: "sample", source: "Sample description", target: "示例说明" },
       ],
     };
@@ -485,7 +485,7 @@ describe("plugin catalog version carry-over", () => {
       entries: [
         ...previous.entries,
         {
-          pluginId: "sample", source: "Sample", target: "示例插件",
+          pluginId: "sample", source: "Sample", target: "示例插件", provenanceKind: "th-reviewed-fill" as const,
           sourceCompatibility: compatibility("official-name", ["metadata"]),
         },
         {
@@ -499,7 +499,7 @@ describe("plugin catalog version carry-over", () => {
       ],
     };
     expect(selectCurrentCatalogTranslations(catalog, translation)).toContainEqual(
-      { pluginId: "sample", source: "Sample", target: "示例插件", scopes: ["metadata"] },
+      { pluginId: "sample", source: "Sample", target: "示例插件", provenanceKind: "th-reviewed-fill", scopes: ["metadata"] },
     );
     expect(selectCurrentCatalogTranslations(catalog, translation)).toContainEqual(
       { pluginId: "sample", source: "Sample description", target: "示例说明", scopes: ["metadata"] },

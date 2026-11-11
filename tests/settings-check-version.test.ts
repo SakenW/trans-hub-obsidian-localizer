@@ -58,6 +58,11 @@ describe("manager check and active version facts", () => {
 
     const text = container.allText();
     expect(text).toContain("最近成功检查");
-    expect(text).toContain("当前采用 1.0.0 来源的第 3 代译文");
+    const facts = container.descendants().filter((element) => element.classes.has("trans-hub-plugin-picker__version-fact"));
+    expect(facts.map((fact) => fact.children.map((child) => child.text))).toEqual([
+      ["译文来源", "1.0.0"], ["发布代次", "3"],
+      ["本机采用", new Date("2026-09-23T00:00:00.000Z").toLocaleString()], ["插件标识", "demo"],
+    ]);
+    expect(text).not.toContain("当前采用 1.0.0 来源的第 3 代译文");
   });
 });

@@ -13,6 +13,7 @@ import {
   WebCryptoEd25519ManifestVerifier,
 } from "@trans-hub/translation-export-client/web";
 
+import { ed25519Runtime } from "./ed25519-runtime";
 import type { TransportClient } from "./http-transport";
 import { ObsidianPackDownloader } from "./obsidian-pack-downloader";
 import { TRANS_HUB_TRANSLATION_EXPORT_TRUST_ROOTS } from "./product-config";
@@ -162,6 +163,7 @@ async function downloadTranslationOccurrences(
     verifier: new WebCanonicalJsonPackVerifier(),
     manifestVerifier: input.manifestVerifier ?? new WebCryptoEd25519ManifestVerifier({
       roots: TRANS_HUB_TRANSLATION_EXPORT_TRUST_ROOTS,
+      ed25519Verifier: ed25519Runtime,
     }),
     ...(input.developmentDownloadOrigin === undefined
       ? {}

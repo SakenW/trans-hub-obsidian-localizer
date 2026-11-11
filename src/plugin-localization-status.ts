@@ -3,6 +3,7 @@ import type { PublicLocalizationStatusProjection } from "@trans-hub/client-proto
 import {
   calculatePluginTranslationCoverage,
   comparePluginCatalogIdentity,
+  hasOnlyPreservedInterfaceText,
   isPluginInterfaceString,
   mergeCatalogNativeTranslations,
   unmatchedPluginInterfaceStrings,
@@ -54,6 +55,9 @@ export interface PluginLocalizationCoverageSummary {
   readonly headline: string;
   readonly notice?: string;
   readonly complete: boolean;
+  readonly missingCount?: number;
+  readonly versionMatchLabel?: string;
+  readonly translationSourceVersion?: string;
   readonly scopeMetrics: readonly string[];
   readonly sourceMetrics: readonly PluginLocalizationCoverageSourceMetric[];
 }
@@ -407,10 +411,13 @@ export function describePluginLocalizationStatus(input: {
     && usableCachedTranslation) {
     if (input.catalog !== undefined) {
       const identity = comparePluginCatalogIdentity(input.catalog, input.translation);
-      if (!identity.exact) return safeIntersectionStatus(input.translation, input.catalog, input.targetLocale);
+      const sourceVersion = input.translation.authorityPluginVersion ?? input.translation.pluginVersion;
+      if (!identity.exact || sourceVersion !== input.catalog.pluginVersion) {
+        return safeIntersectionStatus(input.translation, input.catalog, input.targetLocale);
+      }
     }
     const effectiveTranslation = mergeCatalogNativeTranslations(input.catalog, input.translation);
-    const coverage = calculatePluginTranslationCoverage(input.catalog, effectiveTranslation, input.targetLocale);
+    const coverage = calculatePluginTranslationCoverage(input.catalog, effectiveTranslation, input.targetLocale, "translatable");
     const sourceMetrics = describePluginTranslationSourceMetrics(
       effectiveTranslation,
       input.catalog,
@@ -419,7 +426,7 @@ export function describePluginLocalizationStatus(input: {
     const sourceSummary = sourceMetrics.map((metric) => metric.label).join(" · ");
     const scopeMetrics = coverage === undefined ? [] : describeScopeCoverageMetrics(coverage);
     if (coverage !== undefined && coverage.missingCount > 0) {
-      const headline = translate("已获取 {translated}/{total} 条匹配译文（{percent}%），{missing} 条尚未发布", {
+      const headline = translate("已获取 {translated}/{total} 条匹配译文（{percent}%），{missing} 条暂无匹配译文", {
         translated: coverage.translatedCount,
         total: coverage.totalCount,
         percent: coverage.percent,
@@ -431,21 +438,7 @@ export function describePluginLocalizationStatus(input: {
           headline,
           appendSourceSummary(scopeMetrics.join(" · "), sourceSummary),
         ),
-        coverage: coverageSummary(headline, false, scopeMetrics, sourceMetrics),
-      };
-    }
-    if (coverage !== undefined && !coverage.exactPluginVersion) {
-      const headline = translate("已沿用 {translated}/{total} 条安全译文", {
-        translated: coverage.translatedCount,
-        total: coverage.totalCount,
-      });
-      return {
-        kind: "localized",
-        label: appendSourceSummary(
-          headline,
-          appendSourceSummary(scopeMetrics.join(" · "), sourceSummary),
-        ),
-        coverage: coverageSummary(headline, true, scopeMetrics, sourceMetrics),
+        coverage: coverageSummary(headline, false, scopeMetrics, sourceMetrics, coverage.missingCount),
       };
     }
     if (coverage !== undefined) {
@@ -491,6 +484,9 @@ export function describePluginLocalizationStatus(input: {
         message: recoverableSynchronizationError.message,
       }),
     };
+  }
+  if (input.catalog !== undefined && hasOnlyPreservedInterfaceText(input.catalog)) {
+    return { kind: "preserved-source", label: translate("保留原文") };
   }
   if (submission === undefined) {
     return {
@@ -727,9 +723,9 @@ function coverageSummary(
   complete: boolean,
   scopeMetrics: readonly string[],
   sourceMetrics: readonly PluginLocalizationCoverageSourceMetric[],
-  notice?: string,
+  missingCount?: number,
 ): PluginLocalizationCoverageSummary {
-  return { headline, ...(notice === undefined ? {} : { notice }), complete, scopeMetrics, sourceMetrics };
+  return { headline, complete, scopeMetrics, sourceMetrics, ...(missingCount === undefined ? {} : { missingCount }) };
 }
 
 function describeScopeCoverageMetrics(
@@ -740,11 +736,15 @@ function describeScopeCoverageMetrics(
       count: coverage.unattributedNativeCount,
     })];
   }
-  return coverage.scopes.map((item) => translate("{scope} {translated}/{total}", {
+  const scopes = coverage.scopes.map((item) => translate("{scope} {translated}/{total}", {
     scope: scopeLabel(item.scope),
     translated: item.translatedCount,
     total: item.totalCount,
   }));
+  return coverage.preservedCount === undefined ? scopes : [
+    ...scopes,
+    translate("另有 {count} 条无需翻译，保留原文", { count: coverage.preservedCount }),
+  ];
 }
 
 function appendSourceSummary(label: string, summary: string): string {
@@ -757,33 +757,26 @@ function safeIntersectionStatus(
   targetLocale: string,
 ): PluginLocalizationStatus {
   const effectiveTranslation = mergeCatalogNativeTranslations(catalog, translation);
-  const coverage = calculatePluginTranslationCoverage(catalog, effectiveTranslation, targetLocale);
+  const coverage = calculatePluginTranslationCoverage(catalog, effectiveTranslation, targetLocale, "translatable");
   const translatedCount = coverage?.translatedCount
     ?? new Set(effectiveTranslation.entries.map((entry) => entry.source)).size;
   const totalCount = coverage?.totalCount ?? translatedCount;
   const missingCount = coverage?.missingCount ?? 0;
-  const safeIntersection = missingCount > 0
-    ? translate("已获取 {translated}/{total} 条匹配界面译文，{missing} 条保留原文", {
-        translated: translatedCount,
-        total: totalCount,
-        missing: missingCount,
-      })
-    : translate("已获取 {translated}/{total} 条匹配界面译文", {
-      translated: translatedCount,
-      total: totalCount,
-    });
   const authorityPluginVersion = translation.authorityPluginVersion ?? translation.pluginVersion;
-  const versionNotice = authorityPluginVersion === catalog.pluginVersion
-    ? undefined
-    : translate("本机插件 {installed}，译文来源 {source}；仅应用可匹配的文案，更新插件后会重新匹配", {
+  const crossVersion = authorityPluginVersion !== catalog.pluginVersion;
+  const counts = { translated: translatedCount, total: totalCount, missing: missingCount };
+  const safeIntersection = missingCount > 0
+    ? translate(crossVersion
+      ? "本机已匹配 {translated}/{total} 条界面文案，{missing} 条保留原文"
+      : "已获取 {translated}/{total} 条匹配界面译文，{missing} 条保留原文", counts)
+    : translate("已获取 {translated}/{total} 条匹配界面译文", counts);
+  const versionNotice = crossVersion
+    ? translate("本机插件 {installed}，译文来源 {source}；仅应用可匹配的文案，更新插件后会重新匹配", {
         installed: catalog.pluginVersion,
         source: authorityPluginVersion,
-      });
-  const safeIntersectionWithVersion = appendSourceSummary(
-    safeIntersection,
-    versionNotice ?? "",
-  );
-  const headline = safeIntersectionWithVersion;
+      })
+    : "";
+  const headline = appendSourceSummary(safeIntersection, versionNotice);
   const scopeMetrics = coverage === undefined ? [] : describeScopeCoverageMetrics(coverage);
   const sourceMetrics = describePluginTranslationSourceMetrics(
     effectiveTranslation,
@@ -799,12 +792,13 @@ function safeIntersectionStatus(
         sourceMetrics.map((metric) => metric.label).join(" · "),
       ),
     ),
-    coverage: coverageSummary(
-      headline,
-      missingCount === 0,
-      scopeMetrics,
-      sourceMetrics,
-    ),
+    coverage: {
+      ...coverageSummary(headline, missingCount === 0, scopeMetrics, sourceMetrics, missingCount || undefined),
+      ...(crossVersion && missingCount > 0 ? {
+        versionMatchLabel: translate("本机匹配 {translated}/{total}", counts),
+        translationSourceVersion: authorityPluginVersion,
+      } : {}),
+    },
   };
 }
 

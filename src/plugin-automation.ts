@@ -1,4 +1,4 @@
-import { Platform, normalizePath, type App, type EventRef } from "obsidian";
+import { Platform, getLanguage, normalizePath, type App, type EventRef } from "obsidian";
 
 import {
   localizedPluginDisplayName,
@@ -32,6 +32,8 @@ import {
   type PluginUiCatalog,
 } from "./plugin-string-scanner";
 import { PluginUiTranslationRuntime, type PluginUiTranslation } from "./plugin-ui-runtime";
+import { suspiciousMachineTarget } from "./plugin-machine-target-safety";
+import { canonicalLocale } from "./plugin-string-scanner-structure";
 import {
   applyPublishedPluginFilePatch,
   previewPublishedPluginFilePatch,
@@ -195,7 +197,8 @@ export class PluginAutomationController {
       // The scanner is CPU-bound for large community bundles and runs on
       // Obsidian's UI thread. A matching exact artifact plus unchanged
       // manifest metadata is sufficient to reuse the immutable catalog.
-      if (canReuseScannedPluginCatalog(previous, plugin, artifactDigest, settings.targetLocale)) {
+      const displayLocale = typeof getLanguage === "function" ? canonicalLocale(getLanguage()) : undefined;
+      if (canReuseScannedPluginCatalog(previous, plugin, artifactDigest, settings.targetLocale, displayLocale)) {
         catalogs[plugin.id] = previous;
         stringCount += previous.strings.length;
         continue;
@@ -209,6 +212,7 @@ export class PluginAutomationController {
         bundle,
         sourceLocale: OBSIDIAN_SOURCE_LOCALE,
         targetLocale: settings.targetLocale,
+        displayLocale,
         registryMetadata: {
           name: identity?.officialName ?? plugin.name,
           description: identity?.officialDescription ?? plugin.description,
@@ -280,14 +284,20 @@ export class PluginAutomationController {
     const targetLocale = this.input.settings().targetLocale;
     for (const [pluginId, manifest] of Object.entries(manifests)) {
       if (pluginId === this.input.ownPluginId || manifest.name === "") continue;
+      const catalog = state.pluginCatalogs[pluginId];
+      const officialName = catalog?.strings.find((item) =>
+        item.source === catalog.pluginName && item.origins.includes("manifest.name"))?.source;
+      const recoveredName = officialName !== undefined
+        && suspiciousMachineTarget(officialName, manifest.name)
+        ? officialName : manifest.name;
       let previous = this.localizedDisplayNames.get(pluginId);
       if (previous === undefined) {
-        previous = { original: manifest.name, manifest };
+        previous = { original: recoveredName, manifest };
         this.localizedDisplayNames.set(pluginId, previous);
       }
       const localized = localizedPluginDisplayName(
         previous.original,
-        state.pluginCatalogs[pluginId],
+        catalog,
         getPluginTranslation(state, pluginId, targetLocale),
         targetLocale,
       );
@@ -532,12 +542,14 @@ export function canReuseScannedPluginCatalog(
   plugin: Pick<InstalledObsidianPlugin, "name" | "version">,
   artifactDigest: string,
   targetLocale: TargetLocale,
+  displayLocale?: string,
 ): boolean {
   return previous?.catalogIdentity !== undefined
     && previous.pluginVersion === plugin.version
     && previous.pluginName === plugin.name
     && previous.artifactDigest === artifactDigest
     && previous.scannerTargetLocale === targetLocale
+    && previous.scannerDisplayLocale === displayLocale
     && previous.patchEvidenceRevision === PLUGIN_STRING_SCANNER_REVISION;
 }
 

@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("obsidian", async () => import("./settings-host-mock"));
 vi.mock("../src/plugin-sync", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/plugin-sync")>();
-  return { ...actual, synchronizeConfiguredPluginTranslations: vi.fn() };
+  return { ...actual, synchronizeConfiguredPluginTranslations: vi.fn(), refreshConfiguredPluginStatuses: vi.fn() };
 });
-import { synchronizeConfiguredPluginTranslations } from "../src/plugin-sync";
+import { refreshConfiguredPluginStatuses, synchronizeConfiguredPluginTranslations } from "../src/plugin-sync";
+import type { PluginProcessingQueue } from "../src/plugin-selection-processing";
 import { EMPTY_PLUGIN_STATE } from "../src/plugin-state";
 import TransHubObsidianPlugin from "../src/main";
 import type { TargetLocale } from "../src/product-config";
@@ -275,6 +276,34 @@ describe("automatic plugin translation", () => {
 });
 
 describe("disconnect and withdrawal recovery", () => {
+  it.each(["sync", "status", "scan"] as const)("断连重连后不执行旧会话排队的%s任务", async (operation) => {
+    const plugin = new TransHubObsidianPlugin({} as never, {} as never);
+    const gate = deferred();
+    const scan = vi.spyOn(plugin, "scanInstalledPluginStrings").mockResolvedValue(result.scan);
+    const apply = vi.fn();
+    Object.assign(plugin, {
+      activation: { clear: vi.fn(), isConfigured: () => true },
+      pluginAutomation: { stop: vi.fn(), applyCachedTranslations: apply },
+      savePluginDataForLifecycle: vi.fn(async () => {}),
+      restoreThirdPartyPluginFiles: vi.fn(() => Promise.resolve({ restored: 0, conflicts: 0, restoredPluginIds: [], conflictPluginIds: [] })),
+    });
+    const summary = { submittedCount: 0, requestedCount: 0, pulledCount: 0, waitingCount: 0, translationCount: 0 };
+    vi.mocked(synchronizeConfiguredPluginTranslations).mockReset().mockResolvedValue(summary);
+    vi.mocked(refreshConfiguredPluginStatuses).mockReset().mockResolvedValue(summary);
+    const queue = (plugin as unknown as { pluginProcessingQueue: PluginProcessingQueue }).pluginProcessingQueue;
+    const blocker = queue.run(() => gate.promise);
+    const pending = operation === "sync" ? plugin.syncInstalledPluginTranslations(["demo"], ["demo"])
+      : operation === "status" ? plugin.refreshPluginStatusBatch(["demo"])
+      : plugin.processSelectedPlugins();
+    await plugin.disconnect();
+    gate.resolve();
+    await Promise.all([blocker, pending]);
+    expect(scan).not.toHaveBeenCalled();
+    expect(synchronizeConfiguredPluginTranslations).not.toHaveBeenCalled();
+    expect(refreshConfiguredPluginStatuses).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+  });
+
   it.each(["restore", "save"])("断连时%s失败仍清空状态并停止运行时", async (failure) => {
     const plugin = new TransHubObsidianPlugin({} as never, {} as never);
     const stop = vi.fn();

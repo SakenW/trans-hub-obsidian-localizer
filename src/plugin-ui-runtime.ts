@@ -1,4 +1,6 @@
 import { MenuItem } from "obsidian";
+import { contaminatedMachineBatch, suspiciousMachineTarget } from "./plugin-machine-target-safety";
+import { isProtectedPluginTextSafe, preservesCalloutMarkers } from "./plugin-protected-text";
 
 export type PluginTranslationProvenanceKind =
   | "upstream-native"
@@ -30,6 +32,8 @@ export interface PluginUiTranslation {
   readonly sourceCompatibility?: PluginSourceCompatibility;
   /** Exact upstream-native target that an explicitly reviewed correction may replace. */
   readonly nativeTarget?: string;
+  /** Host-language built-in text verified against the exact installed catalog. */
+  readonly nativeSource?: string;
 }
 
 const TRANSLATABLE_ATTRIBUTES = ["aria-label", "placeholder", "title"] as const;
@@ -69,6 +73,7 @@ export interface RuntimeTranslationPlan {
 export function buildConflictSafeDictionary(
   translations: readonly PluginUiTranslation[],
 ): ReadonlyMap<string, string> {
+  if (contaminatedMachineBatch(translations)) return new Map();
   const nativeTargets = new Set(translations
     .map((translation) => translation.target.normalize("NFC").trim())
     .filter((target) => target !== ""));
@@ -76,8 +81,16 @@ export function buildConflictSafeDictionary(
   for (const translation of translations) {
     const source = translation.source.normalize("NFC").trim();
     const target = translation.target.normalize("NFC").trim();
-    if (source === "" || target === "" || source === target) continue;
-    addCandidate(candidates, source, target, !nativeTargets.has(source));
+    if (source === "" || target === "") continue;
+    if (!isProtectedPluginTextSafe(translation)) continue;
+    if (translation.provenanceKind === "th-automatic"
+      && suspiciousMachineTarget(source, target)) continue;
+    addCandidate(candidates, source, target, source !== target && !nativeTargets.has(source));
+    if (translation.nativeSource !== undefined) {
+      const nativeSource = translation.nativeSource.normalize("NFC").trim();
+      addCandidate(candidates, nativeSource, target,
+        nativeSource !== "" && !nativeTargets.has(nativeSource));
+    }
     if (
       translation.application === "correction"
       && translation.provenanceKind === "th-reviewed-correction"
@@ -100,7 +113,7 @@ function addCandidate(
   target: string,
   allowed: boolean,
 ): void {
-  if (!allowed) return;
+  if (!allowed || !preservesCalloutMarkers(source, target)) return;
   const values = candidates.get(source) ?? new Set<string>();
   values.add(target);
   candidates.set(source, values);

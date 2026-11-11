@@ -1,5 +1,6 @@
 import {
   canonicalJson,
+  readTranslationPackLicense,
   type CanonicalJsonTranslationExportManifest,
   type CanonicalJsonTranslationPackRef,
   type PackVerificationPort,
@@ -18,6 +19,11 @@ export type TranslationExportTrustRoot = Readonly<{
   publicKeyBase64Url: string;
 }>;
 
+/** Optional local implementation; trust, framing, digest and expiry checks stay in this verifier. */
+export interface Ed25519VerificationPort {
+  verify(publicKey: Uint8Array, signature: Uint8Array, message: Uint8Array): Promise<boolean>;
+}
+
 const ED25519_RAW_KEY_BYTES = 32;
 
 /**
@@ -32,6 +38,7 @@ export class WebCryptoEd25519ManifestVerifier
   readonly #roots: ReadonlyMap<string, TranslationExportTrustRoot>;
   readonly #now: () => number;
   readonly #maximumClockSkewMs: number;
+  readonly #ed25519Verifier: Ed25519VerificationPort | undefined;
   readonly #keyCache = new Map<string, CryptoKey>();
 
   constructor(
@@ -39,6 +46,7 @@ export class WebCryptoEd25519ManifestVerifier
       roots: readonly TranslationExportTrustRoot[];
       now?: () => number;
       maximumClockSkewMs?: number;
+      ed25519Verifier?: Ed25519VerificationPort;
     }>,
   ) {
     if (input.roots.length < 1 || input.roots.length > 4) {
@@ -60,6 +68,7 @@ export class WebCryptoEd25519ManifestVerifier
       roots.set(identity, Object.freeze({ ...root }));
     }
     this.#roots = roots;
+    this.#ed25519Verifier = input.ed25519Verifier;
     this.#now = input.now ?? Date.now;
     this.#maximumClockSkewMs = input.maximumClockSkewMs ?? 60_000;
   }
@@ -117,13 +126,11 @@ export class WebCryptoEd25519ManifestVerifier
     if (signature === undefined || signature.byteLength !== 64) {
       throw new Error("translation_manifest_signature_invalid");
     }
-    const key = await this.importRootKey(root);
-    const verified = await crypto.subtle.verify(
-      "Ed25519",
-      key,
-      signature.slice().buffer,
-      frame.slice().buffer,
-    );
+    const verified = this.#ed25519Verifier === undefined
+      ? await crypto.subtle.verify(
+        "Ed25519", await this.importRootKey(root), signature.slice().buffer, frame.slice().buffer,
+      )
+      : await this.#ed25519Verifier.verify(this.rootBytes(root), signature, frame);
     if (!verified) throw new Error("translation_manifest_signature_invalid");
   }
 
@@ -131,10 +138,7 @@ export class WebCryptoEd25519ManifestVerifier
     const identity = rootIdentity(root.keyId, root.keyVersion);
     const cached = this.#keyCache.get(identity);
     if (cached !== undefined) return cached;
-    const raw = base64UrlToBytes(root.publicKeyBase64Url);
-    if (raw === undefined || raw.byteLength !== ED25519_RAW_KEY_BYTES) {
-      throw new TypeError("translation_manifest_trust_root_invalid");
-    }
+    const raw = this.rootBytes(root);
     const key = await crypto.subtle.importKey(
       "raw",
       raw.slice().buffer,
@@ -144,6 +148,14 @@ export class WebCryptoEd25519ManifestVerifier
     );
     this.#keyCache.set(identity, key);
     return key;
+  }
+
+  private rootBytes(root: TranslationExportTrustRoot): Uint8Array {
+    const raw = base64UrlToBytes(root.publicKeyBase64Url);
+    if (raw === undefined || raw.byteLength !== ED25519_RAW_KEY_BYTES) {
+      throw new TypeError("translation_manifest_trust_root_invalid");
+    }
+    return raw;
   }
 }
 
@@ -190,6 +202,7 @@ export class WebCanonicalJsonPackVerifier
     if (!bytesEqual(input.bytes, expected)) {
       throw packError("translation_pack_canonical_bytes_mismatch", input.pack);
     }
+    readTranslationPackLicense(value);
     return input.bytes;
   }
 }

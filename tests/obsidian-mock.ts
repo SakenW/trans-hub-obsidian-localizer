@@ -57,3 +57,5 @@ export class Notice {
     void timeout;
   }
 }
+
+export function setIcon(): void {}

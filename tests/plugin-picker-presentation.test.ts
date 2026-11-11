@@ -8,6 +8,23 @@ describe("plugin picker presentation", () => {
       localization: { kind: "waiting", label: "译文已发布，等待客户端下载" },
     }).label).toBe("译文已发布，等待客户端下载");
   });
+  it("shows the unmatched count on a partially translated plugin", () => {
+    expect(presentPluginLocalization({ ...input, localization: {
+      ...input.localization,
+      coverage: { headline: "1/3", complete: false, missingCount: 2, scopeMetrics: [], sourceMetrics: [] },
+    } })).toEqual({ kind: "partial", label: "部分可用，缺 2 条" });
+  });
+
+  it("shows the local match count for a cross-version pack", () => {
+    expect(presentPluginLocalization({ ...input, localization: {
+      ...input.localization,
+      coverage: {
+        headline: "1/3", complete: false, missingCount: 2, scopeMetrics: [], sourceMetrics: [],
+        versionMatchLabel: "本机匹配 1/3",
+      },
+    } })).toEqual({ kind: "partial", label: "本机匹配 1/3" });
+  });
+
   it("关闭与暂停优先于缓存可用事实", () => {
     expect(presentPluginLocalization({ ...input, selected: false }).kind).toBe("off");
     expect(presentPluginLocalization({ ...input, enabled: false }).kind).toBe("paused");

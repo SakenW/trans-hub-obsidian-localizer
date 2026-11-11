@@ -14,6 +14,7 @@ import {
   parsePluginState,
   type PluginState,
 } from "../src/plugin-state";
+import { pendingTranslationPluginIds, describePluginSelectionProcessing } from "../src/plugin-selection-processing";
 import {
   submitObsidianLocalizationObservation,
   submitObsidianPluginDiscovery,
@@ -2425,8 +2426,34 @@ describe("synchronizeConfiguredPluginTranslations", () => {
     });
 
     expect(getPluginTranslation(state, "dataview", "zh-CN")?.entries[0]?.target).toBe("已有译文");
-    expect(summary.waitingPluginIds).toEqual([]);
-    expect(summary.pulledCount).toBe(1);
+    expect(summary.waitingPluginIds).toEqual(["dataview"]);
+    expect(summary.exportPendingPluginIds).toEqual(["dataview"]);
+    expect(summary.pulledCount).toBe(0);
+    const processing = {
+      kind: "synchronized" as const,
+      scan: { discoveredCount: 1, scannedCount: 1, changedCount: 0, stringCount: 1, selectablePluginIds: ["dataview"] },
+      sync: summary,
+    };
+    expect(pendingTranslationPluginIds(processing)).toEqual(["dataview"]);
+    expect(describePluginSelectionProcessing(processing)).not.toContain("已是最新");
+    expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
+    expect(submitObsidianLocalizationObservation).not.toHaveBeenCalled();
+
+    mocks.download.mockResolvedValue({
+      status: "updated", rows: [{ stringKey: STRING_KEY, translatedText: "更正后的译文" }],
+      etag: '"restored"', manifest: exportManifest,
+    });
+    const restored = await synchronizeConfiguredPluginTranslations({
+      apiBaseUrl: "http://127.0.0.1:8000", targetLocale: "zh-CN", excludedPluginIds: [],
+      activationStore, translationPackStore, getState: () => state,
+      replaceState: (next) => { state = next; }, save: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(getPluginTranslation(state, "dataview", "zh-CN")?.entries[0]?.target).toBe("更正后的译文");
+    expect(restored.waitingPluginIds).toEqual([]);
+    expect(restored.updatedCount).toBe(1);
+    expect(pendingTranslationPluginIds({ ...processing, sync: restored })).toEqual([]);
+    expect(submitObsidianPluginDiscovery).not.toHaveBeenCalled();
+    expect(submitObsidianLocalizationObservation).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -9,6 +9,9 @@ interface PublicClientDiagnosticError extends Error {
 }
 
 export function errorMessage(error: unknown): string {
+  if (error instanceof Error && /设备授权续期失败：HTTP (?:401|403)$/u.test(error.message)) {
+    return translate("设备授权续期未成功。连接材料和缓存译文已保留；持续失败时请核对授权。");
+  }
   if (isExpiredDeviceAuthorization(error)) {
     return translate("此设备的语枢授权已失效，请重新连接。已缓存译文仍可继续使用。");
   }
@@ -40,7 +43,7 @@ export function errorMessage(error: unknown): string {
 
 function isExpiredDeviceAuthorization(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  return /设备授权(?:续期失败：HTTP (?:401|403)|已失效|已过期)/u.test(error.message);
+  return /设备授权(?:已失效|已过期)/u.test(error.message);
 }
 
 function isRetryBudgetExhausted(error: PublicClientDiagnosticError): boolean {

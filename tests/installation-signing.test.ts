@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE,
+  INSTALLATION_SIGNING_FAILED_MESSAGE,
   STORED_SIGNING_KEY_CORRUPTED_MESSAGE,
   createSigner,
   createSigningKey,
@@ -17,6 +18,7 @@ const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("WebCrypto Ed25519 installation signing", () => {
@@ -73,6 +75,58 @@ describe("WebCrypto Ed25519 installation signing", () => {
     vi.spyOn(crypto.subtle, "sign").mockRejectedValue(unsupported);
 
     await expect(createSigningKey()).rejects.toThrow(INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE);
+  });
+
+  it.each([undefined, {}])("reports unavailable WebCrypto without blaming the app version (%j)", async (runtime) => {
+    const key = await createSigningKey();
+    vi.stubGlobal("crypto", runtime);
+
+    await expect(createSigningKey()).rejects.toThrow(INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE);
+    await expect(createSigner(key)).rejects.toThrow(INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE);
+    expect(INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE).not.toContain("请将 Obsidian 更新");
+  });
+
+  it.each(["generateKey", "exportKey", "importKey", "sign", "verify"] as const)(
+    "distinguishes unsupported %s from other operation failures and preserves the cause",
+    async (operation) => {
+      const key = await createSigningKey();
+      for (const name of ["NotSupportedError", "OperationError", "ReferenceError"]) {
+        const cause = name === "ReferenceError" ? new ReferenceError("Unexpected failure")
+          : new DOMException("Operation failed", name);
+        const spy = vi.spyOn(crypto.subtle, operation).mockRejectedValue(cause);
+        const result = operation === "generateKey" || operation === "exportKey"
+          ? createSigningKey() : createSigner(key);
+        await expect(result).rejects.toMatchObject({
+          message: name === "NotSupportedError"
+            ? INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE : INSTALLATION_SIGNING_FAILED_MESSAGE,
+          cause,
+        });
+        spy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["NotSupportedError", "OperationError"])("classifies proof signing failure %s", async (name) => {
+    const signer = await createSigner(await createSigningKey());
+    const cause = new DOMException("Signing failed", name);
+    vi.spyOn(crypto.subtle, "sign").mockRejectedValue(cause);
+
+    await expect(signer.signProof({
+      requestDigest: createDigest("request", "a".repeat(64)),
+      challenge: "challenge-value",
+      nonce: "nonce-value",
+      credentialEpoch: 7,
+    })).rejects.toMatchObject({
+      message: name === "NotSupportedError"
+        ? INSTALLATION_SIGNING_UNAVAILABLE_MESSAGE : INSTALLATION_SIGNING_FAILED_MESSAGE,
+      cause,
+    });
+  });
+
+  it("identifies invalid base64 as damaged stored key material", async () => {
+    const key = await createSigningKey();
+    await expect(createSigner({ ...key, privateKeyPkcs8Base64: "%%%" }))
+      .rejects.toThrow(STORED_SIGNING_KEY_CORRUPTED_MESSAGE);
   });
 
   it("fails closed for damaged PKCS#8 material", async () => {

@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, transhub-obsidian-release]
     timeout-minutes: 20
     env:
       TRANS_HUB_TRANSFER_ROOT_KEY_ID: ${{ vars.TRANS_HUB_TRANSFER_ROOT_KEY_ID }}

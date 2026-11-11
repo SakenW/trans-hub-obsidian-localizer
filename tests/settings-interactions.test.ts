@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("obsidian", async () => import("./settings-host-mock"));
-import { App, renderedSettings, TestElement, type TestControl } from "./settings-host-mock";
+import { App, openedModals, Platform, renderedSettings, TestElement, type TestControl } from "./settings-host-mock";
+import * as discovery from "../src/plugin-discovery";
 import { TransHubSettingTab } from "../src/settings";
 import { EMPTY_PLUGIN_STATE } from "../src/plugin-state";
 import type TransHubObsidianPlugin from "../src/main";
@@ -58,8 +59,40 @@ function control(text: string): TestControl {
   return result;
 }
 
-beforeEach(() => { renderedSettings.length = 0; setClientLocale("zh-CN"); });
+afterEach(() => { vi.restoreAllMocks(); });
+beforeEach(() => { openedModals.length = 0; renderedSettings.length = 0; setClientLocale("zh-CN"); });
 describe("settings user interactions", () => {
+  it("详情按钮和主行位置不随展开改变，重绘保留展开状态", () => {
+    const { plugin, internal, container } = fixture();
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, [plugins[0]]);
+    const detail = container.descendants().find((element) => element.classes.has("trans-hub-plugin-picker__details"))!;
+    const trigger = container.descendants().find((element) => element.classes.has("trans-hub-plugin-picker__details-trigger"))!;
+    const row = renderedSettings.find((setting) => setting.settingEl.children.includes(detail))!;
+    const originalChildren = [...row.settingEl.children];
+    const status = row.settingEl.children.find((element) => element.classes.has("trans-hub-plugin-picker__provenance"));
+    expect(status).toBeDefined();
+    expect(row.descEl.descendants()).not.toContain(status);
+    expect(trigger.attrs.get("aria-controls")).toBe(detail.attrs.get("id"));
+    expect(detail.attrs.get("aria-labelledby")).toBe(trigger.attrs.get("id"));
+    expect(detail.hidden).toBe(true);
+    expect(trigger.attrs.get("aria-expanded")).toBe("false");
+    trigger.click();
+    expect(detail.hidden).toBe(false);
+    expect(trigger.attrs.get("aria-expanded")).toBe("true");
+    expect(row.settingEl.children).toEqual(originalChildren);
+    trigger.click();
+    expect(detail.hidden).toBe(true);
+    expect(trigger.attrs.get("aria-expanded")).toBe("false");
+    expect(row.settingEl.children).toEqual(originalChildren);
+    trigger.click();
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, [plugins[0]]);
+    const remounted = container.descendants().find((element) => element.classes.has("trans-hub-plugin-picker__details"))!;
+    const remountedTrigger = container.descendants().find((element) => element.classes.has("trans-hub-plugin-picker__details-trigger"))!;
+    expect(remounted.hidden).toBe(false);
+    expect(remountedTrigger.attrs.get("aria-expanded")).toBe("true");
+    expect(plugin.processPluginIds).not.toHaveBeenCalled();
+  });
+
   it("普通界面且匹配完整的插件不推荐兼容模式", () => {
     const { plugin, internal, container } = fixture();
     plugin.settings.excludedPluginIds = [];
@@ -86,8 +119,8 @@ describe("settings user interactions", () => {
     Object.assign(plugin, { checkThirdPartyPluginFilePatch: check });
     internal.renderPluginPickerContents(container as unknown as HTMLElement, [plugins[0]]);
     expect(check).not.toHaveBeenCalled();
-    const details = container.descendants().find((item) => item.attrs.get("tag") === "details" && item.children.some((child) => child.text === "译文详情"))!;
-    details.open = true; details.listeners.get("toggle")?.();
+    const trigger = container.descendants().find((item) => item.classes.has("trans-hub-plugin-picker__details-trigger"))!;
+    trigger.click();
     await Promise.resolve();
     expect(check).toHaveBeenCalledExactlyOnceWith("dataview");
     const compatibility = renderedSettings.find((row) => row.name === "兼容模式（可选）")!;
@@ -164,6 +197,151 @@ describe("settings user interactions", () => {
     expect(plugin.settings.excludedPluginIds).toEqual([]);
     expect(plugin.processPluginIds).toHaveBeenCalledExactlyOnceWith(["dataview", "tables"]);
   });
+  it("开关周围触控区域只转发空白点击，不重复处理开关本身的点击", () => {
+    const { internal, container } = fixture();
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
+    const hit = container.descendants().find((element) => element.classes.has("trans-hub-plugin-picker__toggle-hit"))!;
+    const toggle = hit.children[0];
+    const clicked = vi.spyOn(toggle, "click");
+    const click = hit.listeners.get("click")! as unknown as (event: { target: TestElement }) => void;
+    click({ target: hit });
+    expect(clicked).toHaveBeenCalledOnce();
+    click({ target: toggle });
+    expect(clicked).toHaveBeenCalledOnce();
+  });
+
+  it("关闭全部先确认，取消和关闭弹窗都不写入；确认不受搜索影响", async () => {
+    const { plugin, internal, container } = fixture();
+    plugin.settings.excludedPluginIds = ["unrelated"];
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, plugins);
+    const search = renderedSettings.flatMap((row) => row.controls).find((item) => item.kind === "text")!;
+    await search.change("Dataview" as never);
+    const start = control("全部关闭").click();
+    expect(openedModals).toHaveLength(1);
+    expect(openedModals[0].contentEl.allText()).toContain("不受搜索和筛选限制");
+    expect(plugin.savePluginData).not.toHaveBeenCalled();
+    await control("取消").click();
+    await start;
+    expect(plugin.settings.excludedPluginIds).toEqual(["unrelated"]);
+    expect(plugin.restoreThirdPartyPluginFiles).not.toHaveBeenCalled();
+    const dismissed = control("全部关闭").click();
+    openedModals[1].close();
+    await dismissed;
+    expect(plugin.savePluginData).not.toHaveBeenCalled();
+    const confirmed = control("全部关闭").click();
+    // Controls from closed modals are retained by the mock, so use the latest modal's buttons.
+    await renderedSettings.at(-1)!.controls.find((item) => item.text === "确认关闭全部")!.click();
+    await confirmed;
+    expect(plugin.savePluginData).toHaveBeenCalledOnce();
+    expect(plugin.restoreThirdPartyPluginFiles).toHaveBeenCalledExactlyOnceWith(["dataview", "tables"]);
+    expect(plugin.settings.excludedPluginIds).toEqual(expect.arrayContaining(["unrelated", "dataview", "tables"]));
+    expect(plugin.processPluginIds).not.toHaveBeenCalled();
+  });
+
+  it.each(["none", "active", "conflict", "failure"])("恢复按钮只在异步检查确认已有补丁时启用（%s）", async (state) => {
+    const { plugin, tab, internal, container } = fixture();
+    vi.spyOn(discovery, "discoverInstalledPlugins").mockResolvedValue([{ ...plugins[0], enabled: false }]);
+    let resolve!: (value: Map<string, string>) => void;
+    let reject!: (error: Error) => void;
+    const read = vi.fn(() => new Promise<Map<string, string>>((yes, no) => { resolve = yes; reject = no; }));
+    Object.assign(plugin, { pluginFilePatchStates: read });
+    tab.selectSection("compatibility");
+    internal.renderSettings(container as unknown as HTMLElement);
+    const restore = control("恢复原始文件");
+    expect(restore.disabled).toBe(true);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledExactlyOnceWith(["dataview"]));
+    if (state === "failure") reject(new Error("fixture inventory failed"));
+    else resolve(new Map([["dataview", state]]));
+    await vi.waitFor(() => {
+      expect(restore.disabled).toBe(state === "none" || state === "failure");
+      if (state === "none") expect(container.allText()).toContain("没有已应用的兼容补丁");
+      if (state === "failure") expect(container.allText()).toContain("fixture inventory failed");
+    });
+    expect(plugin.savePluginData).not.toHaveBeenCalled();
+    expect(plugin.restoreThirdPartyPluginFiles).not.toHaveBeenCalled();
+    expect(plugin.connect).not.toHaveBeenCalled();
+  });
+
+  it("移动端打开兼容页时只显示移动端说明", async () => {
+    const { plugin, internal, container } = fixture();
+    const readPatchStates = vi.fn();
+    Object.assign(plugin, { pluginFilePatchStates: readPatchStates });
+    const wasDesktop = Platform.isDesktopApp;
+    Platform.isDesktopApp = false;
+    try {
+      internal.renderSettings(container as unknown as HTMLElement);
+      await control("兼容与恢复").click();
+      const panel = container.children
+        .filter((element) => element.classes.has("trans-hub-settings__panel"))[2];
+      expect(panel.allText()).toContain("移动端本地化");
+      expect(panel.allText()).toContain("文件兼容处理需要桌面端");
+      expect(panel.allText()).not.toMatch(/兼容模式|已应用的兼容补丁|恢复原始文件|重新加载目标插件/);
+      expect(readPatchStates).not.toHaveBeenCalled();
+    } finally {
+      Platform.isDesktopApp = wasDesktop;
+    }
+  });
+
+  it("帮助使用原生折叠FAQ，连接操作只在基本设置末尾", () => {
+    const { internal, container } = fixture();
+    internal.renderSettings(container as unknown as HTMLElement);
+    const panels = container.children.filter((element) => element.classes.has("trans-hub-settings__panel"));
+    const faqs = panels[3].descendants().filter((element) => element.classes.has("trans-hub-settings__help"));
+    expect(faqs).toHaveLength(4);
+    expect(faqs.every((element) => element.attrs.get("tag") === "details" && !element.open)).toBe(true);
+    expect(faqs.every((element) => element.children[0].attrs.get("tag") === "summary")).toBe(true);
+    expect(panels[1].children.at(-1)!.allText()).toContain("语枢已连接");
+    expect(panels[3].allText()).not.toContain("断开此设备连接");
+  });
+
+  it.each([true, false])("缓存按既有跨版本匹配合同展示并筛选（可匹配=%s）", async (compatible) => {
+    const { plugin, internal, container } = fixture();
+    plugin.settings.excludedPluginIds = [];
+    const state = plugin.getPluginState();
+    Object.assign(state.pluginCatalogs, { dataview: {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "1.0.0", sourceLocale: "en",
+      digest: "current", artifactDigest: "a", scannedAt: "now",
+      strings: [{ key: "one", source: "Settings", origins: ["ui-call"], placeholderSignature: "" }],
+    } });
+    Object.assign(state.pluginTranslations, { dataview: { "zh-CN": {
+      pluginId: "dataview", pluginVersion: "0.9.0", sourceVersionId: "cached-source", targetLocale: "zh-CN",
+      pulledAt: "now", entries: [{ pluginId: "dataview", source: "Settings", target: "设置",
+        ...(compatible ? { sourceCompatibility: {
+          semanticRole: "runtime-ui", contentScopes: ["runtime-ui"], placeholderSignature: "",
+          formatSignature: "plain-text-v1", sourceContentDigest: `sha256:${"a".repeat(64)}`,
+        } } : {}),
+      }],
+    } } });
+    Object.assign(state.publicPluginDiscoveries, { dataview: {
+      statusRevision: 2, discoveryId: "d", receiptId: "r", targetLocales: ["zh-CN"],
+      classification: "eligible_for_processing", taskState: "result_verified", retryAllowed: false,
+      retryAfterSeconds: 0, installationId: "i", submittedAt: "now",
+      localizationProjection: {
+        kind: "public_localization_status_projection", protocol: { protocol: "trans-hub.client-protocol", revision: 1, schemaRevision: 1 },
+        projectionRevision: 1, discoveryId: "d", registryKey: "directory", externalObjectId: "dataview",
+        targetLocale: "zh-CN", catalogIdentityDigest: null, sourceVersionId: "new-source", stage: "translating", updatedAt: "now",
+      },
+    } });
+    internal.renderPluginPickerContents(container as unknown as HTMLElement, [plugins[0]]);
+    if (!compatible) {
+      expect(container.allText()).not.toContain("现有缓存可用");
+      expect(plugin.processPluginIds).not.toHaveBeenCalled();
+      return;
+    }
+    expect(container.allText()).toContain("现有缓存可用，新来源仍在处理");
+    const details = container.descendants().find((element) => element.classes.has("trans-hub-plugin-picker__details"))!;
+    expect(details.hidden).toBe(true);
+    expect(details.allText()).toContain("本机插件 1.0.0，译文来源 0.9.0");
+    expect(details.allText()).toContain("已获取 1/1 条匹配界面译文");
+    const filter = renderedSettings.flatMap((row) => row.controls).find((item) => item.kind === "dropdown")!;
+    for (const value of ["localized", "processing"]) {
+      await filter.change(value as never);
+      expect(container.allText()).toContain("现有缓存可用，新来源仍在处理");
+      expect(container.allText()).not.toContain("没有匹配的插件");
+    }
+    expect(plugin.processPluginIds).not.toHaveBeenCalled();
+    expect(plugin.processSelectedPlugins).not.toHaveBeenCalled();
+  });
   it.each([true, false])("连续开启时较早操作的状态事实不会丢失（stale=%s）", async (stale) => {
     const { plugin, tab, internal, container } = fixture();
     if (!stale) tab.refreshPluginCards({ kind: "stale", failedPluginIds: ["dataview"], failedSources: ["public-discovery"] }, ["dataview"]);
@@ -229,7 +407,7 @@ describe("settings user interactions", () => {
     Object.assign(state.pluginTranslations, { dataview: { "zh-CN": {
       pluginId: "dataview", pluginVersion: "1.0.0", sourceVersionId: "source",
       targetLocale: "zh-CN", pulledAt: "now", entries: [
-        { pluginId: "dataview", source: "Dataview", target: "数据视图" },
+        { pluginId: "dataview", source: "Dataview", target: "数据视图", provenanceKind: "th-reviewed-fill" },
         { pluginId: "dataview", source: "Data views", target: "数据展示" },
       ],
     } } });
@@ -368,7 +546,9 @@ describe("settings user interactions", () => {
     setRestoreResult({ ...emptyRestore, conflicts: 1, conflictPluginIds: ["dataview"] });
     internal.renderSettings(container as unknown as HTMLElement);
     const text = container.allText();
-    expect(text.indexOf("连接")).toBeLessThan(text.indexOf("译文语言"));
+    const panels = container.children.filter((element) => element.classes.has("trans-hub-settings__panel"));
+    expect(panels[1].allText().indexOf("语枢已连接")).toBeGreaterThan(panels[1].allText().indexOf("译文语言"));
+    expect(panels[3].allText()).not.toContain("断开此设备连接");
     expect(text).not.toContain("高级选项");
     expect(control("兼容与恢复")).toBeDefined();
     expect(text).toContain("1 个需处理");

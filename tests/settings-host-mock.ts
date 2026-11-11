@@ -2,6 +2,7 @@
 type Options = { text?: string; cls?: string | string[] };
 export class TestElement {
   children: TestElement[] = [];
+  parentElement: TestElement | null = null;
   attrs = new Map<string, string>();
   classes = new Set<string>();
   text = "";
@@ -9,10 +10,12 @@ export class TestElement {
   scrollTop = 0;
   hidden = false;
   open = false;
-  readonly listeners = new Map<string, () => void>();
-  addEventListener(name: string, callback: () => void): void { const previous = this.listeners.get(name); this.listeners.set(name, () => { previous?.(); callback(); }); }
+  readonly listeners = new Map<string, (event?: { target: TestElement }) => void>();
+  addEventListener(name: string, callback: (event?: { target: TestElement }) => void): void { const previous = this.listeners.get(name); this.listeners.set(name, (event) => { previous?.(event); callback(event); }); }
   constructor(options: Options = {}) { this.text = options.text ?? ""; this.addClass(...(typeof options.cls === "string" ? options.cls.split(" ") : options.cls ?? [])); }
-  createDiv(options: Options = {}): TestElement { const child = new TestElement(options); this.children.push(child); return child; }
+  createDiv(options: Options = {}): TestElement { const child = new TestElement(options); return this.appendChild(child); }
+  appendChild(child: TestElement): TestElement { if (child.parentElement !== null) { const siblings = child.parentElement.children; const index = siblings.indexOf(child); if (index >= 0) siblings.splice(index, 1); } this.children.push(child); child.parentElement = this; return child; }
+  click(): void { this.listeners.get("click")?.({ target: this }); }
   createSpan(options: Options = {}): TestElement { return this.createDiv(options); }
   createEl(tag: string, options: Options = {}): TestElement { const child = this.createDiv(options); child.attrs.set("tag", tag); return child; }
   setText(text: string): void { this.text = text; }
@@ -81,8 +84,8 @@ export class TestControl {
 }
 export const renderedSettings: Setting[] = [];
 export class Setting {
-  settingEl: TestElement; descEl: TestElement; name = ""; controls: TestControl[] = [];
-  constructor(container: TestElement) { this.settingEl = container.createDiv(); this.descEl = this.settingEl.createDiv(); renderedSettings.push(this); }
+  settingEl: TestElement; descEl: TestElement; controlEl: TestElement; name = ""; controls: TestControl[] = [];
+  constructor(container: TestElement) { this.settingEl = container.createDiv(); this.descEl = this.settingEl.createDiv(); this.controlEl = this.settingEl.createDiv(); renderedSettings.push(this); }
   setName(name: string): this { this.name = name; this.settingEl.createSpan({ text: name }); return this; }
   setDesc(text: string): this { this.descEl.setText(text); return this; }
   setHeading(): this { return this; }
@@ -92,3 +95,5 @@ export class Setting {
   addDropdown(callback: (control: TestControl) => void): this { return this.control("dropdown", callback); }
   addText(callback: (control: TestControl) => void): this { return this.control("text", callback); }
 }
+
+export function setIcon(element: TestElement, icon: string): void { element.setAttr("data-icon", icon); }

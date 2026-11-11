@@ -24,7 +24,7 @@ import {
   STORED_SIGNING_KEY_CORRUPTED_MESSAGE,
   type InstallationSigningProvider,
   type StoredSigningKey,
-  webCryptoInstallationSigningProvider,
+  installationSigningProvider,
 } from "./installation-signing";
 import { OBSIDIAN_CLIENT_VERSION } from "./product-config";
 
@@ -63,7 +63,7 @@ export class ActivationStore {
 
   constructor(
     private readonly app: App,
-    private readonly installationSigning: InstallationSigningProvider = webCryptoInstallationSigningProvider,
+    private readonly installationSigning: InstallationSigningProvider = installationSigningProvider,
   ) {}
 
   async client(input: {
@@ -307,7 +307,8 @@ export class ActivationStore {
     });
     this.assertCurrent(input.lifecycleRevision);
     if (response.status !== 200) {
-      if (response.status === 401 || response.status === 403) this.invalidate();
+      // A generic HTTP denial cannot distinguish revocation from a failed renewal.
+      // Reject this request, but preserve the signed installation and replay material.
       throw new Error(`设备授权续期失败：HTTP ${response.status}`);
     }
     const renewal = parsePublicCredentialRenewalResponse(response.body);

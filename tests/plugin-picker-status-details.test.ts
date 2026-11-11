@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { renderPluginPickerCoverageDetails } from "../src/plugin-picker-status-details";
 
 describe("renderPluginPickerCoverageDetails", () => {
-  it("详情保留阻断原因和来源范围，不重复卡片摘要", () => {
+  it("详情保留阻断原因和来源范围，以一次摘要呈现", () => {
     const rendered: string[] = [];
     const details = {
       createDiv(options: { readonly text?: string }) {
@@ -30,6 +30,7 @@ describe("renderPluginPickerCoverageDetails", () => {
     });
 
     expect(rendered).toEqual([
+      "可安全应用 15/466 条匹配译文，451 条暂无权威译文",
       "无法公开发布：上游许可证不在当前安全分发范围",
       "插件自带 15",
       "覆盖范围",

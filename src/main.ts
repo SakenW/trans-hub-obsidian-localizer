@@ -402,7 +402,7 @@ export default class TransHubObsidianPlugin extends Plugin {
     lifecycleRevision: number,
     onProgress?: (progress: PublishedPluginSyncProgress) => void,
   ): Promise<PluginSelectionProcessingResult> {
-    if (!this.settings.pluginTranslationEnabled) {
+    if (!this.settings.pluginTranslationEnabled || !this.isLifecycleCurrent(lifecycleRevision)) {
       return { kind: "empty", scan: { discoveredCount: 0, scannedCount: 0, changedCount: 0, stringCount: 0, selectablePluginIds: [] } };
     }
     let selectablePluginIds = this.state.enabledPluginIds;
@@ -434,8 +434,10 @@ export default class TransHubObsidianPlugin extends Plugin {
     onlyPluginIds?: readonly string[],
     sourceSelectablePluginIds?: readonly string[],
   ): Promise<PluginSyncSummary> {
+    const lifecycleRevision = this.lifecycleRevision;
     const targetLocale = this.settings.targetLocale;
     return this.pluginProcessingQueue.run(async () => {
+      if (!this.isLifecycleCurrent(lifecycleRevision)) return emptyPluginSyncSummary();
       const selectablePluginIds = sourceSelectablePluginIds
         ?? (await this.scanInstalledPluginStrings(onlyPluginIds)).selectablePluginIds;
       return this.synchronizePluginTranslationsNow(
@@ -443,6 +445,7 @@ export default class TransHubObsidianPlugin extends Plugin {
         targetLocale,
         undefined,
         selectablePluginIds,
+        lifecycleRevision,
       );
     });
   }
@@ -455,18 +458,21 @@ export default class TransHubObsidianPlugin extends Plugin {
     if (targetLocale === OBSIDIAN_SOURCE_LOCALE) {
       return emptyPluginSyncSummary();
     }
-    return this.pluginProcessingQueue.run(() => refreshConfiguredPluginStatuses({
-      apiBaseUrl: TRANS_HUB_API_BASE_URL,
-      targetLocale,
-      excludedPluginIds: this.settings.excludedPluginIds,
-      ...(onlyPluginIds === undefined ? {} : { onlyPluginIds }),
-      activationStore: this.activation,
-      getState: () => this.state,
+    return this.pluginProcessingQueue.run(async () => {
+      if (!this.isLifecycleCurrent(lifecycleRevision)) return emptyPluginSyncSummary();
+      return refreshConfiguredPluginStatuses({
+        apiBaseUrl: TRANS_HUB_API_BASE_URL,
+        targetLocale,
+        excludedPluginIds: this.settings.excludedPluginIds,
+        ...(onlyPluginIds === undefined ? {} : { onlyPluginIds }),
+        activationStore: this.activation,
+        getState: () => this.state,
         replaceState: (state) => {
           if (this.isLifecycleCurrent(lifecycleRevision)) this.state = state;
         },
         save: () => this.savePluginDataForLifecycle(lifecycleRevision),
-    }));
+      });
+    });
   }
 
   private async synchronizePluginTranslationsNow(

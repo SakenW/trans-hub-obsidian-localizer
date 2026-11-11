@@ -73,6 +73,7 @@ function displayNameState(pluginId: string, officialName: string, localizedName:
             pluginId,
             source: officialName,
             target: localizedName,
+            provenanceKind: "th-reviewed-fill",
           }],
           pulledAt: "now",
         },
@@ -568,7 +569,7 @@ describe("selectApplicablePluginTranslations", () => {
           sourceVersionId: "v",
           targetLocale: "zh-CN",
           entries: [
-            { pluginId: "sample", source: "Sample", target: "示例插件" },
+            { pluginId: "sample", source: "Sample", target: "示例插件", provenanceKind: "th-reviewed-fill" as const },
             { pluginId: "sample", source: "Sample description", target: "示例说明" },
           ],
           pulledAt: "now",
@@ -581,7 +582,7 @@ describe("selectApplicablePluginTranslations", () => {
       pluginMetadataTranslationEnabled: true,
       targetLocale: "zh-CN",
     })).toEqual([
-      { pluginId: "sample", source: "Sample", target: "示例插件", scopes: ["metadata"] },
+      { pluginId: "sample", source: "Sample", target: "示例插件", provenanceKind: "th-reviewed-fill", scopes: ["metadata"] },
       { pluginId: "sample", source: "Sample description", target: "示例说明", scopes: ["metadata"] },
     ]);
     expect(selectApplicablePluginTranslations(state, {
@@ -628,6 +629,21 @@ describe("selectApplicablePluginTranslations", () => {
     controller.applyPluginDisplayNames();
     expect(manifests["obsidian-advanced-uri"]?.name).toBe("Advanced URI");
     expect(manifests["better-plugins-manager"]?.name).toBe("Better Manager");
+  });
+
+  it("restores a poisoned in-memory manifest and settings title from its exact official catalog", () => {
+    const pluginId = "templater-obsidian";
+    const poisoned = "y18sxi3vr1dig9mzngmf";
+    const manifests = { [pluginId]: { name: poisoned } };
+    const item = new FakeNavItem(pluginId, poisoned);
+    const app = { plugins: { manifests }, setting: { win: { document: settingsDocument([item]) } } } as unknown as App;
+    const state = { ...displayNameState(pluginId, "Templater", "模板插件"), pluginTranslations: {} };
+    const controller = automationController(app, state);
+    controller.applyPluginDisplayNames();
+    controller.localizeSettingsWindowNavigation();
+    expect(manifests[pluginId].name).toBe("Templater");
+    expect(item.title.textContent).toBe("Templater");
+    controller.stop();
   });
 
   it("keeps metadata names restored across periodic passes while master localization is off", () => {

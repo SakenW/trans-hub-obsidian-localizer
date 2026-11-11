@@ -13,6 +13,7 @@ import { WebCryptoEd25519ManifestVerifier } from "@trans-hub/translation-export-
 import type { App, Vault } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createEd25519Runtime, ed25519Runtime } from "../src/ed25519-runtime";
 import { ObsidianHttpTransport } from "../src/http-transport";
 import type { ActivationStore } from "../src/activation";
 import { PluginAutomationController } from "../src/plugin-automation";
@@ -149,8 +150,8 @@ describe("Obsidian public distribution loopback component integration", () => {
     });
   }
 
-  it("verifies signed revision 3 bytes over loopback and applies then restores exact runtime text", async () => {
-    await withFixture({}, async (fixture) => {
+  it.each([false, true])("verifies signed revision 3 bytes over loopback and applies then restores exact runtime text (WASM=%s)", async (wasm) => {
+    await withFixture({ wasm }, async (fixture) => {
       const output = await fixture.download();
       expect(output.status).toBe("updated");
       expect(output.manifest.revision).toBe(3);
@@ -258,8 +259,8 @@ describe("Obsidian public distribution loopback component integration", () => {
     ["generation-rollback", "translation_manifest_generation_rollback"],
     ["generation-conflict", "translation_manifest_generation_conflict"],
   ] as const) {
-    it(`fails closed without cache or apply for ${mode}`, async () => {
-      await withFixture({ mode }, async (fixture) => {
+    it.each([false, true])(`fails closed without cache or apply for ${mode} (WASM=%s)`, async (wasm) => {
+      await withFixture({ mode, wasm }, async (fixture) => {
         const host = runtimeHostFixture("Settings");
         let state = EMPTY_PLUGIN_STATE;
         const controller = new PluginAutomationController({
@@ -295,7 +296,7 @@ describe("Obsidian public distribution loopback component integration", () => {
 });
 
 async function withFixture(
-  options: Readonly<{ mode?: FailureMode }>,
+  options: Readonly<{ mode?: FailureMode; wasm?: boolean }>,
   run: (fixture: Awaited<ReturnType<typeof startFixture>>) => Promise<void>,
 ): Promise<void> {
   const fixture = await startFixture(options);
@@ -306,8 +307,13 @@ async function withFixture(
   }
 }
 
-async function startFixture(options: Readonly<{ mode?: FailureMode }>) {
+async function startFixture(options: Readonly<{ mode?: FailureMode; wasm?: boolean }>) {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
+  if (options.wasm) {
+    vi.spyOn(crypto.subtle, "generateKey").mockRejectedValue(new DOMException("Unavailable", "NotSupportedError"));
+    const runtime = createEd25519Runtime();
+    vi.spyOn(ed25519Runtime, "verify").mockImplementation((publicKey, signature, message) => runtime.verify(publicKey, signature, message));
+  }
   const keys = fixtureKeyPair();
   const adapter = new RecordingVaultAdapter();
   const pack = translationPackBytes();
@@ -478,7 +484,7 @@ async function startFixture(options: Readonly<{ mode?: FailureMode }>) {
     targetLocale: "zh-CN",
     packStore: new ObsidianTranslationPackStore(vaultFixture(adapter), "trans-hub-plugin-localizer"),
     developmentDownloadOrigin: origin,
-    manifestVerifier: verifier,
+    ...(options.wasm ? {} : { manifestVerifier: verifier }),
     expectedPluginId: PLUGIN_ID,
     ...((cached ?? previous) === undefined ? {} : { previous: cached ?? previous }),
   });

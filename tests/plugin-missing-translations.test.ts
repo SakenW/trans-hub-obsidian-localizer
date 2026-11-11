@@ -25,6 +25,22 @@ describe("unmatched interface text", () => {
       { source: "示例文字", reason: "原文含中文，保留原文" },
     ]);
   });
+  it("keeps CSS with visible text and prose that describes a CSS example in the missing list", () => {
+    const sources = [
+      ".arrow{display:flex;width:24px}.dot{fill:var(--color-dot)}",
+      ".tip{content:attr(data-label)}",
+      "Use .tip{display:block} to show the hint",
+      "[!important]",
+      "{$1}",
+      "{$1} Files",
+    ];
+    const current = { ...catalog, strings: sources.map((source) => ({
+      ...catalog.strings[0], source, key: source,
+    })) };
+    expect(describeMissingTranslations(current, translation).map(({ source }) => source))
+      .toEqual([sources[1], sources[2], sources[5]]);
+  });
+
   it("does not infer a server backlog from an absent cross-version pack entry", () => {
     expect(describeMissingTranslations(catalog, { ...translation, authorityPluginVersion: "2.0" })
       .find((entry) => entry.source === "Missing text")?.reason).toBe("跨版本匹配未找到可用译文，保留本机原文");

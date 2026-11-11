@@ -7,11 +7,13 @@ import {
 } from "./plugin-string-scanner";
 import type { PluginTranslationState } from "./plugin-state";
 import type { PluginUiTranslation } from "./plugin-ui-runtime";
+import { allowsOfficialNameTranslation, isStandaloneCalloutMarker, preservesCalloutMarkers } from "./plugin-protected-text";
 
 export interface PluginTranslationCoverage {
   readonly totalCount: number;
   readonly translatedCount: number;
   readonly missingCount: number;
+  readonly preservedCount?: number;
   readonly staleCount: number;
   readonly percent: number;
   readonly exactPluginVersion: boolean;
@@ -102,9 +104,49 @@ export function isPluginInterfaceString(item: PluginUiCatalog["strings"][number]
     && resolvePluginStringScopes(item.origins).some((scope) => scope === "runtime-ui" || scope === "metadata");
 }
 
+function isPreservedInterfaceSource(
+  source: string,
+  items: readonly PluginUiCatalog["strings"][number][],
+): boolean {
+  if (isStandaloneCalloutMarker(source)) return true;
+  if (/^\s*(?:(?:\{\{th:expr:\d+\}\}|\{\$?\d+\}|%[sdif])\s*)+$/u.test(source)) return true;
+  if (items.every((item) => item.origins.every((origin) => origin === "ui-property" || origin === "ui-call"))
+    && isStylesheetLiteral(source)) return true;
+  return items.length > 0 && items.every((item) =>
+    (item.semanticRole ?? resolvePluginStringSemanticRole(item.origins)) === "official-name"
+    && item.origins.some((origin) => origin === "manifest.name" || origin === "registry.name")
+    && !item.origins.some((origin) => origin === "manifest.description" || origin === "registry.description"),
+  );
+}
+
+export function hasOnlyPreservedInterfaceText(catalog: PluginUiCatalog): boolean {
+  const sources = groupCatalogStringsBySource({ strings: catalog.strings.filter(isPluginInterfaceString) });
+  return sources.size > 0 && [...sources].every(([source, items]) =>
+    isPreservedInterfaceSource(source, items),
+  );
+}
+
+function isStylesheetLiteral(source: string): boolean {
+  const text = source.trim().replace(/\{\{th:expr:\d+\}\}/gu, "placeholder");
+  // Match complete selector blocks. Leave snippets with quoted text or CSS content
+  // alone because they may contain copy intended for the user.
+  const blocks = text.matchAll(/([.#][\w-][\w.#,:()\s>+~*-]*)\{([^{}"'<>]+)\}\s*/gu);
+  let offset = 0;
+  for (const block of blocks) {
+    if (block.index !== offset) return false;
+    const declarations = (block[2] ?? "").trim().replace(/;$/u, "").split(";");
+    if (!declarations.every((declaration) =>
+      /^\s*(?!content\s*:)(?:--)?[a-z][a-z-]*\s*:\s*[^;\s][^;]*$/iu.test(declaration),
+    )) return false;
+    offset += block[0].length;
+  }
+  return offset > 0 && offset === text.length;
+}
+
 export function unmatchedPluginInterfaceStrings(
   catalog: PluginUiCatalog,
   translation: PluginTranslationState,
+  coverageMode: "all" | "translatable" = "all",
 ): readonly string[] {
   const current = mergeCatalogNativeTranslations(catalog, translation);
   const groups = groupCatalogStringsBySource(catalog);
@@ -112,13 +154,17 @@ export function unmatchedPluginInterfaceStrings(
   const matched = new Set(current.entries.filter((entry) =>
     isCompatibleCatalogEntry(entry, groups.get(entry.source), crossVersion)).map((entry) => entry.source));
   return [...new Set(catalog.strings.filter(isPluginInterfaceString).map((item) => item.source))]
-    .filter((source) => !matched.has(source));
+    .filter((source) => !matched.has(source)
+      && (coverageMode === "all" || !isPreservedInterfaceSource(
+        source, groups.get(source)?.filter(isPluginInterfaceString) ?? [],
+      )));
 }
 
 export function calculatePluginTranslationCoverage(
   catalog: PluginUiCatalog | undefined,
   translation: PluginTranslationState | undefined,
   targetLocale: string,
+  coverageMode: "all" | "translatable" = "all",
 ): PluginTranslationCoverage | undefined {
   if (catalog === undefined || translation?.targetLocale !== targetLocale) return undefined;
   const effectiveTranslation = mergeCatalogNativeTranslations(catalog, translation);
@@ -153,6 +199,14 @@ export function calculatePluginTranslationCoverage(
       crossVersion,
     ))
     .map((entry) => entry.source));
+  const preservedSources = new Set<string>();
+  if (coverageMode === "translatable") {
+    for (const [source, items] of currentSources) {
+      if (!translatedSources.has(source) && isPreservedInterfaceSource(source, items)) {
+        preservedSources.add(source);
+      }
+    }
+  }
   const staleCount = new Set(effectiveTranslation.entries
     .map((entry) => entry.source)
     .filter((source) => !allCatalogSources.has(source))).size;
@@ -195,10 +249,22 @@ export function calculatePluginTranslationCoverage(
       0,
     )
     : 0;
-  const totalCount = primaryRuntimeScope?.unitCount ?? (authorityCatalogCoversLocalCatalog && !authorityIncludesReadme
-    ? authorityIdentity.unitCount
-    : currentSources.size);
-  const translatedCount = Math.min(totalCount, primaryTranslatedSources.size + nativeCountWithoutEntries);
+  const authorityDefinesTotal = primaryRuntimeScope !== undefined
+    || (authorityCatalogCoversLocalCatalog && !authorityIncludesReadme);
+  const originalTotal = primaryRuntimeScope?.unitCount
+    ?? (authorityDefinesTotal ? authorityIdentity?.unitCount ?? currentSources.size : currentSources.size);
+  // An anonymous native count may already cover one of the preserved strings.
+  // A different authority catalog may also have counted different strings.
+  const sameCatalog = catalog.catalogIdentity !== undefined
+    && catalog.catalogIdentity.digest === authorityIdentity?.digest;
+  const translatedCount = Math.min(originalTotal, primaryTranslatedSources.size + nativeCountWithoutEntries);
+  const preservedCount = !authorityDefinesTotal || sameCatalog
+    ? Math.min(
+      originalTotal - translatedCount,
+      Math.max([...preservedSources].filter((source) => primarySources.has(source)).length - nativeCountWithoutEntries, 0),
+    )
+    : 0;
+  const totalCount = originalTotal - preservedCount;
   const authorityScopeTotals = authorityCatalogCoversLocalCatalog
     ? new Map(authorityIdentity.scopes.map((item) => [item.scope, item.unitCount]))
     : undefined;
@@ -206,19 +272,27 @@ export function calculatePluginTranslationCoverage(
     const sources = new Set(canonicalStrings
       .filter((item) => resolvePluginStringScopes(item.origins).includes(scope))
       .map((item) => item.source));
-    const scopeTotal = authorityScopeTotals?.get(scope) ?? sources.size;
-    if (scopeTotal === 0) return [];
+    const authorityScopeTotal = authorityScopeTotals?.get(scope);
+    const originalScopeTotal = authorityScopeTotal ?? sources.size;
     const translatedInEntries = [...sources].filter((source) => translatedSources.has(source)).length;
     const attributedNativeInScope = [...attributedNativeSources]
       .filter((source) => sources.has(source)).length;
     const scopedNativeWithoutEntries = nativeCoverageAligned
       ? Math.max(
-        Math.min(effectiveTranslation.upstreamScopeCoverage?.[scope] ?? 0, scopeTotal)
+        Math.min(effectiveTranslation.upstreamScopeCoverage?.[scope] ?? 0, originalScopeTotal)
           - attributedNativeInScope,
         0,
       )
       : 0;
-    const translated = Math.min(scopeTotal, translatedInEntries + scopedNativeWithoutEntries);
+    const translated = Math.min(originalScopeTotal, translatedInEntries + scopedNativeWithoutEntries);
+    const scopePreserved = authorityScopeTotal === undefined || sameCatalog
+      ? Math.min(
+        originalScopeTotal - translated,
+        Math.max([...preservedSources].filter((source) => sources.has(source)).length - scopedNativeWithoutEntries, 0),
+      )
+      : 0;
+    const scopeTotal = originalScopeTotal - scopePreserved;
+    if (scopeTotal === 0) return [];
     return [{
       scope,
       totalCount: scopeTotal,
@@ -231,6 +305,7 @@ export function calculatePluginTranslationCoverage(
     totalCount,
     translatedCount,
     missingCount: Math.max(totalCount - translatedCount, 0),
+    ...(preservedCount > 0 ? { preservedCount } : {}),
     staleCount,
     percent: totalCount === 0 || translatedCount >= totalCount ? 100 : Math.min(99, Math.round((translatedCount / totalCount) * 100)),
     exactPluginVersion: authorityPluginVersion(effectiveTranslation) === catalog.pluginVersion,
@@ -262,7 +337,13 @@ export function mergeCatalogNativeTranslations(
 ): PluginTranslationState {
   if (catalog === undefined) return translation;
   const entries = new Map(translation.entries.map((entry) => [entry.source, entry]));
-  const nativeTargets = failClosedCatalogNativeTargets(catalog, translation.targetLocale);
+  const nativeTargets = new Map(failClosedCatalogNativeTargets(catalog, translation.targetLocale));
+  if (catalog.sourceLocale === translation.targetLocale) {
+    for (const item of catalog.strings) {
+      const source = item.source.normalize("NFC").trim();
+      nativeTargets.set(source, source);
+    }
+  }
   const originsBySource = new Map(catalog.strings.map((item) => [
     item.source.normalize("NFC").trim(),
     item.origins,
@@ -340,6 +421,8 @@ export function selectCurrentCatalogTranslations(
       void compatibilityEvidence;
       return {
         ...runtimeEntry,
+        ...(catalogBySource.get(entry.source)?.nativeSource === undefined
+          ? {} : { nativeSource: catalogBySource.get(entry.source)?.nativeSource }),
         scopes: resolvePluginStringScopes(catalogBySource.get(entry.source)?.origins ?? []),
       };
     });
@@ -406,6 +489,7 @@ export type PluginCatalogMatchFailure =
   | "missing-compatibility"
   | "semantic-role"
   | "content-scopes"
+  | "official-name"
   | "format";
 
 export function pluginCatalogMatchFailure(
@@ -415,6 +499,10 @@ export function pluginCatalogMatchFailure(
 ): PluginCatalogMatchFailure | null {
   if (candidates?.length !== 1) return "ambiguous-source";
   const source = candidates[0];
+  if (!preservesCalloutMarkers(entry.source, entry.target)) return "format";
+  if (source !== undefined
+    && (source.semanticRole ?? resolvePluginStringSemanticRole(source.origins)) === "official-name"
+    && !allowsOfficialNameTranslation(entry)) return "official-name";
   if (source === undefined
     || placeholderSignature(entry.source) !== source.placeholderSignature
     || placeholderSignature(entry.target) !== source.placeholderSignature) return "placeholder";

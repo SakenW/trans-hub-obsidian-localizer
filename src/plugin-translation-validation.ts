@@ -8,6 +8,8 @@ import type { PluginTranslationState } from "./plugin-state";
 import type { PublishedPluginSource } from "./plugin-source-resolution";
 import type { PluginUiTranslation } from "./plugin-ui-runtime";
 import type { TargetLocale } from "./product-config";
+import { contaminatedMachineBatch, suspiciousMachineTarget } from "./plugin-machine-target-safety";
+import { isProtectedPluginTextSafe } from "./plugin-protected-text";
 
 /** Pure semantic intersection between a verified export and local scan. */
 export function validatePluginTranslations(
@@ -33,6 +35,11 @@ export function validatePluginTranslations(
     candidates.push(item);
     sourcesByKey.set(item.key, candidates);
   }
+  const contaminated = contaminatedMachineBatch(rows.map((row) => ({
+    source: sourcesByKey.get(row.stringKey)?.[0]?.source ?? "",
+    target: row.translatedText,
+    provenanceKind: row.provenanceKind,
+  })));
   const matchingRows = rows.filter((row) => {
     const sources = sourcesByKey.get(row.stringKey);
     if (sources?.length !== 1) return false;
@@ -49,10 +56,14 @@ export function validatePluginTranslations(
       if (crossVersion) return [];
       throw new Error(`插件译文为空：${row.stringKey}`);
     }
+    if (!isProtectedPluginTextSafe({ source: source.source, target, provenanceKind: row.provenanceKind },
+      source.semanticRole ?? resolvePluginStringSemanticRole(source.origins))) return [];
     if (!hasCompatiblePlaceholderSignature(source.source, target)) {
       if (crossVersion) return [];
       throw new Error(`插件译文占位符不匹配：${catalog.pluginId}:${row.stringKey}`);
     }
+    if (row.provenanceKind === "th-automatic"
+      && suspiciousMachineTarget(source.source, target)) return [];
     const nativeTarget = row.nativeTarget?.normalize("NFC").trim();
     if (row.application === "correction") {
       if (row.provenanceKind !== "th-reviewed-correction" || nativeTarget === undefined || nativeTarget === "") {
@@ -97,7 +108,7 @@ export function validatePluginTranslations(
       throw new Error(`插件译文同源 occurrence 冲突：${catalog.pluginId}:${entry.source}`);
     }
   }
-  const entries = [...entriesBySource.values()];
+  const entries = contaminated ? [] : [...entriesBySource.values()];
   return {
     pluginId: catalog.pluginId,
     pluginVersion: catalog.pluginVersion,

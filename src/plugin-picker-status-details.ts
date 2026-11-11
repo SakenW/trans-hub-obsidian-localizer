@@ -36,10 +36,14 @@ export function renderPluginPickerCoverageDetails(
   summary: PluginLocalizationCoverageSummary,
 ): void {
   const details = container.createDiv({ cls: "trans-hub-plugin-picker__catalog-details" });
+  details.createDiv({
+    text: summary.headline,
+    cls: "trans-hub-plugin-picker__catalog-applied",
+  });
   if (summary.notice !== undefined) {
     details.createDiv({
       text: summary.notice,
-      cls: "trans-hub-plugin-picker__provenance",
+      cls: "trans-hub-plugin-picker__detail-notice",
     });
   }
   if (summary.sourceMetrics.length > 0) {

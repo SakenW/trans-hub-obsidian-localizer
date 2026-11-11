@@ -40,9 +40,9 @@ describe("errorMessage", () => {
     );
   });
 
-  it("将设备续期 401 转换为无需手动清理的重新连接提示", () => {
-    expect(errorMessage(new Error("设备授权续期失败：HTTP 401"))).toBe(
-      "此设备的语枢授权已失效，请重新连接。已缓存译文仍可继续使用。",
+  it.each([401, 403])("续期 HTTP %i 不提示授权已撤销或清理连接", (status) => {
+    expect(errorMessage(new Error(`设备授权续期失败：HTTP ${status}`))).toBe(
+      "设备授权续期未成功。连接材料和缓存译文已保留；持续失败时请核对授权。",
     );
   });
 });

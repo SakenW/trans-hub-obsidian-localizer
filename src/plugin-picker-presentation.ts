@@ -41,6 +41,13 @@ export function presentPluginLocalization(input: {
     case "failed": kind = "attention"; break;
     case "preserved-source": kind = "preserved-source"; break;
   }
+  if (kind === "partial") {
+    const coverage = input.localization.coverage;
+    if (coverage?.versionMatchLabel !== undefined) return { kind, label: coverage.versionMatchLabel };
+    if (coverage?.missingCount !== undefined) {
+      return { kind, label: translate("部分可用，缺 {count} 条", { count: coverage.missingCount }) };
+    }
+  }
   return {
     kind,
     label: (kind === "processing" && !input.processing && input.localization.kind === "waiting")

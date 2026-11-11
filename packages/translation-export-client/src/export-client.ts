@@ -138,6 +138,21 @@ export class TranslationExportClient<
       if (ticket === undefined)
         throw new Error(`translation_ticket_missing:${pack.packId}`);
       const allowedOrigin = this.allowedDownloadOrigin(resolved.manifest);
+      // A small clock difference can place a fresh ticket just in the future.
+      // Wait for its actual validity; never widen the accepted time window.
+      let startsInMs = (ticket.issuedAtEpochMs ?? this.now()) - this.now();
+      if (startsInMs > 0 && startsInMs <= 2_000) {
+        let waitBudgetMs = 2_000;
+        while (startsInMs > 0 && waitBudgetMs > 0) {
+          // Timer completion does not guarantee that the wall clock has crossed
+          // issuedAt. A minimum retry delay avoids spinning over a 1ms gap;
+          // debiting every scheduled delay also bounds frozen-clock retries.
+          const delayMs = Math.min(waitBudgetMs, Math.max(10, Math.ceil(startsInMs)));
+          await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+          waitBudgetMs -= delayMs;
+          startsInMs = (ticket.issuedAtEpochMs ?? this.now()) - this.now();
+        }
+      }
       this.assertTicket(ticket, pack, resolved.manifest);
       assertSafeDownloadUrl(
         ticket.url,

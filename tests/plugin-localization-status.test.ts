@@ -53,6 +53,44 @@ describe("describePluginLocalizationStatus", () => {
     });
   });
 
+  it("excludes text that should stay original and keeps mixed translatable text in the gap", () => {
+    const catalog = {
+      pluginId: "dataview", pluginName: "Dataview", pluginVersion: "0.5.68",
+      sourceLocale: "en", digest: "current", artifactDigest: "artifact", scannedAt: "2026-11-11T00:00:00Z",
+      strings: [
+        { key: "name", source: "Dataview", origins: ["manifest.name", "ui-call"] as const, placeholderSignature: "" },
+        { key: "marker", source: "[!important]", origins: ["ui-call"] as const, placeholderSignature: "" },
+        { key: "placeholder", source: "{$1}", origins: ["ui-call"] as const, placeholderSignature: "" },
+        { key: "css", source: ".arrow.svelte{display:flex;width:24px}.dot{fill:var(--color-dot)}", origins: ["ui-property"] as const, placeholderSignature: "" },
+        { key: "message", source: "[!important] Read this", origins: ["ui-call"] as const, placeholderSignature: "" },
+        { key: "settings", source: "Settings", origins: ["ui-call"] as const, placeholderSignature: "" },
+      ],
+    };
+    const translation = {
+      pluginId: catalog.pluginId, pluginVersion: catalog.pluginVersion, sourceVersionId: "source",
+      targetLocale: "zh-CN", pulledAt: "2026-11-11T00:00:00Z",
+      entries: [{ pluginId: catalog.pluginId, source: "Settings", target: "设置" }],
+    };
+    const partial = describePluginLocalizationStatus({ catalog, translation, targetLocale: "zh-CN" });
+    expect(partial.coverage?.complete).toBe(false);
+    expect(partial.coverage?.headline).toContain("1/2");
+    expect(partial.coverage?.scopeMetrics).toContain("另有 4 条无需翻译，保留原文");
+
+    const complete = describePluginLocalizationStatus({
+      catalog, targetLocale: "zh-CN",
+      translation: { ...translation, entries: [
+        ...translation.entries,
+        { pluginId: catalog.pluginId, source: "[!important] Read this", target: "[!important] 请阅读" },
+      ] },
+    });
+    expect(complete.coverage?.complete).toBe(true);
+    expect(complete.coverage?.headline).toContain("2/2");
+    expect(describePluginLocalizationStatus({
+      catalog: { ...catalog, strings: catalog.strings.filter(({ key }) => key !== "message" && key !== "settings") },
+      targetLocale: "zh-CN",
+    }).kind).toBe("preserved-source");
+  });
+
   it("prioritizes connection state over stale cached server progress", () => {
     const cachedTranslation = {
       pluginId: "dataview",
@@ -747,7 +785,9 @@ describe("describePluginLocalizationStatus", () => {
     })).toMatchObject({
       kind: "localized",
       coverage: {
-        headline: "已获取 1/2 条匹配界面译文，1 条保留原文；本机插件 0.5.69，译文来源 0.5.70；仅应用可匹配的文案，更新插件后会重新匹配",
+        headline: "本机已匹配 1/2 条界面文案，1 条保留原文；本机插件 0.5.69，译文来源 0.5.70；仅应用可匹配的文案，更新插件后会重新匹配",
+        versionMatchLabel: "本机匹配 1/2",
+        translationSourceVersion: "0.5.70",
         complete: false,
       },
     });
@@ -1131,7 +1171,7 @@ describe("describePluginLocalizationStatus", () => {
       targetLocale: "zh-CN",
     });
 
-    expect(status.label).toContain("已获取 1/2 条匹配译文（50%），1 条尚未发布");
+    expect(status.label).toContain("已获取 1/2 条匹配译文（50%），1 条暂无匹配译文");
     expect(status.label).not.toContain("插件自带");
     expect(status.coverage?.sourceMetrics).toEqual([
       { label: "语枢机翻 1（未经人工校对）", tone: "automatic" },

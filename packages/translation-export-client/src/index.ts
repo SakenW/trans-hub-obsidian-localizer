@@ -4,3 +4,4 @@ export * from "./endpoint";
 export * from "./export-client";
 export * from "./fetch-downloader";
 export * from "./manifest";
+export * from "./license-compliance";

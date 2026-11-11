@@ -140,7 +140,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
   let updatedCount = 0;
   let updatedTranslationCount = 0;
   let waitingCount = 0;
-  const exportPendingCount = 0;
+  let exportPendingCount = 0;
   let translationCount = 0;
   const waitingPluginIds: string[] = [];
   const exportPendingPluginIds: string[] = [];
@@ -313,7 +313,7 @@ export async function synchronizeConfiguredPluginTranslations(input: {
             throw new Error("服务器公开目录与译文制品状态不一致，请稍后重试。");
           }
           const catalogUnitCount = new Set(catalog.strings.map((item) => item.source)).size;
-          if (published.upstreamNativeCount >= catalogUnitCount || hasRetainedLocalEntries) {
+          if (published.upstreamNativeCount >= catalogUnitCount) {
             pulledCount += 1;
           } else {
             deliveryWaiting = true;
@@ -333,6 +333,15 @@ export async function synchronizeConfiguredPluginTranslations(input: {
           && localCatalogUnitCount > published.sourceUnitCount;
         if (!publishedTranslationCoverageIncomplete && !publishedCatalogNeedsExpansion) {
           if (deliveryWaiting) {
+            if (hasRetainedLocalEntries) {
+              // Retained text remains usable, but a missing manifest cannot
+              // establish that it is current. Retry delivery without a new intent.
+              waitingCount += 1;
+              waitingPluginIds.push(catalog.pluginId);
+              exportPendingCount += 1;
+              exportPendingPluginIds.push(catalog.pluginId);
+              continue;
+            }
             throw new Error("服务器公开目录与译文制品状态不一致，请稍后重试。");
           }
           if (existingSubmission !== undefined) {

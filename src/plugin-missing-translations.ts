@@ -10,6 +10,7 @@ const MATCH_FAILURE_LABELS: Readonly<Record<PluginCatalogMatchFailure, string>> 
   "semantic-role": "界面语义不一致，保留原文",
   "content-scopes": "内容范围不一致，保留原文",
   format: "文本格式不一致，保留原文",
+  "official-name": "插件正式名称未经审核，保留原名",
 };
 
 export function describeMissingTranslations(catalog: PluginUiCatalog, translation: PluginTranslationState): readonly {
@@ -21,7 +22,7 @@ export function describeMissingTranslations(catalog: PluginUiCatalog, translatio
     candidates.set(item.source, [...(candidates.get(item.source) ?? []), item]);
   }
   const crossVersion = (translation.authorityPluginVersion ?? translation.pluginVersion) !== catalog.pluginVersion;
-  return unmatchedPluginInterfaceStrings(catalog, translation).map((source) => {
+  return unmatchedPluginInterfaceStrings(catalog, translation, "translatable").map((source) => {
     const entry = entries.get(source);
     let reason: string;
     if (/^zh(?:-|$)/u.test(translation.targetLocale) && /\p{Script=Han}/u.test(source) && !/[A-Za-z]/u.test(source)) reason = translate("原文含中文，保留原文");

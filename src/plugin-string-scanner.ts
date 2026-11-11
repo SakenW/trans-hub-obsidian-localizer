@@ -68,6 +68,7 @@ export async function scanPluginUiStrings(input: {
   readonly sourceLocale: string;
   /** The active target locale; used only for local upstream-native detection. */
   readonly targetLocale?: string;
+  readonly displayLocale?: string;
   readonly now?: () => Date;
   /** Local diagnostics only; never includes source text or user content. */
   readonly onPhaseMeasured?: (phase: string, elapsedMs: number) => void;
@@ -83,6 +84,7 @@ export async function scanPluginUiStrings(input: {
     ? undefined
     : canonicalLocale(input.targetLocale);
   const collected = new Map<string, CandidateAggregate>();
+  const displayLocale = input.displayLocale === undefined ? undefined : canonicalLocale(input.displayLocale);
 
   addMetadataCandidates(input, collected, sourceLocale);
 
@@ -93,6 +95,14 @@ export async function scanPluginUiStrings(input: {
     targetLocale,
   );
   finishPhase("embedded-catalog");
+  // Reuse the proven static catalog parser for the language the host actually
+  // renders. Never execute plugin code or change the host's global language.
+  const nativeSources = displayLocale === undefined || displayLocale === sourceLocale
+    || displayLocale === targetLocale || embeddedCatalog.nativeTargets === null
+    ? new Map<string, string>()
+    : (await collectEmbeddedEnglishCatalog(input.bundle, new Map(), sourceLocale, displayLocale)).nativeTargets
+      ?? new Map<string, string>();
+  finishPhase("embedded-display-catalog");
   // Embedded catalogs are often partial, so hardcoded UI scanning always
   // continues. Structured parsing owns the normal path; damaged/unbalanced
   // bundles fail over to the conservative regex exits only.
@@ -112,6 +122,8 @@ export async function scanPluginUiStrings(input: {
       origins: [...aggregate.origins].sort(),
       semanticRole: resolvePluginStringSemanticRole(aggregate.origins),
       placeholderSignature: placeholderSignature(source),
+      ...(nativeSources.has(source.normalize("NFC"))
+        ? { nativeSource: nativeSources.get(source.normalize("NFC")) } : {}),
       ...(targetLocale === undefined || nativeTargets.get(source.normalize("NFC")) === undefined
         ? {}
         : {
@@ -166,6 +178,7 @@ export async function scanPluginUiStrings(input: {
     digest: catalogIdentity.digest,
     artifactDigest,
     ...(targetLocale === undefined ? {} : { scannerTargetLocale: targetLocale }),
+    ...(displayLocale === undefined ? {} : { scannerDisplayLocale: displayLocale }),
     // Semantic role participates in cross-version compatibility. Re-scan
     // persisted catalogs that used the old README-first ordering.
     patchEvidenceRevision: PLUGIN_STRING_SCANNER_REVISION,

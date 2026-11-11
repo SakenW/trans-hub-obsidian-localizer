@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Platform } from "obsidian";
-import { CURRENT_PROTOCOL_VERSION } from "@trans-hub/client-protocol";
+import { CURRENT_PROTOCOL_VERSION, type BootstrapResponse } from "@trans-hub/client-protocol";
 
 import { ActivationStore } from "../src/activation";
 import {
@@ -9,6 +9,7 @@ import {
   type InstallationSigningProvider,
 } from "../src/installation-signing";
 import { OBSIDIAN_AUTH_CALLBACK_ACTION } from "../src/product-config";
+import { resetRequestUrlHandler, setRequestUrlHandler } from "./obsidian-mock";
 
 const INSTALLATION_SECRET_ID = "trans-hub-obsidian-public-installation-v1";
 const SIGNING_KEY_SECRET_ID = "trans-hub-obsidian-public-installation-key-v1";
@@ -16,6 +17,7 @@ const PENDING_AUTHORIZATION_SECRET_ID = "trans-hub-obsidian-public-authorization
 const PENDING_RENEWAL_SECRET_ID = "trans-hub-obsidian-public-renewal-v1";
 
 afterEach(() => {
+  resetRequestUrlHandler();
   vi.restoreAllMocks();
 });
 
@@ -207,6 +209,126 @@ describe("ActivationStore browser enrollment", () => {
     expect(secrets.get(SIGNING_KEY_SECRET_ID)).toBe("");
   });
 });
+
+describe("ActivationStore credential renewal", () => {
+  it.each([401, 403, 503])("rejects HTTP %i without destroying the installation or replay material", async (status) => {
+    const { activation, secrets } = await expiredCredential();
+    const installation = secrets.get(INSTALLATION_SECRET_ID);
+    const key = secrets.get(SIGNING_KEY_SECRET_ID);
+    const request = vi.fn(() => Promise.resolve({ status, text: "", headers: {} }));
+    setRequestUrlHandler(request);
+
+    await expect(activation.client({ apiBaseUrl: renewalApi }))
+      .rejects.toThrow(`设备授权续期失败：HTTP ${status}`);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(secrets.get(INSTALLATION_SECRET_ID)).toBe(installation);
+    expect(secrets.get(SIGNING_KEY_SECRET_ID)).toBe(key);
+    expect(secrets.get(PENDING_RENEWAL_SECRET_ID)).toBeTruthy();
+    expect(activation.requiresReconnect()).toBe(false);
+  });
+
+  it.each([false, true])("renews an expired credential with a live challenge (response lost: %s)", async (lost) => {
+    const { activation, bootstrap, secrets } = await expiredCredential();
+    const requests: RenewalWire[] = [];
+    setRequestUrlHandler((input) => {
+      const request = input as { url: string; method: string; headers: Record<string, string>; body: string };
+      expect(request.url).toBe(`${renewalApi}/v1/public-client/credentials/renew`);
+      expect(request.method).toBe("POST");
+      expect(request.headers.Authorization).toBe(`Bearer ${bootstrap.intakeCredential.value}`);
+      const body = JSON.parse(request.body) as RenewalWire;
+      requests.push(body);
+      if (lost && requests.length === 1) return Promise.reject(new Error("synthetic response lost"));
+      return Promise.resolve({
+        status: 200,
+        headers: {},
+        text: JSON.stringify({
+          kind: "public_credential_renewal_response",
+          protocol: CURRENT_PROTOCOL_VERSION,
+          installationId: bootstrap.installationId,
+          installationKeyId: bootstrap.installationKeyId,
+          serverChallenge: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+          challengeExpiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+          intakeCredential: {
+            ...bootstrap.intakeCredential,
+            sessionId: "44444444-4444-4444-8444-444444444444",
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 86400000).toISOString(),
+            value: `${body.newIntakeCredential.tokenPrefix}.${body.newIntakeCredential.secret}`,
+          },
+        }),
+      });
+    });
+    if (lost) {
+      await expect(activation.client({ apiBaseUrl: renewalApi })).rejects.toThrow("synthetic response lost");
+      expect(secrets.get(PENDING_RENEWAL_SECRET_ID)).toBeTruthy();
+    }
+    const result = await activation.client({ apiBaseUrl: renewalApi });
+    expect(requests).toHaveLength(lost ? 2 : 1);
+    if (lost) {
+      expect(requests[1]?.idempotencyKey).toBe(requests[0]?.idempotencyKey);
+      expect(requests[1]?.newIntakeCredential).toEqual(requests[0]?.newIntakeCredential);
+      expect(requests[1]?.installationProof.nonce).toBe(requests[0]?.installationProof.nonce);
+      expect(requests[1]?.installationProof.requestDigest).toEqual(requests[0]?.installationProof.requestDigest);
+    }
+    expect(result.bootstrap.intakeCredential.sessionId).not.toBe(bootstrap.intakeCredential.sessionId);
+    expect(secrets.get(PENDING_RENEWAL_SECRET_ID)).toBe("");
+    expect((await activation.client({ apiBaseUrl: renewalApi })).bootstrap).toEqual(result.bootstrap);
+    expect(requests).toHaveLength(lost ? 2 : 1);
+  });
+});
+
+const renewalApi = "http://127.0.0.1:8000";
+interface RenewalWire {
+  idempotencyKey: string;
+  newIntakeCredential: { tokenPrefix: string; secret: string };
+  installationProof: { nonce: string; requestDigest: string };
+}
+
+async function expiredCredential() {
+  const secrets = new Map<string, string>();
+  const app = {
+    secretStorage: {
+      getSecret: (id: string) => secrets.get(id) ?? null,
+      setSecret: (id: string, value: string) => { secrets.set(id, value); },
+    },
+  };
+  const activation = new ActivationStore(app as never);
+  const url = await activation.beginBrowserAuthorization({
+    webBaseUrl: "http://127.0.0.1:3000",
+    ecosystemSlug: "obsidian",
+    callbackAction: OBSIDIAN_AUTH_CALLBACK_ACTION,
+  });
+  const installationId = "11111111-1111-4111-8111-111111111111";
+  const capabilities = ["contribution:submit", "contribution:read_receipt", "translation:read"] as const;
+  const bootstrap: BootstrapResponse = {
+    kind: "bootstrap_response",
+    protocol: CURRENT_PROTOCOL_VERSION,
+    installationId,
+    installationState: "active",
+    trust: "untrusted_client",
+    clientNonce: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    installationKeyId: bindingKeyId(url),
+    serverChallenge: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    challengeExpiresAt: new Date(Date.now() + 86400000).toISOString(),
+    availableCapabilities: capabilities,
+    intakeCredential: {
+      audience: "public-contribution-intake",
+      plane: "public",
+      sessionId: "33333333-3333-4333-8333-333333333333",
+      installationId,
+      credentialEpoch: 1,
+      capabilities,
+      issuedAt: new Date(Date.now() - 86460000).toISOString(),
+      expiresAt: new Date(Date.now() - 60000).toISOString(),
+      value: "synthetic-expired-intake-credential",
+    },
+  };
+  secrets.set(INSTALLATION_SECRET_ID, JSON.stringify({
+    authorityWorkspaceId: "22222222-2222-4222-8222-222222222222",
+    bootstrap,
+  }));
+  return { activation, bootstrap, secrets };
+}
 
 function bindingKeyId(value: string): string {
   return binding(value).installationPublicKey.keyId;

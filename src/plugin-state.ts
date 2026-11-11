@@ -6,6 +6,8 @@ import {
 } from "@trans-hub/client-protocol";
 
 import { parseTargetLocale, type TargetLocale } from "./product-config";
+import { contaminatedMachineBatch, suspiciousMachineTarget } from "./plugin-machine-target-safety";
+import { isProtectedPluginTextSafe } from "./plugin-protected-text";
 
 export interface NoteSubmissionState {
   readonly noteId: string;
@@ -378,6 +380,8 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
       ...(nativeTarget === undefined || nativeTargetLocale === undefined
         ? {}
         : { nativeTarget, nativeTargetLocale }),
+      ...(typeof item.nativeSource === "string" && item.nativeSource.trim() !== ""
+        ? { nativeSource: item.nativeSource.normalize("NFC") } : {}),
       ...(evidence === undefined
         ? {}
         : { evidence: evidence.filter((entry): entry is PluginStringEvidence => entry !== null) }),
@@ -388,6 +392,8 @@ function parsePluginCatalog(value: unknown): PluginUiCatalog | null {
     pluginId: pluginId!, pluginName: pluginName!, pluginVersion: pluginVersion!,
     sourceLocale: sourceLocale!, digest: digest!, artifactDigest: artifactDigest!, scannedAt: scannedAt!,
     ...(scannerTargetLocale === undefined ? {} : { scannerTargetLocale }),
+    ...(typeof value.scannerDisplayLocale === "string"
+      ? { scannerDisplayLocale: value.scannerDisplayLocale } : {}),
     ...(value.patchEvidenceRevision === undefined
       ? {}
       : { patchEvidenceRevision: value.patchEvidenceRevision }),
@@ -643,7 +649,7 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
     }
     return entryPluginId === pluginId && source !== null && target !== null
       ? {
-        pluginId: entryPluginId,
+        pluginId: entryPluginId!,
         source,
         target,
         ...(provenanceKind === undefined ? {} : { provenanceKind }),
@@ -655,6 +661,13 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
       : null;
   });
   if (entries.some((entry) => entry === null)) return null;
+  if (contaminatedMachineBatch(entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null))) {
+    return null;
+  }
+  const safeEntries = entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null
+    && isProtectedPluginTextSafe(entry)
+    && (entry.provenanceKind !== "th-automatic"
+      || !suspiciousMachineTarget(entry.source, entry.target)));
   return {
     pluginId: pluginId!, pluginVersion: pluginVersion!,
     ...(typeof authorityPluginVersion === "string" ? { authorityPluginVersion } : {}),
@@ -669,7 +682,7 @@ function parsePluginTranslation(value: unknown): PluginTranslationState | null {
     ...(upstreamScopeCoverage === undefined ? {} : { upstreamScopeCoverage }),
     ...(publishedUnitCount === undefined ? {} : { publishedUnitCount }),
     ...(missingUnitCount === undefined ? {} : { missingUnitCount }),
-    entries: entries.filter((entry): entry is PluginUiTranslation => entry !== null),
+    entries: safeEntries,
   };
 }
 

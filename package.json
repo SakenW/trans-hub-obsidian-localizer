@@ -34,7 +34,8 @@
     "@trans-hub/client-protocol": "link:packages/client-protocol",
     "@trans-hub/public-client": "link:packages/public-client",
     "@trans-hub/translation-export-client": "link:packages/translation-export-client",
-    "@trans-hub/uida": "link:packages/uida"
+    "@trans-hub/uida": "link:packages/uida",
+    "libsodium-wrappers": "0.8.4"
   },
   "scripts": {
     "build": "node esbuild.config.mjs",
