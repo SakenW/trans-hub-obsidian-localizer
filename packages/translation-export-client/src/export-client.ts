@@ -142,13 +142,14 @@ export class TranslationExportClient<
       // Wait for its actual validity; never widen the accepted time window.
       let startsInMs = (ticket.issuedAtEpochMs ?? this.now()) - this.now();
       if (startsInMs > 0 && startsInMs <= 2_000) {
+        const scheduleTimeout = typeof window === "undefined" ? setTimeout : window.setTimeout.bind(window);
         let waitBudgetMs = 2_000;
         while (startsInMs > 0 && waitBudgetMs > 0) {
           // Timer completion does not guarantee that the wall clock has crossed
           // issuedAt. A minimum retry delay avoids spinning over a 1ms gap;
           // debiting every scheduled delay also bounds frozen-clock retries.
           const delayMs = Math.min(waitBudgetMs, Math.max(10, Math.ceil(startsInMs)));
-          await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+          await new Promise<void>((resolve) => scheduleTimeout(resolve, delayMs));
           waitBudgetMs -= delayMs;
           startsInMs = (ticket.issuedAtEpochMs ?? this.now()) - this.now();
         }

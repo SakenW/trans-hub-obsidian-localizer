@@ -44,7 +44,7 @@ export function readTranslationPackLicense(document: unknown): PublicLicenseComp
   const notices = strings(value.notice_urls);
   notices.forEach(https);
   const result: PublicLicenseCompliance = {
-    schema: "trans-hub.public-license-compliance", version: version as 1 | 2 | 3,
+    schema: "trans-hub.public-license-compliance", version,
     spdx_expression: identifier, license_digest: digest, license_url: https(value.license_url),
     immutable_revision: nonblank(value.immutable_revision), notice_urls: notices,
   };
